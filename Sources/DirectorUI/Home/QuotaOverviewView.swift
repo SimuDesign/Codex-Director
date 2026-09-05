@@ -102,16 +102,12 @@ public struct QuotaOverviewView: View {
                     .font(DirectorTypography.label)
                     .homeSecondaryText()
 
-                Picker(copy("home.quota.source", fallback: "Source"), selection: sourceBinding) {
-                    ForEach(model.sources) { source in
-                        Text(sourceName(source)).tag(source.id)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                QuotaSourceSwitch(
+                    label: copy("home.quota.source", fallback: "Source"),
+                    options: model.sources.map { QuotaSourceOption(id: $0.id, title: sourceName($0)) },
+                    selection: sourceBinding
+                )
                 .fixedSize()
-                .accessibilityLabel(copy("home.quota.source", fallback: "Source"))
-                .accessibilityValue(selectedSourceName)
             }
         } else {
             EmptyView()
@@ -133,13 +129,6 @@ public struct QuotaOverviewView: View {
         return model.selectingSource(selectedSourceID)
     }
 
-    private var selectedSourceName: String {
-        guard let source = displayModel.selectedSource else {
-            return copy("home.allowance.unknownSource", fallback: "Unknown limit source")
-        }
-        return sourceName(source)
-    }
-
     private func sourceName(_ source: QuotaOverviewModel.Source) -> String {
         source.id == "unknown"
             ? copy("home.allowance.unknownSource", fallback: "Unknown limit source")
@@ -148,28 +137,32 @@ public struct QuotaOverviewView: View {
 
     private var ringSection: some View {
         let ring = QuotaRingPresentation.make(remainingPercent: displayModel.remainingPercent)
-        return VStack(alignment: .center, spacing: DirectorSpacing.space3) {
+        return VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
             Text(copy("home.quota.current", fallback: "Current weekly allowance"))
                 .font(DirectorTypography.supporting)
-            ZStack {
-                HomeQuotaProgressRing(presentation: ring)
-                VStack(spacing: DirectorSpacing.space1) {
-                    Text(ring.centerText)
-                        .font(HomeNumericTypography.percentage)
-                        .foregroundStyle(DirectorColor.textPrimary)
-                    Text(centerCaption(for: ring))
-                        .font(DirectorTypography.supporting)
-                        .homeSecondaryText()
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .center, spacing: DirectorSpacing.space5) {
+                ZStack {
+                    HomeQuotaProgressRing(presentation: ring)
+                    VStack(spacing: DirectorSpacing.space1) {
+                        Text(ring.centerText)
+                            .font(HomeNumericTypography.percentage)
+                            .foregroundStyle(DirectorColor.textPrimary)
+                        Text(centerCaption(for: ring))
+                            .font(DirectorTypography.supporting)
+                            .homeSecondaryText()
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    }
+                    .accessibilityHidden(true)
                 }
-                .accessibilityHidden(true)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(centerAccessibility(for: ring))
+                .accessibilityAddTraits(.isStaticText)
+                resetSummary
             }
             .frame(maxWidth: .infinity, alignment: .center)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(centerAccessibility(for: ring))
-            .accessibilityAddTraits(.isStaticText)
-            resetSummary
         }
         .frame(minWidth: 236, maxWidth: .infinity, alignment: .center)
     }
@@ -258,7 +251,7 @@ public struct QuotaOverviewView: View {
             }
             .chartXAxis {
                 AxisMarks(values: chartCategories) { value in
-                    AxisValueLabel(centered: false) {
+                    AxisValueLabel(centered: true) {
                         if let category = value.as(String.self),
                            let index = chartCategories.firstIndex(of: category) {
                             Text(languageStore.localizer.date(displayModel.dailySnapshots[index].date, style: Date.FormatStyle().month(.twoDigits).day(.twoDigits)))
@@ -335,5 +328,66 @@ public struct QuotaOverviewView: View {
 
     private func copy(_ key: String, fallback: String) -> String {
         languageStore.localizer.text(key, fallback: fallback)
+    }
+}
+
+private struct QuotaSourceOption: Identifiable {
+    let id: String
+    let title: String
+}
+
+/// An outlined segmented source switch that keeps the selected value visible
+/// without inheriting the system-blue fill from a native segmented Picker.
+private struct QuotaSourceSwitch: View {
+    let label: String
+    let options: [QuotaSourceOption]
+    @Binding var selection: String
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        HStack(spacing: DirectorSpacing.space1) {
+            ForEach(options) { option in
+                let isSelected = selection == option.id
+                Button {
+                    selection = option.id
+                } label: {
+                    Text(option.title)
+                        .font(DirectorTypography.label.weight(isSelected ? .semibold : .regular))
+                        .foregroundStyle(DirectorColor.textPrimary)
+                        .lineLimit(1)
+                        .padding(.horizontal, DirectorSpacing.space3)
+                        .frame(minHeight: DirectorSpacing.toolbarControlMinHeight)
+                        .background {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: DirectorRadius.compact, style: .continuous)
+                                    .fill(DirectorColor.inset.opacity(0.72))
+                            }
+                        }
+                        .overlay {
+                            if isSelected {
+                                RoundedRectangle(cornerRadius: DirectorRadius.compact, style: .continuous)
+                                    .stroke(DirectorGradient.primaryButton, lineWidth: contrast == .increased ? 2 : 1.5)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.compact, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .focusEffectDisabled(false)
+                .accessibilityLabel(option.title)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .help(option.title)
+            }
+        }
+        .padding(DirectorSpacing.space1)
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .stroke(DirectorColor.boundary.opacity(contrast == .increased ? 1 : 0.9), lineWidth: contrast == .increased ? 1.5 : 1)
+                .accessibilityHidden(true)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(label)
+        .accessibilityValue(options.first(where: { $0.id == selection })?.title ?? "")
     }
 }

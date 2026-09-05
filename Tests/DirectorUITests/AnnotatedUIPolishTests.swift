@@ -40,18 +40,41 @@ final class AnnotatedUIPolishTests: XCTestCase {
         XCTAssertTrue(components.contains(".padding(.bottom, DirectorSpacing.space6)"))
     }
 
-    func testQuotaUsesSegmentedSourceSwitchAndResetBelowCenteredRing() throws {
+    func testQuotaUsesOutlinedBrandSourceSwitchAndResetBelowSmallerCenteredRing() throws {
         let quota = try source("Sources/DirectorUI/Home/QuotaOverviewView.swift")
+        let components = try source("Sources/DirectorUI/Home/HomeCardAtlasComponents.swift")
+        let spacing = try source("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift")
 
-        XCTAssertTrue(quota.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(quota.contains("QuotaSourceSwitch("))
+        XCTAssertFalse(quota.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(quota.contains(".stroke(DirectorGradient.primaryButton"))
+        XCTAssertTrue(quota.contains(".accessibilityAddTraits(isSelected ? .isSelected : [])"))
         XCTAssertTrue(quota.contains("resetSummary"))
         XCTAssertTrue(quota.contains("ringSection.frame(width: 420, alignment: .center)"))
+        XCTAssertTrue(quota.contains("VStack(alignment: .leading, spacing: DirectorSpacing.space3)"))
+        XCTAssertTrue(quota.contains("VStack(alignment: .center, spacing: DirectorSpacing.space5)"))
+        XCTAssertTrue(components.contains("diameter: CGFloat = DirectorSpacing.homeQuotaRingDiameter"))
+        XCTAssertTrue(spacing.contains("homeQuotaRingDiameter: CGFloat = 216"))
         XCTAssertFalse(quota.contains("evidenceSection"))
         XCTAssertFalse(quota.contains("home.quota.evidence"))
         XCTAssertFalse(quota.contains("home.quota.recorded"))
-        XCTAssertTrue(quota.contains("AxisValueLabel(centered: false)"))
+        XCTAssertTrue(quota.contains("AxisValueLabel(centered: true)"))
         let normalized = quota.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         XCTAssertTrue(normalized.contains(".chartXScale( domain: chartCategories, range: .plotDimension"))
+    }
+
+    func testSidebarAndToolbarUseSingleBrandSelectionLayer() throws {
+        let root = try source("Sources/DirectorUI/AppShell/DirectorRootView.swift")
+        let colors = try source("Sources/DirectorUI/DesignSystem/DirectorColor.swift")
+        let scheme = try source("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift")
+
+        XCTAssertTrue(root.contains(".tint(.clear)"))
+        XCTAssertTrue(root.contains("NativeListSelectionVisualSuppressor"))
+        XCTAssertTrue(root.contains("tableView.selectionHighlightStyle = .none"))
+        XCTAssertTrue(root.contains("DirectorColor.sidebarSelectedSymbol"))
+        XCTAssertTrue(colors.contains("sidebarSelectedSymbol"))
+        XCTAssertTrue(root.contains(".sharedBackgroundVisibility(.hidden)"))
+        XCTAssertTrue(scheme.contains("size == .toolbar ? 0"))
     }
 
     func testCapabilityGroupsHaveSpacingAndProminentProjectHeaders() throws {

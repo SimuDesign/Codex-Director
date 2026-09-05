@@ -302,13 +302,13 @@ Under Reduce Motion:
 
 - Use a stable SF Symbol, label, selection state, and optional evidence-backed badge.
 - Do not use resource-type colors as full-row backgrounds.
-- The active destination uses the shared blue → ice → mint brand gradient with black label and symbol content; the native List remains the selection and keyboard source of truth.
+- The active destination uses the shared blue → ice → mint brand gradient with a black label and a named high-contrast deep-gray symbol. Suppress the native blue visual tint so it cannot appear behind the custom gradient; the native List remains the selection and keyboard source of truth.
 - Keep the six approved destinations in the specified order. Configuration scope and usage project live inside the relevant page, not as additional navigation destinations.
 
 ### 11.2 Toolbar
 
 - Place only frequent, context-relevant actions in the toolbar.
-- Keep the manual data update in the window's trailing primary-action position so it remains available on all six destinations. It is a compact gradient text button that always shows a refresh symbol plus “Refresh data” when idle, and a native indeterminate progress ring plus “Refreshing…” while source or projection work is active. Its two labels share one layout footprint, so state changes do not shift the toolbar. Never collapse it to an icon at narrow widths.
+- Keep the manual data update in the window's trailing primary-action position so it remains available on all six destinations. It is a compact gradient text button that always shows a refresh symbol plus “Refresh data” when idle, and a native indeterminate progress ring plus “Refreshing…” while source or projection work is active. Its two labels share one layout footprint, so state changes do not shift the toolbar. Never collapse it to an icon at narrow widths. Hide the macOS shared toolbar glass background for this already-filled control and omit its toolbar-size shadow so the button has exactly one visible container.
 - Supply menu equivalents and keyboard shortcuts where appropriate.
 - Group related controls and avoid a row of unrelated glass capsules.
 - Search, sort and scope controls retain stable locations and visible current values.
@@ -325,8 +325,8 @@ Under Reduce Motion:
 ### 11.3a Quota and ranking charts
 
 - Use Swift Charts with native dynamic colors. Content charts are not glass panels.
-- Quota: used/remaining donut, textual remaining percentage and reset time below the centered ring. Recorded time and an extra evidence heading are omitted. If the active observation expired, show “waiting for a new quota record”, not a newly full allowance.
-- Daily weekly-quota usage bars: seven local calendar dates, each containing the reset-aware percentage-point increase observed from consecutive same-source weekly allowance reports. Retain use observed before and after a reported reset within one day. A day without an observation, an adjacent-day baseline, or sufficient reset evidence is unavailable rather than zero; only a confirmed flat sequence displays 0%. The current day ends at its latest report. Use the shared vertical brand gradient, a data-dependent percentage axis with annotation headroom, horizontal grid lines only, and centered date/bar columns. Do not add ambiguous per-day reset text.
+- Quota: used/remaining donut, textual remaining percentage and reset time below the centered ring. The quota-column heading aligns to the leading content edge; the ring and reset group remain centered. The ring diameter is 216pt with a 20pt ring-to-reset gap. Recorded time and an extra evidence heading are omitted. If the active observation expired, show “waiting for a new quota record”, not a newly full allowance. Multiple sources use an outlined segmented switch whose selected border uses the shared brand gradient; no system-blue selected fill is allowed.
+- Daily weekly-quota usage bars: seven local calendar dates, each containing the reset-aware percentage-point increase observed from consecutive same-source weekly allowance reports. Retain use observed before and after a reported reset within one day. A day without an observation, an adjacent-day baseline, or sufficient reset evidence is unavailable rather than zero; only a confirmed flat sequence displays 0%. The current day ends at its latest report. Use the shared vertical brand gradient, a data-dependent percentage axis with annotation headroom, horizontal grid lines only, and centered date/bar columns whose labels and marks share the exact categorical center. Do not add ambiguous per-day reset text.
 - Rankings: current category resources with positive recent-seven-day calls only, descending count, up to ten, proportional bars and explicit inferred labels.
 - Provide accessible labels and textual counts/time/missing states without hover. Do not use decorative symbols as extra AX content.
 - Distinguish loading, unindexed, no inventory, filter empty, not observed, attribution unavailable and update failure.
@@ -563,6 +563,15 @@ two overview subtitles; the quota source uses a segmented switch and reset time
 sits below the centered ring; project groups gain explicit inter-group spacing
 and tinted icon-led headers; dark teal data text uses `#5FD7EE`; and Settings
 uses balanced section padding with equal compact index actions.
+
+The screenshot-correction pass removes competing system chrome from those
+approved custom treatments: sidebar selection visually exposes only the brand
+gradient, the selected sidebar symbol uses the shared deep-gray token, the
+toolbar refresh item has no shared glass background or toolbar shadow, and the
+quota source switch uses a brand-gradient outline rather than a system-blue
+fill. The quota heading aligns to its column, the ring uses the named 216pt
+diameter with a 20pt reset gap, and chart dates share each bar's category
+center. These are refinements to existing v1 rules, not new product behavior.
 
 This migration changes presentation only. It does not alter Core, SQLite,
 indexing, cache schema, startup scheduling, source capability files, or real

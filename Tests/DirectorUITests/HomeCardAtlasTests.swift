@@ -101,7 +101,7 @@ final class HomeCardAtlasTests: XCTestCase {
         let xAxisTail = String(quota[xAxisStart.lowerBound...])
         let xAxisEnd = try XCTUnwrap(xAxisTail.range(of: ".frame(minHeight: 180)"))
         let xAxis = String(xAxisTail[..<xAxisEnd.lowerBound])
-        XCTAssertTrue(xAxis.contains("AxisValueLabel(centered: false)"))
+        XCTAssertTrue(xAxis.contains("AxisValueLabel(centered: true)"))
         XCTAssertFalse(xAxis.contains("AxisValueLabel(anchor:"))
         XCTAssertFalse(xAxis.contains("AxisGridLine"))
     }
@@ -164,6 +164,8 @@ final class HomeCardAtlasTests: XCTestCase {
         let spacing = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift"), encoding: .utf8)
 
         XCTAssertTrue(spacing.contains("homeQuotaRingLineWidth: CGFloat = 20"))
+        XCTAssertTrue(spacing.contains("homeQuotaRingDiameter: CGFloat = 216"))
+        XCTAssertTrue(components.contains("diameter: CGFloat = DirectorSpacing.homeQuotaRingDiameter"))
         XCTAssertTrue(components.contains("lineWidth: CGFloat = DirectorSpacing.homeQuotaRingLineWidth"))
         XCTAssertTrue(components.contains("@Environment(\\.accessibilityReduceMotion)"))
         XCTAssertTrue(components.contains("withAnimation(.easeOut(duration: DirectorMotion.emphasized))"))

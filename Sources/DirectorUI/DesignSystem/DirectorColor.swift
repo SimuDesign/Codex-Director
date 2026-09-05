@@ -52,6 +52,12 @@ public enum DirectorColor {
     /// The blue → ice → mint action rail remains bright in both appearances;
     /// pure black keeps every approved stop at or above 4.5:1 contrast.
     public static let primaryActionForeground = Color.black
+    /// Selected sidebar symbols sit on the bright brand gradient in both
+    /// appearances. A stable deep gray distinguishes them from the black label
+    /// while avoiding the inherited system-blue tint.
+    public static let sidebarSelectedSymbol = Color(
+        nsColor: NSColor(srgbRed: 0.12, green: 0.14, blue: 0.15, alpha: 1)
+    )
     public static let primaryActionBoundary = accentIce
     public static let primaryActionShadow = accentTeal
 

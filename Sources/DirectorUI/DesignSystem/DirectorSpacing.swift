@@ -37,6 +37,7 @@ public enum DirectorSpacing {
     public static let capabilityMetricHeightCompact: CGFloat = 88
     /// Home's quota ring uses a stronger stroke so it remains the primary
     /// visual signal beside the seven-day snapshot chart.
+    public static let homeQuotaRingDiameter: CGFloat = 216
     public static let homeQuotaRingLineWidth: CGFloat = 20
 }
 

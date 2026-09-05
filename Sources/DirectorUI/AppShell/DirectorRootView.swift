@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import DirectorCore
 
@@ -33,6 +34,7 @@ public struct DirectorRootView: View {
                     action: startIndexing
                 )
             }
+            .sharedBackgroundVisibility(.hidden)
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 720, minHeight: 480)
@@ -49,16 +51,19 @@ public struct DirectorRootView: View {
             }
         }
         .listStyle(.sidebar)
+        .tint(.clear)
         .navigationSplitViewColumnWidth(min: 180, ideal: 220)
     }
 
     private func sidebarDestination(_ item: DirectorSidebarItem) -> some View {
         let isSelected = model.selection == item
-        return Label(
-            languageStore.localizer.text("nav.\(item.rawValue)", fallback: item.title),
-            systemImage: item.symbol
-        )
-        .foregroundStyle(isSelected ? DirectorColor.primaryActionForeground : DirectorColor.textPrimary)
+        return HStack(spacing: DirectorSpacing.space2) {
+            Image(systemName: item.symbol)
+                .foregroundStyle(isSelected ? DirectorColor.sidebarSelectedSymbol : DirectorColor.textPrimary)
+                .accessibilityHidden(true)
+            Text(languageStore.localizer.text("nav.\(item.rawValue)", fallback: item.title))
+                .foregroundStyle(isSelected ? DirectorColor.primaryActionForeground : DirectorColor.textPrimary)
+        }
         .padding(.horizontal, DirectorSpacing.space2)
         .padding(.vertical, DirectorSpacing.space2)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -72,6 +77,7 @@ public struct DirectorRootView: View {
         .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
         .tag(item)
         .listRowBackground(Color.clear)
+        .background(NativeListSelectionVisualSuppressor().allowsHitTesting(false).accessibilityHidden(true))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -209,4 +215,41 @@ public struct DirectorRootView: View {
         Task { await model.startIndexing() }
     }
 
+}
+
+/// Keeps the native List selection model and keyboard behavior while preventing
+/// AppKit from painting a second system-blue selection layer behind our row.
+private struct NativeListSelectionVisualSuppressor: NSViewRepresentable {
+    func makeNSView(context: Context) -> SelectionHighlightSuppressingView {
+        SelectionHighlightSuppressingView()
+    }
+
+    func updateNSView(_ nsView: SelectionHighlightSuppressingView, context: Context) {
+        nsView.suppressSelectionHighlight()
+    }
+}
+
+private final class SelectionHighlightSuppressingView: NSView {
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        suppressSelectionHighlight()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        suppressSelectionHighlight()
+    }
+
+    func suppressSelectionHighlight() {
+        DispatchQueue.main.async { [weak self] in
+            var ancestor = self?.superview
+            while let view = ancestor {
+                if let tableView = view as? NSTableView {
+                    tableView.selectionHighlightStyle = .none
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+    }
 }

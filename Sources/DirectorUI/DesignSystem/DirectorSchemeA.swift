@@ -549,7 +549,11 @@ public struct DirectorPrimaryActionButtonStyle: ButtonStyle {
                     .stroke(DirectorColor.primaryActionBoundary.opacity(contrast == .increased ? 1 : 0.8), lineWidth: contrast == .increased ? 1.5 : 1)
                     .accessibilityHidden(true)
             }
-            .shadow(color: DirectorColor.primaryActionShadow.opacity(visuallyActive && !configuration.isPressed ? 0.16 : 0), radius: 3, y: 1)
+            .shadow(
+                color: DirectorColor.primaryActionShadow.opacity(visuallyActive && !configuration.isPressed && size != .toolbar ? 0.16 : 0),
+                radius: size == .toolbar ? 0 : 3,
+                y: size == .toolbar ? 0 : 1
+            )
             .opacity(visuallyActive ? 1 : 0.72)
             .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
             .onHover { isHovering = $0 }
