@@ -1,0 +1,128 @@
+{
+  "home.overview.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld call";
+      "other" = "%lld calls";
+    };
+  };
+  "detail.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld call";
+      "other" = "%lld calls";
+    };
+  };
+  "library.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld call";
+      "other" = "%lld calls";
+    };
+  };
+  "resource.count" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld resource";
+      "other" = "%lld resources";
+    };
+  };
+  "task.rawCallCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld raw call";
+      "other" = "%lld raw calls";
+    };
+  };
+  "task.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld call";
+      "other" = "%lld calls";
+    };
+  };
+  "task.failureCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld failed";
+      "other" = "%lld failed";
+    };
+  };
+  "review.errorCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld error";
+      "other" = "%lld errors";
+    };
+  };
+  "review.warningCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld warning";
+      "other" = "%lld warnings";
+    };
+  };
+  "review.infoCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld info";
+      "other" = "%lld info";
+    };
+  };
+  "review.parserCoverageNotices" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld parser coverage notice";
+      "other" = "%lld parser coverage notices";
+    };
+  };
+  "data.sessionCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld session";
+      "other" = "%lld sessions";
+    };
+  };
+  "home.projectCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld project";
+      "other" = "%lld projects";
+    };
+  };
+  "home.pluginCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld enabled child capability";
+      "other" = "%lld enabled child capabilities";
+    };
+  };
+}

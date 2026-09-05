@@ -1,0 +1,128 @@
+{
+  "home.overview.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 次调用";
+      "other" = "%lld 次调用";
+    };
+  };
+  "detail.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 次调用";
+      "other" = "%lld 次调用";
+    };
+  };
+  "library.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 次调用";
+      "other" = "%lld 次调用";
+    };
+  };
+  "resource.count" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 项能力";
+      "other" = "%lld 项能力";
+    };
+  };
+  "task.rawCallCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个原始调用";
+      "other" = "%lld 个原始调用";
+    };
+  };
+  "task.callCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个调用";
+      "other" = "%lld 个调用";
+    };
+  };
+  "task.failureCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "失败 %lld 次";
+      "other" = "失败 %lld 次";
+    };
+  };
+  "review.errorCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个错误";
+      "other" = "%lld 个错误";
+    };
+  };
+  "review.warningCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个警告";
+      "other" = "%lld 个警告";
+    };
+  };
+  "review.infoCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 条信息";
+      "other" = "%lld 条信息";
+    };
+  };
+  "review.parserCoverageNotices" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 条解析器覆盖提示";
+      "other" = "%lld 条解析器覆盖提示";
+    };
+  };
+  "data.sessionCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个会话";
+      "other" = "%lld 个会话";
+    };
+  };
+  "home.projectCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个项目";
+      "other" = "%lld 个项目";
+    };
+  };
+  "home.pluginCount" = {
+    "NSStringLocalizedFormatKey" = "%#@count@";
+    "count" = {
+      "NSStringFormatSpecTypeKey" = "NSStringPluralRuleType";
+      "NSStringFormatValueTypeKey" = "lld";
+      "one" = "%lld 个已启用的子能力";
+      "other" = "%lld 个已启用的子能力";
+    };
+  };
+}

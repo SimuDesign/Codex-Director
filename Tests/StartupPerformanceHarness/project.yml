@@ -1,0 +1,50 @@
+name: CodexDirectorStartupPerformanceHarness
+options:
+  bundleIdPrefix: com.peiweitang
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  defaultConfig: Release
+packages:
+  CodexDirectorPackage:
+    path: ../..
+targets:
+  StartupPerformanceHarness:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: StartupPerformanceHarnessApp.swift
+      - path: StartupPerformanceManifest.swift
+      - path: StartupPerformanceRecorder.swift
+      - path: StartupPerformancePassiveMarkers.swift
+    dependencies:
+      - package: CodexDirectorPackage
+        products:
+          - DirectorCore
+          - DirectorUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peiweitang.CodexDirector.StartupPerfHarness
+        PRODUCT_NAME: Codex Director Startup Performance Harness
+        MARKETING_VERSION: 0.2.1
+        CURRENT_PROJECT_VERSION: 4
+        INFOPLIST_FILE: Info.plist
+        SWIFT_VERSION: 6.0
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        SWIFT_OPTIMIZATION_LEVEL: "-O"
+        SWIFT_COMPILATION_MODE: wholemodule
+        ENABLE_TESTABILITY: NO
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        GENERATE_INFOPLIST_FILE: NO
+        CLANG_ENABLE_MODULES: YES
+schemes:
+  StartupPerformanceHarness:
+    build:
+      targets:
+        StartupPerformanceHarness: all
+    run:
+      config: Release

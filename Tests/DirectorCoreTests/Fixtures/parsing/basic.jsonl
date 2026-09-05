@@ -1,0 +1,5 @@
+{"type":"session_meta","timestamp":"2026-08-15T04:11:50.973Z","payload":{"id":"syn-1","session_id":"syn-session-1","cli_version":"0.148.0-alpha.9","originator":"Codex Desktop","source":"vscode","model_provider":"openai","dynamic_tools":[{"name":"codex_app","tools":[{"name":"exec_command"}]}]}}
+{"type":"turn_context","timestamp":"2026-08-15T04:12:03.570Z","payload":{"turn_id":"turn-1","model":"gpt-5.6-sol","effort":"xhigh"}}
+{"type":"response_item","timestamp":"2026-08-15T04:12:05.949Z","payload":{"type":"message","id":"msg-1","role":"user"}}
+{"type":"event_msg","timestamp":"2026-08-15T04:12:05.950Z","payload":{"type":"task_started","turn_id":"turn-1"}}
+{"type":"compacted","timestamp":"2026-08-15T04:12:06.000Z","payload":{"window_id":"w1","window_number":1}}

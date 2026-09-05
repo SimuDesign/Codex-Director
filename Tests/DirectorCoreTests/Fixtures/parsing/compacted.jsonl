@@ -1,0 +1,2 @@
+{"type":"compacted","timestamp":"2026-08-15T04:12:06.000Z","payload":{"window_id":"w1","window_number":1}}
+{"type":"compacted","timestamp":"2026-08-15T04:12:06.100Z","payload":{"window_id":"w2","window_number":2,"previous_window_id":"w1"}}

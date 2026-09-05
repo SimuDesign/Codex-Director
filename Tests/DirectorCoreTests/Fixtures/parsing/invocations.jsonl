@@ -1,0 +1,6 @@
+{"type":"session_meta","timestamp":"2026-08-15T04:11:50.973Z","payload":{"id":"syn-inv-1","session_id":"syn-inv-1","cli_version":"0.148.0-alpha.9"}}
+{"type":"response_item","timestamp":"2026-08-15T04:12:05.949Z","payload":{"type":"custom_tool_call","id":"item-1","call_id":"call-1","name":"exec","status":"completed","input":"const r = await tools.exec_command({command: 'ls'})"}}
+{"type":"response_item","timestamp":"2026-08-15T04:12:05.950Z","payload":{"type":"custom_tool_call_output","id":"item-2","call_id":"call-1","output":[{"type":"text","text":"out"}]}}
+{"type":"response_item","timestamp":"2026-08-15T04:12:06.000Z","payload":{"type":"message","id":"item-3","role":"assistant"}}
+{"type":"event_msg","timestamp":"2026-08-15T04:12:07.000Z","payload":{"type":"exec_command_end","call_id":"call-1","status":"completed","duration":{"secs":2,"nanos":500000000},"exit_code":0,"turn_id":"turn-1"}}
+{"type":"compacted","timestamp":"2026-08-15T04:12:08.000Z","payload":{"window_id":"w1","window_number":1}}

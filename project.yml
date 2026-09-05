@@ -1,0 +1,72 @@
+name: CodexDirector
+options:
+  bundleIdPrefix: com.peiweitang
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+  defaultConfig: Release
+packages:
+  CodexDirectorPackage:
+    path: .
+targets:
+  CodexDirectorMacApp:
+    type: application
+    platform: macOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/CodexDirectorApp
+      - path: Resources/AppIcon.icon
+        buildPhase: resources
+    dependencies:
+      - package: CodexDirectorPackage
+        products:
+          - DirectorCore
+          - DirectorUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.peiweitang.CodexDirector
+        PRODUCT_NAME: Codex Director
+        MARKETING_VERSION: 0.3.1
+        CURRENT_PROJECT_VERSION: 16
+        INFOPLIST_KEY_CFBundleDisplayName: Codex Director
+        INFOPLIST_KEY_CFBundleName: Codex Director
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        INFOPLIST_KEY_CFBundleIconName: AppIcon
+        SWIFT_VERSION: 6.0
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        DEVELOPMENT_TEAM: ""
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
+        CLANG_ENABLE_MODULES: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          ENABLE_TESTABILITY: YES
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          SWIFT_COMPILATION_MODE: wholemodule
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: ""
+          VALIDATE_PRODUCT: YES
+schemes:
+  Codex Director:
+    build:
+      targets:
+        CodexDirectorMacApp: all
+    run:
+      config: Debug
+      commandLineArguments: {}
+    archive:
+      config: Release
+    profile:
+      config: Release
+    analyze:
+      config: Debug

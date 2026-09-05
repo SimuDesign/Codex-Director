@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="link" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#B9E7FF" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#75A8FF" stop-opacity="0.65"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#D7F4FF"/>
+      <stop offset="1" stop-color="#679CFF"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#link)" stroke-linecap="round">
+    <path d="M512 512 L290 286" stroke-width="22" stroke-opacity="0.82"/>
+    <path d="M512 512 L734 286" stroke-width="22" stroke-opacity="0.82"/>
+    <path d="M512 512 L512 786" stroke-width="22" stroke-opacity="0.82"/>
+  </g>
+  <g fill="url(#node)" stroke="#E8FAFF" stroke-width="10">
+    <circle cx="270" cy="266" r="54"/>
+    <circle cx="754" cy="266" r="54"/>
+    <circle cx="512" cy="808" r="54"/>
+  </g>
+  <g fill="#FFFFFF" fill-opacity="0.72">
+    <circle cx="252" cy="246" r="13"/>
+    <circle cx="736" cy="246" r="13"/>
+    <circle cx="494" cy="788" r="13"/>
+  </g>
+</svg>

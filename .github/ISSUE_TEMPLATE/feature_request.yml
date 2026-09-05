@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a focused, privacy-preserving improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user problem without sharing private capability content.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: dropdown
+    id: privacy
+    attributes:
+      label: Does this change affect local data, permissions, or network behavior?
+      options:
+        - "No"
+        - "Yes — explained below"
+        - "Unsure"
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Privacy and permission considerations

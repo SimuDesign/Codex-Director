@@ -1,0 +1,4 @@
+interface:
+  display_name: "Director Visual System"
+  short_description: "Govern Codex Director macOS visual consistency"
+  default_prompt: "Use $director-visual-system to design or review a Codex Director interface against the project visual system."

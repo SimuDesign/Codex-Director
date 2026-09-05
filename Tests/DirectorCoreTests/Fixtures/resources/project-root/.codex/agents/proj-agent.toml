@@ -1,0 +1,6 @@
+name = "proj-agent"
+description = "Synthetic project agent brief."
+
+developer_instructions = """
+Synthetic project agent instructions.
+"""

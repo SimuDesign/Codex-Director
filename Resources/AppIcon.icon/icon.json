@@ -1,0 +1,95 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.05000,0.07000,0.15000,1.00000",
+      "display-p3:0.08000,0.15000,0.30000,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "blur-material" : 0,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "display-p3:0.47500,0.91800,0.84700,1.00000"
+          },
+          "image-name" : "hexagon-mint.png",
+          "name" : "Hexagon Mint Field",
+          "position" : {
+            "scale" : 1.0,
+            "translation-in-points" : [ 0, 0 ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.0
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.0
+      }
+    },
+    {
+      "blur-material" : 0,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "display-p3:0.28600,0.79200,1.00000,1.00000"
+          },
+          "image-name" : "hexagon-cyan.png",
+          "name" : "Hexagon Cyan Field",
+          "position" : {
+            "scale" : 1.0,
+            "translation-in-points" : [ 0, 0 ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.0
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.0
+      }
+    },
+    {
+      "blur-material" : 0,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "fill" : {
+            "solid" : "display-p3:0.08200,0.61600,1.00000,1.00000"
+          },
+          "image-name" : "hexagon-blue.png",
+          "name" : "Hexagon Blue Field",
+          "position" : {
+            "scale" : 1.0,
+            "translation-in-points" : [ 0, 0 ]
+          }
+        }
+      ],
+      "lighting" : "individual",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.0
+      },
+      "specular" : false,
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.0
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [ "watchOS" ],
+    "squares" : "shared"
+  }
+}

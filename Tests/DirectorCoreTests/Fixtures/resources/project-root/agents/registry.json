@@ -1,0 +1,7 @@
+{
+  "schema": "1",
+  "entries": [
+    {"name": "reg-agent", "type": "agent", "description": "Registry agent"},
+    {"name": "reg-workflow", "type": "workflow", "description": "Registry workflow"}
+  ]
+}

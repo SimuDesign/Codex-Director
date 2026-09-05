@@ -1,0 +1,54 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Tools/*/Package.resolved
+
+# Xcode user state
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+
+# Local Xcode output
+build/
+dist/
+Archives/
+*.xcarchive
+*.xcresult
+*.dSYM/
+
+# Derived index and runtime artifacts — never commit
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Local runtime data, caches, exports, and logs
+.codex-director-data/
+logs/
+exports/
+*.log
+*.codexpack.zip
+
+# Local inspection uploads
+.dsh-vision/
+
+# Credentials and machine-specific signing files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Temporary build caches (kept under /tmp at runtime, ignored defensively)
+/tmp/
+
+# Public-release audit reports may contain repository locations that need review.
+docs/public-release-audit.txt
