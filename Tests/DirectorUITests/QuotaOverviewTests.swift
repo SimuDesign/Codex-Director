@@ -221,8 +221,9 @@ final class QuotaOverviewTests: XCTestCase {
 
     private func date(_ value: String) -> Date {
         let formatter = DateFormatter()
-        formatter.calendar = calendar
         formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
         formatter.dateFormat = "yyyy-MM-dd HH:mm"
         return formatter.date(from: value)!
     }
