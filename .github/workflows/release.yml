@@ -26,6 +26,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install source-audit dependency
+        run: brew install ripgrep
+
       - name: Validate tag and project version
         run: ./scripts/validate-release-tag.sh "${GITHUB_REF_NAME}"
 
