@@ -106,7 +106,7 @@ struct HomeQuotaProgressRing: View {
 
     init(
         presentation: QuotaRingPresentation,
-        diameter: CGFloat = 236,
+        diameter: CGFloat = DirectorSpacing.homeQuotaRingDiameter,
         lineWidth: CGFloat = DirectorSpacing.homeQuotaRingLineWidth
     ) {
         self.presentation = presentation
