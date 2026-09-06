@@ -22,8 +22,8 @@ public enum RefreshDemand: Int, Codable, CaseIterable, Equatable, Hashable, Send
 
     public var requestsQuotaRefresh: Bool {
         switch self {
-        case .none, .menuBarPassive: false
-        case .menuBarPopover, .mainWindow: true
+        case .none, .menuBarPassive, .menuBarPopover: false
+        case .mainWindow: true
         }
     }
 
@@ -31,10 +31,17 @@ public enum RefreshDemand: Int, Codable, CaseIterable, Equatable, Hashable, Send
         self == .mainWindow
     }
 
+    public var requestsAccountUsageRefresh: Bool {
+        switch self {
+        case .menuBarPopover, .mainWindow: true
+        case .none, .menuBarPassive: false
+        }
+    }
+
     public var permitsSourceRefresh: Bool {
         switch self {
-        case .none, .menuBarPassive: false
-        case .menuBarPopover, .mainWindow: true
+        case .none, .menuBarPassive, .menuBarPopover: false
+        case .mainWindow: true
         }
     }
 

@@ -19,6 +19,8 @@
 "settings.appearance" = "主题";
 "settings.appearance.light" = "浅色";
 "settings.appearance.dark" = "深色";
+"settings.menuBar" = "在菜单栏显示";
+"settings.menuBar.hint" = "在 macOS 菜单栏显示隐私安全的本周额度摘要。默认开启，可在此关闭。";
 "settings.index.title" = "索引";
 "settings.index.status" = "状态";
 "settings.index.updated" = "最近更新";
@@ -85,6 +87,17 @@
 "home.refresh.hint" = "刷新能力、额度和近期使用数据。";
 "home.refresh.lastUpdated" = "最近更新：%@";
 "home.refresh.never" = "尚未更新";
+"menuBar.weeklyRemaining" = "当前周额度剩余";
+"menuBar.nextReset" = "下次重置时间";
+"menuBar.resetCredits" = "重置卡数量";
+"menuBar.refresh" = "刷新数据";
+"menuBar.refresh.running" = "刷新中…";
+"menuBar.refresh.hint" = "刷新能力和账户额度数据。";
+"menuBar.openMainWindow" = "打开主窗口";
+"menuBar.openMainWindow.hint" = "显示 Codex Director 主窗口。";
+"menuBar.unavailable" = "不可用";
+"menuBar.cached" = "正在显示缓存数据";
+"menuBar.unavailableStatus" = "账户数据不可用";
 "library.empty" = "没有符合当前视图的能力。";
 "library.purposeUnavailable" = "未提供用途";
 "library.inferred" = "推断";
@@ -647,7 +660,7 @@
 "settings.migration.title" = "能力迁移";
 "settings.migration.body" = "创建一个开放的 ZIP 能力包，包含所选 Agent、Skill 和指令文件。插件与外部依赖只记录为清单。";
 "settings.migration.localWarning" = "能力包是未加密的本地文件。源能力文件不会被修改，能力包只会写入你选择的位置。";
-"settings.migration.export" = "导出能力包…";
+"settings.migration.export" = "导出能力包";
 "settings.migration.exportHint" = "选择内容、执行安全预检，然后保存本地 ZIP 能力包。";
 "settings.migration.sheet.title" = "导出能力包";
 "settings.migration.loading" = "正在载入可导出的能力…";

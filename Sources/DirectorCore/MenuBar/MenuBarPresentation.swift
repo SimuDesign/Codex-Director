@@ -1,10 +1,7 @@
 import Foundation
 
-/// A privacy-bounded value prepared for a menu-bar client.
-///
-/// It derives only from an already available quota projection. It never reads
-/// SQLite, starts a command, refreshes a source, or exposes task and capability
-/// content. Localized UI copy should be produced from the semantic states.
+/// A privacy-bounded value prepared for a menu-bar client. It is built from
+/// the sanitized account snapshot only and never reads SQLite or source files.
 public struct MenuBarPresentation: Equatable, Sendable {
     public enum Freshness: String, Codable, Equatable, Sendable {
         case fresh
@@ -20,9 +17,9 @@ public struct MenuBarPresentation: Equatable, Sendable {
 
     public enum State: String, Codable, Equatable, Sendable {
         case available
-        case noSource
         case missing
         case stale
+        case expired
         case refreshing
         case failed
     }
@@ -36,35 +33,31 @@ public struct MenuBarPresentation: Equatable, Sendable {
     public let state: State
     public let shortStatus: String
     public let primaryValue: String
-    public let remainingPercent: Double?
-    public let sourceID: String?
-    public let sourceName: String?
+    public let weeklyRemainingPercent: Double?
+    public let weeklyResetsAt: Date?
+    public let resetCreditCount: Int?
     public let resetDisplay: ResetDisplay
     public let canRefresh: Bool
     public let canOpenMainWindow: Bool
     public let usesCachedValue: Bool
 
     public init(
-        source: QuotaOverviewSourceSnapshot?,
+        snapshot: CodexAccountUsageSnapshot?,
         freshness: Freshness,
         activity: Activity = .idle,
         now: Date
     ) {
-        sourceID = source?.id
-        sourceName = source.flatMap { Self.safeSourceName($0.name) }
+        let resetElapsed = snapshot?.weeklyResetsAt.map { $0 <= now } ?? false
+        let usableValue = resetElapsed ? nil : snapshot?.weeklyRemainingPercent
+        weeklyRemainingPercent = usableValue
+        weeklyResetsAt = snapshot?.weeklyResetsAt
+        resetCreditCount = snapshot?.resetCreditCount
 
-        let observation = source?.current.flatMap { snapshot in
-            snapshot.isWeeklyWindow && snapshot.capturedAt <= now ? snapshot : nil
-        }
-        let resetElapsed = observation?.resetsAt.map { $0 <= now } ?? false
-        let usableObservation = resetElapsed ? nil : observation
-        remainingPercent = usableObservation?.remainingPercent
-
-        let percentage = remainingPercent.map(Self.percentageText) ?? "--"
+        let percentage = usableValue.map(Self.percentageText) ?? "—"
         shortStatus = percentage
         primaryValue = percentage
 
-        if let resetAt = observation?.resetsAt {
+        if let resetAt = snapshot?.weeklyResetsAt {
             if resetAt <= now {
                 resetDisplay = .elapsed
             } else {
@@ -77,14 +70,14 @@ public struct MenuBarPresentation: Equatable, Sendable {
         }
 
         let baseState: State
-        if source == nil {
-            baseState = .noSource
-        } else if observation == nil {
+        if snapshot == nil {
             baseState = .missing
-        } else if resetElapsed || freshness != .fresh {
-            baseState = .stale
+        } else if resetElapsed {
+            baseState = .expired
+        } else if usableValue != nil {
+            baseState = freshness == .fresh ? .available : .stale
         } else {
-            baseState = .available
+            baseState = .missing
         }
 
         switch activity {
@@ -98,7 +91,7 @@ public struct MenuBarPresentation: Equatable, Sendable {
 
         canRefresh = activity != .refreshing
         canOpenMainWindow = true
-        usesCachedValue = usableObservation != nil
+        usesCachedValue = usableValue != nil
             && (freshness != .fresh || activity != .idle)
     }
 
@@ -106,12 +99,4 @@ public struct MenuBarPresentation: Equatable, Sendable {
         String(format: "%.0f%%", locale: Locale(identifier: "en_US_POSIX"), value)
     }
 
-    private static func safeSourceName(_ name: String) -> String? {
-        guard !name.isEmpty,
-              name.utf8.count <= 512,
-              name.rangeOfCharacter(from: .controlCharacters) == nil else {
-            return nil
-        }
-        return name
-    }
 }

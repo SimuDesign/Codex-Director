@@ -62,6 +62,7 @@ public enum DirectorSymbol {
     public static let search = "magnifyingglass"
     public static let filter = "line.3.horizontal.decrease.circle"
     public static let back = "chevron.backward"
+    public static let menuBarUsage = "gauge.with.dots.needle.50percent"
 
     /// Every symbol the design system requires, for the contract test.
     public static let requiredSymbols: [String] = {
@@ -69,6 +70,7 @@ public enum DirectorSymbol {
             home, capabilities, tasks, review, usage, dataStatus, settings,
             closeInspector,
             usageEvidence, search, filter, back,
+            menuBarUsage,
         ]
         for kind in ResourceKind.allCases {
             names.append(resource(kind))

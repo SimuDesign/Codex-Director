@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 import DirectorCore
 
 /// Trustworthy state of the derived-data presentation.
@@ -29,6 +30,16 @@ public enum DirectorBootstrapStatus: Equatable, Sendable {
     case bootstrapping
     case ready
     case failed
+}
+
+/// Result used by the adaptive account-only scheduler.  The existing
+/// `RefreshOutcome` deliberately remains unchanged so a failed optional
+/// account read does not make a successful local projection look failed.
+public enum AccountUsageRefreshResult: Equatable, Sendable {
+    case succeeded
+    case failed
+    case cancelled
+    case unavailable
 }
 
 /// Readiness of a destination's bounded presentation query. The result window
@@ -94,6 +105,10 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var diagnosticsError: String?
     @Published public private(set) var capabilityExportProgress: CapabilityExportProgress?
     @Published public private(set) var isCapabilityExporting = false
+    @Published public private(set) var menuBarEnabled: Bool
+    @Published public private(set) var accountUsageSnapshot: CodexAccountUsageSnapshot?
+    @Published public private(set) var accountUsageError: String?
+    @Published public private(set) var accountUsageReadRevision: UInt64 = 0
 
     /// One truthful application-wide busy state for refresh controls. Source
     /// indexing and bounded presentation projection are both visible; queued,
@@ -101,6 +116,110 @@ public final class DirectorAppModel: ObservableObject {
     /// progress.
     public var isRefreshing: Bool {
         Self.refreshIsActive(isIndexing: isIndexing, phase: refreshScheduleState?.phase)
+    }
+
+    /// Privacy-safe menu-bar projection. The menu bar never derives account
+    /// values from local token or session data.
+    public var menuBarPresentation: MenuBarPresentation {
+        let freshness: MenuBarPresentation.Freshness = {
+            guard let snapshot = accountUsageSnapshot else { return .unavailable }
+            let now = nowProvider()
+            guard snapshot.capturedAt <= now,
+                  now.timeIntervalSince(snapshot.capturedAt) <= 30 * 60 else { return .stale }
+            return .fresh
+        }()
+        let activity: MenuBarPresentation.Activity = isRefreshing
+            ? .refreshing
+            : (accountUsageError == nil ? .idle : .failed)
+        return MenuBarPresentation(snapshot: accountUsageSnapshot, freshness: freshness, activity: activity, now: nowProvider())
+    }
+
+    public var canReadAccountUsage: Bool { accountUsageReading != nil }
+
+    public func setMenuBarEnabled(_ enabled: Bool) {
+        guard menuBarEnabled != enabled else { return }
+        menuBarEnabled = enabled
+        menuBarPreferences.setEnabled(enabled)
+        accountUsageRefreshScheduler?.setEnabled(enabled)
+    }
+
+    /// Refreshes only account usage when the menu-bar popover has no current
+    /// trustworthy reading. The main window may be closed during this call.
+    @discardableResult
+    public func refreshMenuBarIfNeeded() async -> RefreshOutcome {
+        guard menuBarEnabled, accountUsageNeedsRefresh else { return .notDue }
+        let before = accountUsageReadRevision
+        let outcome = await requestAccountUsageRefresh(force: true, reason: .menuBar)
+        if accountUsageReadRevision != before {
+            accountUsageRefreshScheduler?.recordExternalResult(
+                accountUsageSnapshot?.weeklyRemainingPercent == nil ? .unavailable : .succeeded
+            )
+        } else if outcome == .cancelled {
+            accountUsageRefreshScheduler?.recordExternalResult(.cancelled)
+        } else {
+            accountUsageRefreshScheduler?.recordExternalResult(.failed)
+        }
+        return outcome
+    }
+
+    /// Explicit menu-bar action: runs the same full manual refresh as the
+    /// main-window action and adds the account-usage domain.
+    @discardableResult
+    public func refreshDataFromMenuBar() async -> RefreshOutcome {
+        guard !isDeletingDerivedData else { return .cancelled }
+        var domains = Set<RefreshDomain>()
+        if hasDerivedDatabase {
+            domains.formUnion([.quota, .directory])
+        }
+        if accountUsageReading != nil {
+            domains.insert(.accountUsage)
+        }
+        guard !domains.isEmpty else { return .cancelled }
+        let before = accountUsageReadRevision
+        let outcome = await ensurePresentationRefreshCoordinator().request(RefreshRequest(
+            domains: domains,
+            reason: .manual,
+            force: true,
+            sourceIntent: hasDerivedDatabase
+        ))
+        if accountUsageReading != nil {
+            if accountUsageReadRevision != before {
+                accountUsageRefreshScheduler?.recordExternalResult(
+                    accountUsageSnapshot?.weeklyRemainingPercent == nil ? .unavailable : .succeeded
+                )
+            } else if outcome == .cancelled {
+                accountUsageRefreshScheduler?.recordExternalResult(.cancelled)
+            } else {
+                accountUsageRefreshScheduler?.recordExternalResult(.failed)
+            }
+        }
+        return outcome
+    }
+
+    private var accountUsageNeedsRefresh: Bool {
+        guard let snapshot = accountUsageSnapshot else { return true }
+        // A snapshot without a weekly allowance is a valid transport result,
+        // but it cannot populate the menu-bar primary value. Treat it like a
+        // missing reading so a later popover can retry the account domain.
+        guard snapshot.weeklyRemainingPercent != nil else { return true }
+        let now = nowProvider()
+        guard snapshot.capturedAt <= now else { return true }
+        if let reset = snapshot.weeklyResetsAt, reset <= now { return true }
+        return now.timeIntervalSince(snapshot.capturedAt) > 2 * 60
+    }
+
+    @discardableResult
+    private func requestAccountUsageRefresh(force: Bool, reason: RefreshReason = .menuBar) async -> RefreshOutcome {
+        guard accountUsageReading != nil else {
+            accountUsageError = "account_usage_unavailable"
+            return .completed
+        }
+        return await ensurePresentationRefreshCoordinator().request(RefreshRequest(
+            domains: [.accountUsage],
+            reason: reason,
+            force: force,
+            sourceIntent: false
+        ))
     }
 
     internal static func refreshIsActive(isIndexing: Bool, phase: RefreshPhase?) -> Bool {
@@ -128,6 +247,11 @@ public final class DirectorAppModel: ObservableObject {
     private var libraryReloadGeneration: [String: Int] = [:]
     public let classificationOverrides: ResourceClassificationOverrideStore
     public let evaluationStore: InvocationEvaluationStore
+    private let menuBarPreferences: MenuBarPreferences
+    /// Keeps model instances in separate windows aligned with the shared
+    /// application preference. The App scene and Settings may observe the
+    /// same store through different model instances.
+    private var menuBarPreferencesCancellable: AnyCancellable?
 
     public private(set) var store: DatabaseStore?
     public private(set) var readStore: DatabaseStore?
@@ -135,6 +259,8 @@ public final class DirectorAppModel: ObservableObject {
     public private(set) var configuration: IndexingCoordinator.Configuration?
     public private(set) var capabilityExportCoordinator: CapabilityExportCoordinator?
     public private(set) var presentationSnapshotStore: PresentationSnapshotStore?
+    public private(set) var accountUsageReading: CodexAccountUsageReading?
+    private var accountUsageRefreshScheduler: AccountUsageRefreshScheduler?
     @Published public private(set) var quotaOverviewSnapshot: QuotaOverviewSnapshot?
     @Published public private(set) var presentationHomeSummary: PresentationHomeSummary?
 
@@ -213,7 +339,9 @@ public final class DirectorAppModel: ObservableObject {
         bootstrapError: String? = nil,
         bootstrapPending: Bool = false,
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
-        presentationRefreshCoordinator: RefreshCoordinator? = nil
+        presentationRefreshCoordinator: RefreshCoordinator? = nil,
+        menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
+        accountUsageReading: CodexAccountUsageReading? = nil
     ) {
         self.store = store
         self.readStore = readStore ?? store
@@ -221,6 +349,12 @@ public final class DirectorAppModel: ObservableObject {
         self.configuration = configuration
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.presentationSnapshotStore = presentationSnapshotStore
+        self.accountUsageReading = accountUsageReading
+        self.accountUsageRefreshScheduler = nil
+        self.menuBarPreferences = menuBarPreferences
+        self.menuBarEnabled = menuBarPreferences.snapshot().isEnabled
+        self.accountUsageSnapshot = nil
+        self.accountUsageError = nil
         self.presentationRefreshCoordinator = presentationRefreshCoordinator
         self.selection = selection
         self.classificationOverrides = classificationOverrides
@@ -285,6 +419,17 @@ public final class DirectorAppModel: ObservableObject {
             }
             self.refreshScheduleState = presentationRefreshCoordinator.scheduleState
         }
+
+        // MenuBarPreferences is app-scoped. Subscribe after all stored
+        // properties have been initialized so a toggle in one window
+        // immediately updates the model used by every other window.
+        self.menuBarPreferencesCancellable = menuBarPreferences.$isEnabled
+            .removeDuplicates()
+            .sink { [weak self] enabled in
+                guard let self, self.menuBarEnabled != enabled else { return }
+                self.menuBarEnabled = enabled
+                self.accountUsageRefreshScheduler?.setEnabled(enabled)
+            }
     }
 
     /// Installs services after the first window is already visible. This
@@ -297,6 +442,7 @@ public final class DirectorAppModel: ObservableObject {
         configuration: IndexingCoordinator.Configuration?,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
+        accountUsageReading: CodexAccountUsageReading? = nil,
         bootstrapError: String? = nil
     ) {
         let previousSnapshotStore = self.presentationSnapshotStore
@@ -312,6 +458,8 @@ public final class DirectorAppModel: ObservableObject {
         self.configuration = configuration
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.presentationSnapshotStore = presentationSnapshotStore
+        self.accountUsageReading = accountUsageReading
+        configureAccountUsageRefreshScheduler()
         guard store != nil else {
             sourceDataFresh = false
             presentationState = .failure(bootstrapError ?? "derived_database_unavailable")
@@ -413,8 +561,40 @@ public final class DirectorAppModel: ObservableObject {
         normalPresentationRefreshDeferred = false
         sourceMonitorGeneration &+= 1
         hasLoadedInitialData = false
+        accountUsageRefreshScheduler?.stop()
+        accountUsageRefreshScheduler = nil
         presentationRefreshCoordinator?.cancel()
         presentationRefreshCoordinator = nil
+    }
+
+    /// Installs the single app-scoped adaptive account schedule after the
+    /// runtime locator has produced an account reader. This deliberately
+    /// happens after cache/service bootstrap so no app-server process can be
+    /// started before the app services are ready.
+    private func configureAccountUsageRefreshScheduler() {
+        accountUsageRefreshScheduler?.stop()
+        accountUsageRefreshScheduler = nil
+        guard accountUsageReading != nil else { return }
+
+        let scheduler = AccountUsageRefreshScheduler(
+            clock: nowProvider,
+            systemState: MacAccountUsageSystemStateMonitor(),
+            wakeScheduler: TaskAccountUsageWakeScheduler(clock: nowProvider),
+            snapshot: accountUsageSnapshot,
+            refresh: { [weak self] in
+                guard let self else { return .unavailable }
+                return await self.performScheduledAccountUsageRefresh()
+            },
+            cancelScheduledRefresh: { [weak self] in
+                self?.cancelScheduledAccountUsageRefresh()
+            }
+        )
+        accountUsageRefreshScheduler = scheduler
+        scheduler.start(enabled: menuBarEnabled)
+    }
+
+    private func cancelScheduledAccountUsageRefresh() {
+        presentationRefreshCoordinator?.cancelScheduledAccountUsage()
     }
 
     private func revokePresentationCache() {
@@ -1006,7 +1186,8 @@ public final class DirectorAppModel: ObservableObject {
     @discardableResult
     public func requestPresentationRefresh(
         reason: RefreshReason = .automatic,
-        force: Bool = false
+        force: Bool = false,
+        domains: Set<RefreshDomain> = [.quota, .directory]
     ) async -> RefreshOutcome {
         guard hasDerivedDatabase, !isDeletingDerivedData else { return .cancelled }
         if (reason == .automatic || reason == .startup) && (visibleWindowIDs.isEmpty || isSystemSleeping) {
@@ -1015,7 +1196,7 @@ public final class DirectorAppModel: ObservableObject {
         let effectiveForce = force || reason == .manual
         return await ensurePresentationRefreshCoordinator().request(
             RefreshRequest(
-                domains: [.quota, .directory],
+                domains: domains,
                 reason: reason,
                 force: effectiveForce
             )
@@ -1040,7 +1221,25 @@ public final class DirectorAppModel: ObservableObject {
                     try await self.refreshHomeRankings()
                     return .completed
                 }
-                try await self.refreshStartupProjection()
+                let needsPresentation = request.domains.contains(.quota)
+                    || request.domains.contains(.directory)
+                    || request.domains.contains(.currentPage)
+                    || request.domains.contains(.detail)
+                if needsPresentation {
+                    try await self.refreshStartupProjection()
+                }
+                if request.domains.contains(.accountUsage) {
+                    // This is deliberately immediately before the reader,
+                    // after the shared coordinator has coalesced all waiters.
+                    // A scheduled account request must not cross a lock,
+                    // sleep, Low Power Mode, or menu-bar disable transition.
+                    if request.reason == .accountUsageAutomatic {
+                        guard await self.accountUsageRefreshScheduler?.isCurrentlyEligible == true else {
+                            return .cancelled
+                        }
+                    }
+                    try await self.refreshAccountUsage()
+                }
                 return .completed
             } catch is CancellationError {
                 return .cancelled
@@ -1062,6 +1261,14 @@ public final class DirectorAppModel: ObservableObject {
     }
 
     private func automaticWorkAllowed(for reason: RefreshReason) -> Bool {
+        if reason == .accountUsageAutomatic {
+            // Menu-bar account reads remain available with the main window
+            // closed, but the adaptive scheduler is stopped while disabled.
+            return menuBarEnabled
+                && accountUsageReading != nil
+                && !isSystemSleeping
+                && accountUsageRefreshScheduler?.isCurrentlyEligible == true
+        }
         if reason == .automatic || reason == .startup {
             // The first bounded projection is owned by the scheduler too, so
             // its projection retry lane is durable even before a window has
@@ -1073,12 +1280,18 @@ public final class DirectorAppModel: ObservableObject {
     }
 
     private func handleScheduleStateChange(_ state: RefreshScheduleState) {
+        let previousState = refreshScheduleState
         refreshScheduleState = state
         if case .failed = state.phase {
             backgroundRefreshError = "presentation_refresh_failed"
         } else {
             backgroundRefreshError = nil
         }
+        // Account-only menu-bar work also traverses the shared coordinator's
+        // ephemeral projection phase. Its revision changes must not turn a
+        // quota read into a SQLite/cache write. Persist only the source and
+        // projection retry metadata that the presentation scheduler owns.
+        guard scheduleStateMetadataChanged(from: previousState, to: state) else { return }
         guard state.revision >= schedulePersistenceRevision,
               let snapshotStore = presentationSnapshotStore,
               let readStore else { return }
@@ -1115,6 +1328,18 @@ public final class DirectorAppModel: ObservableObject {
                 window: scheduleWindow
             )
         }
+    }
+
+    private func scheduleStateMetadataChanged(
+        from previous: RefreshScheduleState?,
+        to current: RefreshScheduleState
+    ) -> Bool {
+        guard let previous else { return true }
+        return previous.lastSourceSuccessAt != current.lastSourceSuccessAt
+            || previous.sourceRetryAttempt != current.sourceRetryAttempt
+            || previous.sourceRetryDate != current.sourceRetryDate
+            || previous.projectionRetryAttempt != current.projectionRetryAttempt
+            || previous.projectionRetryDate != current.projectionRetryDate
     }
 
     /// Performs a source freshness check only when its persisted success is
@@ -1555,6 +1780,9 @@ public final class DirectorAppModel: ObservableObject {
 
     private func applyCachedPresentation(_ snapshot: PresentationSnapshot) {
         quotaOverviewSnapshot = snapshot.quota
+        accountUsageSnapshot = snapshot.accountUsage
+        accountUsageRefreshScheduler?.updateSnapshot(snapshot.accountUsage)
+        accountUsageError = nil
         presentationHomeSummary = snapshot.home
         statisticsWindow = snapshot.window
         hasComputedStatistics = snapshot.quota != nil
@@ -1586,6 +1814,9 @@ public final class DirectorAppModel: ObservableObject {
 
     private func invalidateCachedPresentation() {
         quotaOverviewSnapshot = nil
+        accountUsageSnapshot = nil
+        accountUsageRefreshScheduler?.updateSnapshot(nil)
+        accountUsageError = nil
         presentationHomeSummary = nil
         recentCapabilityStats = []
         statisticsWindow = nil
@@ -1938,6 +2169,83 @@ public final class DirectorAppModel: ObservableObject {
         scheduleHomeRankingUpgradeIfNeeded()
     }
 
+    /// Reads and publishes only the sanitized account quota DTO. A failed
+    /// account read is local to this domain: the last unexpired snapshot and
+    /// any successful capability projection remain intact.
+    private func refreshAccountUsage() async throws {
+        guard let reader = accountUsageReading else {
+            accountUsageError = "account_usage_unavailable"
+            return
+        }
+        do {
+            let snapshot = try await reader.read()
+            try Task.checkCancellation()
+            accountUsageSnapshot = snapshot
+            accountUsageReadRevision &+= 1
+            accountUsageError = snapshot.weeklyRemainingPercent == nil
+                ? "account_usage_incomplete"
+                : nil
+            accountUsageRefreshScheduler?.updateSnapshot(snapshot)
+            await writeAccountUsageCache(snapshot)
+        } catch let error as CodexAccountUsageReadError where error == .cancelled {
+            accountUsageError = "account_usage_cancelled"
+            throw CancellationError()
+        } catch is CancellationError {
+            accountUsageError = "account_usage_cancelled"
+            throw CancellationError()
+        } catch {
+            accountUsageError = "account_usage_unavailable"
+        }
+    }
+
+    private func performScheduledAccountUsageRefresh() async -> AccountUsageRefreshScheduler.RefreshResult {
+        guard menuBarEnabled,
+              accountUsageReading != nil,
+              !isSystemSleeping,
+              accountUsageRefreshScheduler?.isCurrentlyEligible == true else {
+            return .cancelled
+        }
+        let before = accountUsageReadRevision
+        let outcome = await requestAccountUsageRefresh(force: true, reason: .accountUsageAutomatic)
+        if accountUsageReadRevision != before {
+            return accountUsageSnapshot?.weeklyRemainingPercent == nil ? .unavailable : .succeeded
+        }
+        if outcome == .cancelled { return .cancelled }
+        return accountUsageReading == nil ? .unavailable : .failed
+    }
+
+    private func writeAccountUsageCache(_ accountUsage: CodexAccountUsageSnapshot) async {
+        guard let snapshotStore = presentationSnapshotStore,
+              let permit = presentationCachePermit,
+              !isDeletingDerivedData else { return }
+        do {
+            // The permit already binds this cache writer to the current
+            // database identity. Do not re-open SQLite for an account-only
+            // tick; a stale permit is rejected atomically by the cache actor.
+            guard let existing = try await snapshotStore.read() else { return }
+            let updated = PresentationSnapshot(
+                schemaVersion: existing.schemaVersion,
+                identity: existing.identity,
+                classificationRevision: existing.classificationRevision,
+                window: existing.window,
+                generatedAt: existing.generatedAt,
+                lastSourceCheckAt: existing.lastSourceCheckAt,
+                lastIndexCompletedAt: existing.lastIndexCompletedAt,
+                statisticsThrough: existing.statisticsThrough,
+                quota: existing.quota,
+                home: existing.home,
+                accountUsage: accountUsage,
+                failureCount: existing.failureCount,
+                nextRetryAt: existing.nextRetryAt,
+                refreshSchedule: existing.refreshSchedule
+            )
+            try await snapshotStore.write(updated, permit: permit)
+        } catch {
+            // Cache persistence is best effort for the optional menu-bar DTO;
+            // a successful live reading remains available for this process.
+        }
+    }
+
     /// Upgrades only the compact Home ranking payload in a legacy cache. The
     /// cache's quota, source timestamps, statistics window and scheduler
     /// metadata are copied verbatim; this operation cannot manufacture source
@@ -2066,6 +2374,7 @@ public final class DirectorAppModel: ObservableObject {
             statisticsThrough: window.end,
             quota: quota,
             home: home,
+            accountUsage: accountUsageSnapshot,
             refreshSchedule: refreshScheduleState.map {
                 PresentationRefreshSchedule(
                     revision: $0.revision,
@@ -2151,6 +2460,9 @@ public final class DirectorAppModel: ObservableObject {
         review = ReviewViewModel(findings: [])
         recentCapabilityStats = []
         quotaOverviewSnapshot = nil
+        accountUsageSnapshot = nil
+        accountUsageRefreshScheduler?.updateSnapshot(nil)
+        accountUsageError = nil
         presentationHomeSummary = nil
         quotaSourceID = nil
         sourceDataLastCheckedAt = nil
@@ -2186,6 +2498,9 @@ public final class DirectorAppModel: ObservableObject {
     /// catalog and user preference stores intact for a later retry.
     private func clearPresentationStateAfterCacheDeletionFailure() {
         quotaOverviewSnapshot = nil
+        accountUsageSnapshot = nil
+        accountUsageRefreshScheduler?.updateSnapshot(nil)
+        accountUsageError = nil
         presentationHomeSummary = nil
         recentCapabilityStats = []
         quotaSourceID = nil

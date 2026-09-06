@@ -506,7 +506,9 @@ public struct CapabilityLibraryView: View {
         return EdgeInsets(
             top: base.top,
             leading: base.leading,
-            bottom: closesGroup ? DirectorSpacing.space4 : base.bottom,
+            // Only the final row owns the inter-group gap. The header and
+            // every non-final row retain their existing internal metrics.
+            bottom: closesGroup ? DirectorSpacing.space5 : base.bottom,
             trailing: base.trailing
         )
     }

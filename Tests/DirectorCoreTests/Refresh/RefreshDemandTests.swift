@@ -8,12 +8,14 @@ final class RefreshDemandTests: XCTestCase {
         XCTAssertTrue(RefreshDemand.menuBarPassive.isCacheOnly)
 
         XCTAssertTrue(RefreshDemand.menuBarPopover.requestsWork)
-        XCTAssertTrue(RefreshDemand.menuBarPopover.requestsQuotaRefresh)
+        XCTAssertFalse(RefreshDemand.menuBarPopover.requestsQuotaRefresh)
         XCTAssertFalse(RefreshDemand.menuBarPopover.requestsCapabilityRefresh)
+        XCTAssertTrue(RefreshDemand.menuBarPopover.requestsAccountUsageRefresh)
 
         XCTAssertTrue(RefreshDemand.mainWindow.requestsWork)
         XCTAssertTrue(RefreshDemand.mainWindow.requestsQuotaRefresh)
         XCTAssertTrue(RefreshDemand.mainWindow.requestsCapabilityRefresh)
+        XCTAssertTrue(RefreshDemand.mainWindow.requestsAccountUsageRefresh)
     }
 
     func testActiveSurfaceResolutionUsesSafePriority() {
@@ -64,7 +66,12 @@ final class RefreshDemandTests: XCTestCase {
     func testPassiveAndNoneNeverPermitSourceWork() {
         XCTAssertFalse(RefreshDemand.none.permitsSourceRefresh)
         XCTAssertFalse(RefreshDemand.menuBarPassive.permitsSourceRefresh)
-        XCTAssertTrue(RefreshDemand.menuBarPopover.permitsSourceRefresh)
+        XCTAssertFalse(RefreshDemand.menuBarPopover.permitsSourceRefresh)
         XCTAssertTrue(RefreshDemand.mainWindow.permitsSourceRefresh)
+    }
+
+    func testPassiveAndNoneNeverRequestAccountUsage() {
+        XCTAssertFalse(RefreshDemand.none.requestsAccountUsageRefresh)
+        XCTAssertFalse(RefreshDemand.menuBarPassive.requestsAccountUsageRefresh)
     }
 }

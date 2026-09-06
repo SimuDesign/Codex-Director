@@ -72,11 +72,11 @@
 菜单栏功能值得进入 1.0，但必须是主应用的轻量投影，而不是第二个产品：
 
 - 使用原生 `MenuBarExtra` 和模板图标；可附带短额度状态。
-- 用户在设置中主动开启，默认关闭，避免升级后突然常驻菜单栏。
-- 弹窗只展示当前来源、额度剩余比例、数据状态、下次重置倒计时、刷新和打开主窗口。
-- 关闭主窗口后，菜单栏读取现有缓存并在本地更新倒计时；不得持续重建拓扑、统计或全量索引。
-- 弹窗打开且数据过期时只发起额度域刷新；能力索引仍遵循主应用的共享刷新协调器。
-- 无来源、缺测、过期、刷新中和失败必须是不同状态；未知值不得显示为 `0%`。
+- 新安装默认开启；用户可以在设置中关闭，且显式关闭选择会跨重启保留。升级时保留已有的显式关闭选择。
+- 弹窗固定展示当前周额度剩余、下次重置时间、重置卡数量、刷新数据和打开主窗口；不展示额度来源、模型名称、GPT-5.3 或账号标识。
+- 关闭主窗口后，菜单栏读取现有缓存并在本地更新倒计时；账户域在正常唤醒、解锁且非低电量模式下按 5/30 分钟自适应刷新，锁定、睡眠或低电量模式暂停，不重建拓扑、统计或全量索引。
+- 弹窗打开且数据缺失、过期或超过 2 分钟时只发起一次额度域刷新；能力索引仍遵循主应用的共享刷新协调器。
+- 缺测、过期、刷新中和失败必须是不同状态；未知值不得显示为 `0%`。账户额度只通过本机 Codex app-server 的 `account/rateLimits/read` 只读接口取得，并在本地脱敏后进入可选缓存。
 
 ## 3. 里程碑
 
@@ -84,11 +84,12 @@
 | --- | --- | --- | --- |
 | M0 | 不发版 | 公共边界、许可、历史和媒体审计 | 仓库保持私有 |
 | M1 | 0.4.0 (17) | 运行时发现、诊断、性能与故障基线 | 私有测试构建 |
-| M2 | 0.6.0 (18) | 菜单栏薄客户端与设置项 | 私有测试构建 |
-| M3 | 0.9.0 (19) | 开源文档、CI、Release Candidate | GitHub prerelease |
-| M4 | 1.0.0 (20) | 关闭阻断项并公开发布 | GitHub public release |
+| M2 | 0.6.2 (20) | 菜单栏薄客户端、自适应账户额度和设置项 | 私有测试构建 |
+| M3 | 0.9.0 (planned) | 开源文档、CI、Release Candidate | GitHub prerelease |
+| M4 | 1.0.0 (21) | 关闭阻断项并公开发布 | GitHub public release |
 
 如中间增加候选版本，`CURRENT_PROJECT_VERSION` 必须继续单调递增，不能为了匹配表格回退构建号。
+M3 remains an unreleased planning milestone; the first public application build is 1.0.0 (21).
 
 ## 4. 实施任务
 
@@ -346,29 +347,34 @@ Expected: 运行时缺失不会导致崩溃或伪零数据；用户能定位问�
 
 - Create: `Sources/DirectorCore/MenuBar/MenuBarPreferences.swift`
 - Create: `Sources/DirectorCore/MenuBar/MenuBarPresentation.swift`
+- Create: `Sources/DirectorCore/MenuBar/CodexAccountUsageReading.swift`
+- Modify: `Sources/DirectorCore/Domain/PresentationSnapshot.swift`
+- Modify: `Sources/DirectorCore/Persistence/PresentationSnapshotStore.swift`
 - Create: `Sources/DirectorCore/Refresh/RefreshDemand.swift`
 - Create: `Tests/DirectorCoreTests/MenuBarPresentationTests.swift`
+- Create: `Tests/DirectorCoreTests/MenuBar/CodexAccountUsageReadingTests.swift`
+- Modify: `Tests/DirectorCoreTests/Persistence/PresentationSnapshotStoreTests.swift`
 - Create: `Tests/DirectorCoreTests/RefreshDemandTests.swift`
 - Modify: `Sources/DirectorCore/App/DirectorAppModel.swift`
 
 **Step 1: 先定义纯值状态**
 
-`MenuBarPresentation` 只接受已有配额快照、来源、新鲜度和当前时间，输出短状态、主值、重置文案和操作可用性。测试覆盖有效、缺测、过期、刷新、失败、来源切换和跨日倒计时。
+`MenuBarPresentation` 只接受脱敏的账户额度快照、新鲜度和当前时间，输出短状态、主值、重置文案和操作可用性。测试覆盖有效、缺测、过期、刷新、失败、明确零值和跨重置时间状态；类型中不得出现来源、模型或账号字段。
 
 **Step 2: 持久化用户偏好**
 
-独立 UserDefaults 键保存菜单栏是否开启和选中的配额来源；缺失或非法值回退到安全默认。提供生产、内存和注入式构造器。
+独立 UserDefaults 键只保存菜单栏是否开启；首次读取时清理早期开发版本的来源选择键，缺失或非法值回退到开启。提供生产、内存和注入式构造器。新版本通过应用级可观察偏好存储驱动 `MenuBarExtra(isInserted:)`，确保设置切换立即插入或移除菜单栏项，并让多窗口共享同一状态。
 
 **Step 3: 引入活动表面需求**
 
 定义 `.mainWindow`、`.menuBarPopover`、`.menuBarPassive`、`.none`：
 
 - 主窗口可请求现有完整刷新。
-- 菜单栏弹窗只请求配额刷新。
-- 被动菜单栏只读取缓存并更新本地倒计时。
+- 菜单栏弹窗只按需请求账户额度；不会启动能力索引或读取 SQLite。
+- 被动菜单栏常驻项只读取缓存并更新本地倒计时；启用后由独立账户调度器按系统状态发起账户域读取。
 - 无活动表面不触发新工作。
 
-继续使用共享 actor 合并请求；不得增加第二个 SQLite 实例或独立轮询器。
+继续使用共享 actor 合并请求；不得增加第二个 SQLite 实例或能力索引器。账户调度器只使用一个可取消的下一次到期唤醒，不做每秒倒计时或事件内容采集。
 
 **Step 4: 验证**
 
@@ -386,19 +392,17 @@ Expected: 多表面不会重复刷新；关闭主窗口后菜单栏仍可显示�
 **Files:**
 
 - Modify: `Sources/CodexDirectorApp/CodexDirectorApp.swift`
-- Create: `Sources/DirectorUI/MenuBar/MenuBarStatusView.swift`
-- Create: `Sources/DirectorUI/MenuBar/MenuBarSettingsSection.swift`
-- Modify: `Sources/DirectorUI/Settings/SettingsView.swift`
-- Modify: `Sources/DirectorUI/Localization/LocalizedText.swift`
+- Create: `Sources/DirectorUI/MenuBar/DirectorMenuBarView.swift`
+- Modify: `Sources/DirectorUI/DataStatus/SettingsView.swift`
 - Create: `Tests/DirectorUITests/MenuBarContractTests.swift`
 
 **Step 1: 使用原生结构**
 
-在 App 根部增加条件启用的 `MenuBarExtra`，共享同一 `DirectorAppModel`、主题 Store 和语言 Store。菜单栏图标使用 SF Symbol 模板渲染和可选短状态，不自制彩色常驻图标。
+在 App 根部增加由共享应用级偏好驱动的 `.window` 样式 `MenuBarExtra`，新安装默认插入，显式关闭时立即移除；共享同一 `DirectorAppModel`、主题 Store 和语言 Store。菜单栏图标使用 `gauge.with.dots.needle.50percent` 模板渲染和可选短状态，不自制彩色常驻图标。
 
 **Step 2: 实现隐私安全弹窗**
 
-信息顺序固定为：额度主值 → 重置时间/数据状态 → 来源选择 → 刷新 → 打开 Codex Director。不得出现提示词、任务标题、路径、参数或能力正文。
+信息顺序固定为：当前周额度剩余 → 下次重置时间 → 重置卡数量 → 刷新数据 → 打开主窗口。不得出现提示词、任务标题、路径、参数、能力正文、来源、模型、GPT-5.3 或账号标识。
 
 **Step 3: 设置项**
 
@@ -548,7 +552,7 @@ Expected: 哈希、attestation、双架构和包内 ad-hoc 签名均通过；验
 - 首页、Agent、Skill、插件、设置与详情口径不回归。
 - 自动/手动刷新合并正常，失败保留上次结果。
 - 能力包格式保持 manifest v1，不因开源发布改变。
-- 菜单栏开启/关闭、来源选择、倒计时、刷新和打开主窗口正常。
+- 菜单栏开启/关闭、额度摘要、重置时间、重置卡数量、刷新和打开主窗口正常；界面与 AX 中不出现来源、模型、GPT-5.3 或账号标识。
 - “查看 GitHub Releases”只在用户点击后打开浏览器。
 
 ### 性能与可靠性

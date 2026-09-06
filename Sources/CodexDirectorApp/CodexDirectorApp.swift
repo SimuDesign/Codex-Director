@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DirectorUI
 import DirectorCore
 
@@ -27,7 +28,16 @@ private final class AppLaunchState: ObservableObject {
     @Published private(set) var model: DirectorAppModel
     private let startupController: DirectorStartupController
 
-    init(useMemoryPreferences: Bool = false) {
+    init(useMemoryPreferences: Bool = false, menuBarPreferences: MenuBarPreferences? = nil) {
+        let resolvedMenuBarPreferences: MenuBarPreferences
+        if let menuBarPreferences {
+            resolvedMenuBarPreferences = menuBarPreferences
+        } else if useMemoryPreferences {
+            resolvedMenuBarPreferences = MenuBarPreferences(memoryEnabled: true)
+        } else {
+            resolvedMenuBarPreferences = MenuBarPreferences(defaults: .standard)
+        }
+
         // This model is deliberately service-less but not synthetic. It lets
         // the main window and all six destinations render immediately while
         // the real container is opened off the main actor.
@@ -45,10 +55,15 @@ private final class AppLaunchState: ObservableObject {
                     removeData: { preferences.remove(InvocationEvaluationStore.defaultsKey); return true }
                 ),
                 previewMode: false,
-                bootstrapPending: true
+                bootstrapPending: true,
+                menuBarPreferences: resolvedMenuBarPreferences
             )
         } else {
-            model = DirectorAppModel(previewMode: false, bootstrapPending: true)
+            model = DirectorAppModel(
+                previewMode: false,
+                bootstrapPending: true,
+                menuBarPreferences: resolvedMenuBarPreferences
+            )
         }
         startupController = DirectorStartupController(
             cacheFactory: {
@@ -63,6 +78,7 @@ private final class AppLaunchState: ObservableObject {
                     configuration: container.configuration,
                     snapshotStore: nil,
                     capabilityExportCoordinator: container.capabilityExportCoordinator,
+                    accountUsageReading: container.accountUsageReading,
                     safeError: container.bootstrapError
                 )
             }
@@ -80,6 +96,7 @@ struct CodexDirectorApp: App {
     private let validationMode: Bool
     @StateObject private var languageStore: AppLanguageStore
     @StateObject private var themeStore: AppThemeStore
+    @StateObject private var menuBarPreferences: MenuBarPreferences
     @StateObject private var launchState: AppLaunchState
 
     init() {
@@ -88,18 +105,22 @@ struct CodexDirectorApp: App {
             validationMode = true
             _languageStore = StateObject(wrappedValue: AppLanguageStore(memoryLanguage: .simplifiedChinese))
             _themeStore = StateObject(wrappedValue: AppThemeStore(memoryTheme: .dark))
-            _launchState = StateObject(wrappedValue: AppLaunchState(useMemoryPreferences: true))
+            let menuBarPreferences = MenuBarPreferences(memoryEnabled: true)
+            _menuBarPreferences = StateObject(wrappedValue: menuBarPreferences)
+            _launchState = StateObject(wrappedValue: AppLaunchState(useMemoryPreferences: true, menuBarPreferences: menuBarPreferences))
             return
         }
 #endif
         validationMode = false
         _languageStore = StateObject(wrappedValue: AppLanguageStore(defaults: .standard))
         _themeStore = StateObject(wrappedValue: AppThemeStore(defaults: .standard))
-        _launchState = StateObject(wrappedValue: AppLaunchState())
+        let menuBarPreferences = MenuBarPreferences(defaults: .standard)
+        _menuBarPreferences = StateObject(wrappedValue: menuBarPreferences)
+        _launchState = StateObject(wrappedValue: AppLaunchState(menuBarPreferences: menuBarPreferences))
     }
 
     var body: some Scene {
-        WindowGroup(validationMode ? "Codex Director Validation" : DirectorUI.productName) {
+        WindowGroup(validationMode ? "Codex Director Validation" : DirectorUI.productName, id: "main") {
             Group {
 #if DEBUG
             if validationMode {
@@ -119,6 +140,29 @@ struct CodexDirectorApp: App {
         }
         .environmentObject(languageStore)
         .environmentObject(themeStore)
+        .environmentObject(menuBarPreferences)
         .defaultSize(width: 1280, height: 800)
+
+        MenuBarExtra(isInserted: menuBarBinding) {
+            DirectorMenuBarView(model: launchState.model, onOpenMainWindow: openMainWindow)
+                .environmentObject(languageStore)
+                .preferredColorScheme(themeStore.theme.colorScheme)
+        } label: {
+            DirectorMenuBarLabel(model: launchState.model)
+        }
+        .menuBarExtraStyle(.window)
     }
+
+    private var menuBarBinding: Binding<Bool> {
+        MenuBarInsertionBinding.make(preferences: menuBarPreferences, model: launchState.model)
+    }
+
+    private func openMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        // Menu-bar surface uses a WindowGroup ID so the system restores or
+        // reopens the existing main window instead of creating a second UI.
+        openWindow(id: "main")
+    }
+
+    @Environment(\.openWindow) private var openWindow
 }

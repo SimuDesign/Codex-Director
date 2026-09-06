@@ -16,6 +16,7 @@ struct AppContainer: Sendable {
     let snapshotStore: PresentationSnapshotStore?
     let capabilityExportCoordinator: CapabilityExportCoordinator
     let runtimeStatus: CodexRuntimeStatus
+    let accountUsageReading: CodexAccountUsageReading?
     let bootstrapError: String?
 
     init(
@@ -26,6 +27,7 @@ struct AppContainer: Sendable {
         snapshotStore: PresentationSnapshotStore? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator,
         runtimeStatus: CodexRuntimeStatus = .unavailable,
+        accountUsageReading: CodexAccountUsageReading? = nil,
         bootstrapError: String? = nil
     ) {
         self.store = store
@@ -35,6 +37,7 @@ struct AppContainer: Sendable {
         self.snapshotStore = snapshotStore
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.runtimeStatus = runtimeStatus
+        self.accountUsageReading = accountUsageReading
         self.bootstrapError = bootstrapError
     }
 
@@ -58,6 +61,7 @@ struct AppContainer: Sendable {
                     executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil
                 ),
                 runtimeStatus: runtimeStatus,
+                accountUsageReading: runtimeStatus.isUsable ? runtimeStatus.executableURL.map { CodexAccountUsageReading(executableURL: $0) } : nil,
                 bootstrapError: "derived_database_unavailable"
             )
         }
@@ -90,7 +94,8 @@ struct AppContainer: Sendable {
                 home: home,
                 executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil
             ),
-            runtimeStatus: runtimeStatus
+            runtimeStatus: runtimeStatus,
+            accountUsageReading: runtimeStatus.isUsable ? runtimeStatus.executableURL.map { CodexAccountUsageReading(executableURL: $0) } : nil
         )
     }
 

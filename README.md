@@ -2,19 +2,28 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `0.3.1 (16)`. Requires macOS 26 or later.
+> Current development version: `1.0.0`. Requires macOS 26 or later.
 
 [简体中文](README.zh-CN.md)
 
 ## What it does
 
-- Inventories global, installed, and project-level Agents and Skills.
-- Shows privacy-safe recent usage evidence and data freshness.
-- Records lightweight manual evaluations and classification corrections.
-- Exports an open `.codexpack.zip` with manifests, checksums, plugin inventory, dependency inventory, and bilingual recovery instructions.
+- Inventories global, installed, and project-level Agents and Skills, keeping configuration ownership distinct from project usage.
+- Shows privacy-safe recent usage evidence and data freshness without treating activity as proof of effectiveness.
+- Records lightweight human evaluations and classification corrections alongside the evidence.
+- Exports an open, unencrypted `.codexpack.zip` with manifests, checksums, plugin and dependency lists, and bilingual recovery instructions.
 - Supports Simplified Chinese and English, Light and Dark themes, and shared background refresh.
+- Shows a privacy-safe current-week allowance summary in the macOS menu bar by default; users can turn it off in Settings. It includes data refresh and a shortcut to the main window. While enabled, account-only refresh adapts between bounded five- and thirty-minute intervals and pauses while the Mac is locked, asleep, or in Low Power Mode.
 
 Codex Director keeps source capabilities read-only. It does not upload capability content, sessions, credentials, cookies, Director databases, or plugin files. See [Privacy](PRIVACY.md) for the exact boundary.
+
+## Product screenshots
+
+These three synthetic 1280×800 captures show the shipped hierarchy in Light and Dark. They contain no production data, user paths, sessions, or credentials.
+
+![Home in English, Light](docs/screenshots/home-en-light.png)
+![Custom Agents in English, Light](docs/screenshots/agents-en-light.png)
+![Settings in English, Dark](docs/screenshots/settings-en-dark.png)
 
 ## Build from source
 

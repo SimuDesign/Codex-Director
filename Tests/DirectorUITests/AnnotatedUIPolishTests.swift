@@ -82,11 +82,22 @@ final class AnnotatedUIPolishTests: XCTestCase {
         let shared = try source("Sources/DirectorUI/DesignSystem/DirectorSharedComponents.swift")
 
         XCTAssertTrue(library.contains("groupRowInsets"))
-        XCTAssertTrue(library.contains("DirectorSpacing.space4"))
+        XCTAssertTrue(library.contains("bottom: closesGroup ? DirectorSpacing.space5 : base.bottom"))
         XCTAssertTrue(library.contains("symbolName: group.id == \"__global__\""))
         XCTAssertTrue(library.contains("CapabilityGroupHeaderBorder().fill"))
         XCTAssertTrue(shared.contains("public let symbolName: String?"))
         XCTAssertTrue(shared.contains(".title3.weight(.semibold)"))
+    }
+
+    func testCapabilityProjectGroupsUseTwentyPointInterGroupSpacing() throws {
+        let library = try source("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift")
+        let spacing = try source("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift")
+        let design = try source(".design/codex-director/DESIGN_SYSTEM_V1.md")
+
+        XCTAssertTrue(library.contains("bottom: closesGroup ? DirectorSpacing.space5 : base.bottom"))
+        XCTAssertTrue(library.contains("Only the final row owns the inter-group gap"))
+        XCTAssertTrue(spacing.contains("public static let space5: CGFloat = 20"))
+        XCTAssertTrue(design.contains("exactly 20pt") || design.contains("exactly 20 pt"))
     }
 
     func testDarkTealDataAccentUsesReadableEmphasisValue() throws {
@@ -117,8 +128,38 @@ final class AnnotatedUIPolishTests: XCTestCase {
         let scheme = try source("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift")
 
         XCTAssertTrue(spacing.contains("toolbarControlMinHeight: CGFloat = 28"))
-        XCTAssertTrue(spacing.contains("settingsActionLabelWidth: CGFloat = 128"))
+        XCTAssertTrue(spacing.contains("settingsActionLabelWidth: CGFloat = 176"))
+        XCTAssertTrue(spacing.contains("settingsActionHeight: CGFloat = 48"))
         XCTAssertTrue(scheme.contains("case settings"))
+    }
+
+    func testSettingsActionsShareFixedDimensionsAndExportHasNoEllipsis() throws {
+        let settings = try source("Sources/DirectorUI/DataStatus/SettingsView.swift")
+        let spacing = try source("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift")
+        let scheme = try source("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift")
+        XCTAssertTrue(settings.contains("DirectorRefreshButton("))
+        XCTAssertTrue(settings.contains("size: .settings"))
+        XCTAssertTrue(settings.contains("DirectorSecondaryActionButtonStyle(size: .settings, destructive: true)"))
+        XCTAssertTrue(settings.contains("DirectorPrimaryActionButtonStyle(size: .settings)"))
+        XCTAssertEqual(settings.components(separatedBy: "size: .settings").count - 1, 3)
+        XCTAssertTrue(spacing.contains("settingsActionLabelWidth: CGFloat = 176"))
+        XCTAssertTrue(spacing.contains("settingsActionHeight: CGFloat = 48"))
+        XCTAssertTrue(scheme.contains("self == .settings ? DirectorSpacing.settingsActionLabelWidth : nil"))
+        XCTAssertTrue(scheme.contains("case .settings: return DirectorSpacing.settingsActionHeight"))
+        XCTAssertTrue(scheme.contains("case .standard: return DirectorSpacing.controlMinHeight"))
+        XCTAssertEqual(scheme.components(separatedBy: ".frame(minHeight: size.minimumHeight)").count - 1, 2)
+        XCTAssertFalse(settings.contains("Export capability package…"))
+        XCTAssertFalse(settings.contains("Export capability package..."))
+
+        for relativePath in [
+            "Sources/DirectorUI/Resources/en.lproj/Localizable.strings",
+            "Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings",
+        ] {
+            let localization = try source(relativePath)
+            let line = try XCTUnwrap(localization.split(separator: "\n").first { $0.contains("\"settings.migration.export\"") })
+            XCTAssertFalse(line.contains("…"), "export label must not contain an ellipsis in \(relativePath)")
+            XCTAssertFalse(line.contains("..."), "export label must not contain three dots in \(relativePath)")
+        }
     }
 
     private func source(_ relativePath: String) throws -> String {

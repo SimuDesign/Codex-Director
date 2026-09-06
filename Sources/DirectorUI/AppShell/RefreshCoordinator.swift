@@ -6,6 +6,9 @@ import DirectorCore
 public enum RefreshDomain: String, CaseIterable, Codable, Sendable {
     case quota
     case directory
+    /// Reads the privacy-sanitized account quota snapshot through Codex
+    /// app-server. This domain never implies source indexing.
+    case accountUsage
     /// Re-ranks the Home summary from the current bounded recent-usage DTO.
     /// This domain is projection-only and must never imply a source scan.
     case homeRankings
@@ -16,9 +19,14 @@ public enum RefreshDomain: String, CaseIterable, Codable, Sendable {
 public enum RefreshReason: String, Codable, Sendable {
     case startup
     case automatic
+    /// A passive menu-bar allowance request. It is intentionally distinct
+    /// from capability automatic work so the app can cancel it when the
+    /// menu-bar schedule is paused without disturbing a manual refresh.
+    case accountUsageAutomatic
     case manual
     case indexCommitted
     case dayChanged
+    case menuBar
 }
 
 public struct RefreshRequest: Equatable, Sendable {
@@ -505,6 +513,70 @@ public final class RefreshCoordinator {
         }
     }
 
+    /// Cancels an account-only passive request without disturbing an active
+    /// manual/source/projection batch. If a manual request was coalesced as a
+    /// follow-up to the passive account operation, cancel the active account
+    /// round and preserve the local domains for that user request. The
+    /// account domain is deferred until the menu-bar scheduler is eligible
+    /// again rather than being started under lock, sleep, or Low Power Mode.
+    public func cancelScheduledAccountUsage() {
+        let scheduled = { (request: RefreshRequest?) in
+            request?.reason == .accountUsageAutomatic && request?.domains == [.accountUsage]
+        }
+
+        if scheduled(activeRequest) {
+            if let pendingRequest {
+                let localDomains = pendingRequest.domains.subtracting([.accountUsage])
+                if localDomains.isEmpty {
+                    self.pendingRequest = nil
+                    finish(&nextBatchWaiters, with: .cancelled)
+                } else {
+                    self.pendingRequest = RefreshRequest(
+                        domains: localDomains,
+                        reason: pendingRequest.reason,
+                        force: pendingRequest.force,
+                        allowsLongRunning: pendingRequest.allowsLongRunning,
+                        sourceIntent: pendingRequest.sourceIntent
+                    )
+                }
+            }
+            cancelActiveScheduledAccountUsage()
+            return
+        }
+
+        if !isRunning {
+            guard scheduled(pendingRequest) else { return }
+            pendingRequest = nil
+            finish(&activeWaiters, with: .cancelled)
+            return
+        }
+
+        if scheduled(activeRequest), pendingRequest == nil, nextBatchWaiters.isEmpty {
+            cancel()
+        } else if scheduled(pendingRequest), nextBatchWaiters.count == 1 {
+            pendingRequest = nil
+            finish(&nextBatchWaiters, with: .cancelled)
+        }
+    }
+
+    /// Invalidates only the active passive account round. The worker's
+    /// generation guard drains the cancelled operation and promotes any
+    /// preserved local follow-up; unlike `cancel()`, this intentionally does
+    /// not discard explicit user work already waiting behind it.
+    private func cancelActiveScheduledAccountUsage() {
+        generation &+= 1
+        workerTask?.cancel()
+        finish(&activeWaiters, with: .cancelled)
+        guard workerTask != nil else {
+            isRunning = false
+            activeRounds = 0
+            activeRequest = nil
+            activeSourceOutcome = nil
+            promoteNextBatchIfNeeded()
+            return
+        }
+    }
+
     /// Cancels current work and waits until the cooperative worker has exited.
     /// No replacement batch can begin before this method returns.
     public func cancelAndWait() async {
@@ -794,6 +866,8 @@ public final class RefreshCoordinator {
             switch reason {
             case .manual: return 3
             case .startup, .automatic: return 2
+            case .accountUsageAutomatic: return 1
+            case .menuBar: return 2
             case .indexCommitted, .dayChanged: return 1
             }
         }
