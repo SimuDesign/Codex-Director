@@ -496,6 +496,21 @@ final class CodexAccountUsageReadingTests: XCTestCase {
             while :; do sleep 1; done
         ) &
         printf '%s\\n' "$!" > "\(childFile.path)"
+        # Do not publish the protocol response until both descendant PID
+        # writes have completed. This keeps the early-parent-exit test focused
+        # on process-group cleanup instead of depending on runner scheduling.
+        attempts=0
+        while [ "$attempts" -lt 200 ]; do
+            if [ -s "\(grandchildFile.path)" ]; then
+                break
+            else
+                attempts=$((attempts + 1))
+                sleep 0.01
+            fi
+        done
+        if [ ! -s "\(grandchildFile.path)" ]; then
+            exit 75
+        fi
         printf '%s\\n' '{\"id\":1,\"result\":{\"userAgent\":\"synthetic\"}}'
         printf '%s\\n' '{\"id\":2,\"result\":{\"rateLimits\":{\"primary\":{\"usedPercent\":20,\"windowDurationMins\":10080}}}}'
         exit 0
