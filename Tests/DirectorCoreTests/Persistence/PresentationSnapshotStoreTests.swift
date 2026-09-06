@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import DirectorCore
 
@@ -86,5 +87,44 @@ final class PresentationSnapshotStoreTests: XCTestCase {
         let decoded = try JSONDecoder().decode(QuotaOverviewDay.self, from: legacy)
 
         XCTAssertNil(decoded.usedPercentDelta)
+    }
+
+    func testAccountUsageIsOptionalV1CacheDataAndRoundTrips() async throws {
+        let file = url(); defer { try? FileManager.default.removeItem(at: file) }
+        let accountUsage = try CodexAccountUsageSnapshot(
+            weeklyRemainingPercent: 74,
+            weeklyResetsAt: Date(timeIntervalSince1970: 2_001_000),
+            resetCreditCount: 2,
+            capturedAt: Date(timeIntervalSince1970: 2_000_000)
+        )
+        let snapshot = PresentationSnapshot(
+            identity: .init(databaseEpoch: "account-cache", dataGeneration: 1),
+            classificationRevision: "c1",
+            window: .init(start: Date(timeIntervalSince1970: 10), end: Date(timeIntervalSince1970: 20), timeZone: .gmt),
+            accountUsage: accountUsage
+        )
+        let store = PresentationSnapshotStore(url: file)
+
+        try await store.write(snapshot)
+
+        let loaded = try await store.read()
+        XCTAssertEqual(loaded?.accountUsage, accountUsage)
+        let encoded = String(decoding: try Data(contentsOf: file), as: UTF8.self)
+        XCTAssertFalse(encoded.localizedCaseInsensitiveContains("accountId"))
+        XCTAssertFalse(encoded.localizedCaseInsensitiveContains("token"))
+    }
+
+    func testLegacyV1CacheWithoutAccountUsageStillReads() async throws {
+        let file = url(); defer { try? FileManager.default.removeItem(at: file) }
+        let snapshot = makeSnapshot(identity: .init(databaseEpoch: "legacy-cache", dataGeneration: 1))
+        let encoded = try JSONEncoder().encode(snapshot)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object.removeValue(forKey: "accountUsage")
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+
+        let loaded = try await PresentationSnapshotStore(url: file).read()
+
+        XCTAssertNil(loaded?.accountUsage)
+        XCTAssertEqual(loaded?.identity, snapshot.identity)
     }
 }

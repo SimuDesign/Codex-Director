@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import ImageIO
 @testable import DirectorUI
 import DirectorCore
 
@@ -137,7 +138,8 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(settings.contains("settings.about.title"))
         XCTAssertTrue(settings.contains("settings.author"))
         XCTAssertTrue(settings.contains("七木 Simu"))
-        XCTAssertTrue(settings.contains("0.3.1 (16)"))
+        XCTAssertTrue(settings.contains("return version ?? \"1.0.0\""))
+        XCTAssertFalse(settings.contains("1.0.0 (21)"))
         XCTAssertTrue(settings.contains("eyebrow: nil"))
         XCTAssertTrue(settings.contains("DirectorPageContentFrame(workspaceWidth: viewport.size.width)"))
         XCTAssertTrue(settings.contains("DirectorSecondaryActionButtonStyle(size: .settings, destructive: true)"))
@@ -200,16 +202,84 @@ final class DirectorSchemeATests: XCTestCase {
         let buildScript = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/build-local-app.sh"), encoding: .utf8)
         let appVerifier = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/verify-app-bundle.sh"), encoding: .utf8)
         let harness = try String(contentsOf: sourceRoot.appendingPathComponent("Tests/StartupPerformanceHarness/project.yml"), encoding: .utf8)
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 0.3.1"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 16"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 0.3.1").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 16").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.0.0"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 21"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.0.0").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 21").count - 1, 2)
         XCTAssertTrue(buildScript.contains("verify-app-bundle.sh"))
         XCTAssertTrue(appVerifier.contains("read-project-version.sh"))
         XCTAssertTrue(appVerifier.contains("short_version\" == \"$expected_marketing_version\""))
         XCTAssertTrue(appVerifier.contains("build_version\" == \"$expected_build_version\""))
         XCTAssertTrue(harness.contains("MARKETING_VERSION: 0.2.1"))
         XCTAssertTrue(harness.contains("CURRENT_PROJECT_VERSION: 4"))
+    }
+
+    func testVersionAndExportCopyAreSynchronizedAcrossPublicSources() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let project = try String(contentsOf: sourceRoot.appendingPathComponent("project.yml"), encoding: .utf8)
+        let pbxproj = try String(contentsOf: sourceRoot.appendingPathComponent("CodexDirector.xcodeproj/project.pbxproj"), encoding: .utf8)
+        let readClient = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorCore/MenuBar/CodexAccountUsageReading.swift"), encoding: .utf8)
+        let validation = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Validation/UIValidationSession.swift"), encoding: .utf8)
+        let changelog = try String(contentsOf: sourceRoot.appendingPathComponent("CHANGELOG.md"), encoding: .utf8)
+        let readme = try String(contentsOf: sourceRoot.appendingPathComponent("README.md"), encoding: .utf8)
+        let readmeChinese = try String(contentsOf: sourceRoot.appendingPathComponent("README.zh-CN.md"), encoding: .utf8)
+
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.0.0"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 21"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.0.0").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 21").count - 1, 2)
+        XCTAssertTrue(readClient.contains("requestPayload(version: \"1.0.0\")"))
+        XCTAssertTrue(validation.contains("CapabilityPackageProducer(version: \"1.0.0\", build: \"21\")"))
+        XCTAssertTrue(changelog.contains("## 1.0.0"))
+        XCTAssertTrue(readme.contains("1.0.0"))
+        XCTAssertTrue(readmeChinese.contains("1.0.0"))
+        XCTAssertFalse(readme.contains("1.0.0 (21)"))
+        XCTAssertFalse(readmeChinese.contains("1.0.0 (21)"))
+
+        for relativePath in [
+            "Sources/DirectorUI/Resources/en.lproj/Localizable.strings",
+            "Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings",
+        ] {
+            let localization = try String(contentsOf: sourceRoot.appendingPathComponent(relativePath), encoding: .utf8)
+            let line = try XCTUnwrap(localization.split(separator: "\n").first { $0.contains("\"settings.migration.export\"") })
+            XCTAssertFalse(line.contains("…"))
+            XCTAssertFalse(line.contains("..."))
+        }
+    }
+
+    func testPublicSyntheticScreenshotsHaveReviewedDimensionsAndRegistration() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let screenshotNames = [
+            "home-en-light.png", "agents-en-light.png", "settings-en-dark.png",
+            "home-zh-dark.png", "agents-zh-light.png", "settings-zh-light.png",
+        ]
+        let inventory = try String(contentsOf: sourceRoot.appendingPathComponent("docs/public-asset-inventory.md"), encoding: .utf8)
+        let license = try String(contentsOf: sourceRoot.appendingPathComponent("ASSETS_LICENSE.md"), encoding: .utf8)
+        let englishREADME = try String(contentsOf: sourceRoot.appendingPathComponent("README.md"), encoding: .utf8)
+        let chineseREADME = try String(contentsOf: sourceRoot.appendingPathComponent("README.zh-CN.md"), encoding: .utf8)
+
+        for name in screenshotNames {
+            let url = sourceRoot.appendingPathComponent("docs/screenshots").appendingPathComponent(name)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "missing public screenshot \(name)")
+            XCTAssertLessThan(try Data(contentsOf: url).count, 5 * 1024 * 1024, "screenshot exceeds the public asset limit")
+            guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+                XCTFail("unable to decode public screenshot \(name)")
+                continue
+            }
+            XCTAssertEqual(image.width, 1280, "screenshot width must match the product viewport")
+            XCTAssertEqual(image.height, 800, "screenshot height must match the product viewport")
+            XCTAssertTrue(inventory.contains("docs/screenshots/\(name)"), "asset inventory missing \(name)")
+            XCTAssertTrue(license.contains("docs/screenshots/"), "asset license must cover synthetic screenshots")
+            let readme = name.contains("-zh-") ? chineseREADME : englishREADME
+            XCTAssertTrue(readme.contains("docs/screenshots/\(name)"), "README missing screenshot reference \(name)")
+        }
     }
 
     private func relativeLuminance(red: Double, green: Double, blue: Double) -> Double {

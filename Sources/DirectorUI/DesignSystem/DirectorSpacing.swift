@@ -22,7 +22,12 @@ public enum DirectorSpacing {
     public static let ribbonGap: CGFloat = 12
     public static let controlMinHeight: CGFloat = 32
     public static let toolbarControlMinHeight: CGFloat = 28
-    public static let settingsActionLabelWidth: CGFloat = 128
+    /// Shared content width for the three Settings actions. The value covers
+    /// the longest localized label while the styles add their common insets.
+    public static let settingsActionLabelWidth: CGFloat = 176
+    /// Shared outer height for the three Settings actions, including loading
+    /// and disabled states.
+    public static let settingsActionHeight: CGFloat = 48
     public static let inspectorMinWidth: CGFloat = 360
     public static let inspectorIdealWidth: CGFloat = 380
     public static let inspectorMaxWidth: CGFloat = 400

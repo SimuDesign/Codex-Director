@@ -338,10 +338,14 @@ public struct PresentationSnapshot: Codable, Equatable, Sendable {
     public let lastSourceCheckAt, lastIndexCompletedAt, statisticsThrough: Date?
     public let quota: QuotaOverviewSnapshot?
     public let home: PresentationHomeSummary?
+    /// Optional v1-compatible account projection for menu-bar presentation.
+    /// It contains only validated weekly allowance and reset-credit count; no
+    /// account or model identifiers are persisted.
+    public let accountUsage: CodexAccountUsageSnapshot?
     public let failureCount: Int
     public let nextRetryAt: Date?
     public let refreshSchedule: PresentationRefreshSchedule?
-    public init(schemaVersion: Int = currentSchemaVersion, identity: PresentationIdentity, classificationRevision: String, window: CapabilityQueryWindow, generatedAt: Date = Date(), lastSourceCheckAt: Date? = nil, lastIndexCompletedAt: Date? = nil, statisticsThrough: Date? = nil, quota: QuotaOverviewSnapshot? = nil, home: PresentationHomeSummary? = nil, failureCount: Int = 0, nextRetryAt: Date? = nil, refreshSchedule: PresentationRefreshSchedule? = nil) {
-        self.schemaVersion = schemaVersion; self.identity = identity; self.classificationRevision = classificationRevision; self.window = window; self.generatedAt = generatedAt; self.lastSourceCheckAt = lastSourceCheckAt; self.lastIndexCompletedAt = lastIndexCompletedAt; self.statisticsThrough = statisticsThrough; self.quota = quota; self.home = home; self.failureCount = failureCount; self.nextRetryAt = nextRetryAt; self.refreshSchedule = refreshSchedule
+    public init(schemaVersion: Int = currentSchemaVersion, identity: PresentationIdentity, classificationRevision: String, window: CapabilityQueryWindow, generatedAt: Date = Date(), lastSourceCheckAt: Date? = nil, lastIndexCompletedAt: Date? = nil, statisticsThrough: Date? = nil, quota: QuotaOverviewSnapshot? = nil, home: PresentationHomeSummary? = nil, accountUsage: CodexAccountUsageSnapshot? = nil, failureCount: Int = 0, nextRetryAt: Date? = nil, refreshSchedule: PresentationRefreshSchedule? = nil) {
+        self.schemaVersion = schemaVersion; self.identity = identity; self.classificationRevision = classificationRevision; self.window = window; self.generatedAt = generatedAt; self.lastSourceCheckAt = lastSourceCheckAt; self.lastIndexCompletedAt = lastIndexCompletedAt; self.statisticsThrough = statisticsThrough; self.quota = quota; self.home = home; self.accountUsage = accountUsage; self.failureCount = failureCount; self.nextRetryAt = nextRetryAt; self.refreshSchedule = refreshSchedule
     }
 }

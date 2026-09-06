@@ -507,7 +507,11 @@ public enum DirectorPrimaryActionButtonSize: Sendable {
     }
 
     fileprivate var minimumHeight: CGFloat {
-        self == .toolbar ? DirectorSpacing.toolbarControlMinHeight : DirectorSpacing.controlMinHeight
+        switch self {
+        case .toolbar: return DirectorSpacing.toolbarControlMinHeight
+        case .settings: return DirectorSpacing.settingsActionHeight
+        case .standard: return DirectorSpacing.controlMinHeight
+        }
     }
 
     fileprivate var fixedLabelWidth: CGFloat? {

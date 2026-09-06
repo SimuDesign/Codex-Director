@@ -37,6 +37,15 @@ public struct SettingsView: View {
                                     LabeledContent(t("settings.appearance", "Theme")) {
                                         themePicker
                                     }
+                                    Toggle(
+                                        t("settings.menuBar", "Show in menu bar"),
+                                        isOn: Binding(
+                                            get: { model.menuBarEnabled },
+                                            set: { model.setMenuBarEnabled($0) }
+                                        )
+                                    )
+                                    .toggleStyle(.switch)
+                                    .accessibilityHint(t("settings.menuBar.hint", "Show a privacy-safe weekly quota summary in the macOS menu bar."))
                                 }
                             }
                             section(ordinal: "02", titleKey: "settings.index.title", fallback: "Index", tone: .ice) {
@@ -95,10 +104,10 @@ public struct SettingsView: View {
                                 Text(t("settings.migration.localWarning", "The package is an unencrypted local file. Source capability files are never modified, and the package is written only to the location you choose."))
                                     .font(DirectorTypography.supporting)
                                     .foregroundStyle(DirectorColor.textSecondary)
-                                Button(t("settings.migration.export", "Export capability package…")) {
+                                Button(t("settings.migration.export", "Export capability package")) {
                                     showsCapabilityExport = true
                                 }
-                                .buttonStyle(DirectorPrimaryActionButtonStyle())
+                                .buttonStyle(DirectorPrimaryActionButtonStyle(size: .settings))
                                 .disabled(model.capabilityExportCoordinator == nil || model.isCapabilityExporting)
                                 .accessibilityHint(t("settings.migration.exportHint", "Choose content, run a safety preflight, then save a local ZIP package."))
                             }
@@ -187,9 +196,7 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        if let version, let build { return "\(version) (\(build))" }
-        return "0.3.1 (16)"
+        return version ?? "1.0.0"
     }
 
     private func section<Content: View>(ordinal: String, titleKey: String, fallback: String, tone: DirectorAccentTone, @ViewBuilder content: () -> Content) -> some View {

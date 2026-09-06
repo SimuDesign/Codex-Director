@@ -87,6 +87,7 @@ public actor PresentationSnapshotStore {
             statisticsThrough: snapshot.statisticsThrough,
             quota: snapshot.quota,
             home: snapshot.home,
+            accountUsage: snapshot.accountUsage,
             failureCount: snapshot.failureCount,
             nextRetryAt: snapshot.nextRetryAt,
             refreshSchedule: schedule
@@ -101,6 +102,14 @@ public actor PresentationSnapshotStore {
         if let quota = snapshot.quota {
             guard quota.identity == snapshot.identity, quota.window == snapshot.window,
                   quota.sources.allSatisfy({ $0.daily.count <= 7 }) else { throw StoreError.corrupt }
+        }
+        if let accountUsage = snapshot.accountUsage {
+            guard accountUsage.capturedAt.timeIntervalSinceReferenceDate.isFinite,
+                  accountUsage.weeklyResetsAt.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
+                  accountUsage.weeklyRemainingPercent.map({ $0.isFinite && (0...100).contains($0) }) ?? true,
+                  accountUsage.resetCreditCount.map({ $0 >= 0 }) ?? true else {
+                throw StoreError.corrupt
+            }
         }
         if let home = snapshot.home,
            !(1...PresentationHomeSummary.currentRankingCapacity).contains(home.rankingCapacity) ||
@@ -121,6 +130,7 @@ public actor PresentationSnapshotStore {
             lastIndexCompletedAt: snapshot.lastIndexCompletedAt ?? existing.lastIndexCompletedAt,
             statisticsThrough: snapshot.statisticsThrough ?? existing.statisticsThrough,
             quota: snapshot.quota ?? existing.quota, home: snapshot.home ?? existing.home,
+            accountUsage: snapshot.accountUsage ?? existing.accountUsage,
             failureCount: snapshot.failureCount, nextRetryAt: snapshot.nextRetryAt,
             refreshSchedule: snapshot.refreshSchedule ?? existing.refreshSchedule)
         try write(merged, expectedIdentity: expectedIdentity, generation: generation)
@@ -183,6 +193,7 @@ public actor PresentationSnapshotStore {
             statisticsThrough: existing.statisticsThrough,
             quota: existing.quota,
             home: existing.home,
+            accountUsage: existing.accountUsage,
             failureCount: existing.failureCount,
             nextRetryAt: existing.nextRetryAt,
             refreshSchedule: schedule

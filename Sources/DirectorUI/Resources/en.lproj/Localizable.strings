@@ -19,6 +19,8 @@
 "settings.appearance" = "Theme";
 "settings.appearance.light" = "Light";
 "settings.appearance.dark" = "Dark";
+"settings.menuBar" = "Show in menu bar";
+"settings.menuBar.hint" = "Show a privacy-safe weekly quota summary in the macOS menu bar. It is enabled by default; you can turn it off here.";
 "settings.index.title" = "Index";
 "settings.index.status" = "Status";
 "settings.index.updated" = "Last updated";
@@ -85,6 +87,17 @@
 "home.refresh.hint" = "Refresh capabilities, quota and recent usage data.";
 "home.refresh.lastUpdated" = "Last updated: %@";
 "home.refresh.never" = "Not updated yet";
+"menuBar.weeklyRemaining" = "Current week remaining";
+"menuBar.nextReset" = "Next reset";
+"menuBar.resetCredits" = "Reset cards";
+"menuBar.refresh" = "Refresh data";
+"menuBar.refresh.running" = "Refreshing…";
+"menuBar.refresh.hint" = "Refresh capability and account data.";
+"menuBar.openMainWindow" = "Open main window";
+"menuBar.openMainWindow.hint" = "Show Codex Director's main window.";
+"menuBar.unavailable" = "Unavailable";
+"menuBar.cached" = "Showing cached data";
+"menuBar.unavailableStatus" = "Account data is unavailable";
 "library.empty" = "No capabilities match this view.";
 "library.purposeUnavailable" = "Purpose unavailable";
 "library.inferred" = "Inferred";
@@ -647,7 +660,7 @@
 "settings.migration.title" = "Capability migration";
 "settings.migration.body" = "Create an open ZIP package containing selected Agents, Skills and instructions. Plugins and external requirements are recorded as lists only.";
 "settings.migration.localWarning" = "The package is an unencrypted local file. Source capability files are never modified, and the package is written only to the location you choose.";
-"settings.migration.export" = "Export capability package…";
+"settings.migration.export" = "Export capability package";
 "settings.migration.exportHint" = "Choose content, run a safety preflight, then save a local ZIP package.";
 "settings.migration.sheet.title" = "Export capability package";
 "settings.migration.loading" = "Loading exportable capabilities…";

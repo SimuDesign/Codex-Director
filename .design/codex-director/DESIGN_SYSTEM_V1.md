@@ -1,9 +1,9 @@
 # Codex Director Design System v1
 
-Version: `0.3.1-annotated-ui-polish`  
+Version: `1.0.0` (visible marketing version; internal build `21`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-09-05
+Last updated: 2026-09-06
 
 ## 1. Purpose
 
@@ -81,7 +81,7 @@ Compact and ambient surfaces must not expose prompts, tool arguments, tokens, ra
 | 安装插件 / Installed Plugins | Which installed packages are enabled and observed? | Current package inventory, incl disabled; attribution limitations visible |
 | 设置 / Settings | Is my data current and private? | Language and app appearance, indexing/status/diagnostics, capability migration, confirmed derived-data deletion, privacy, author and version |
 
-There are exactly six primary destinations. Old Capabilities, Tasks, Review, Usage and Data Status entries are removed. Related calls and findings remain detail content; indexing and diagnostics move into Settings. Topology, workflow, menu-bar and desktop-pet contracts below are dormant platform guidance, not 0.2 scope or new navigation obligations.
+There are exactly six primary destinations. Old Capabilities, Tasks, Review, Usage and Data Status entries are removed. Related calls and findings remain detail content; indexing and diagnostics move into Settings. Topology, workflow and desktop-pet contracts below remain dormant platform guidance; the user-controlled menu-bar quota surface is defined in §19 and defaults to visible for new installs.
 
 Home contains exactly three Card Atlas modules. Their outer boundaries are one restrained outline grammar, while their internals remain distinct: quota ring/reset/chart, continuous metrics with responsive internal rules, and a top-aligned ranking ledger. The quota ring and daily bars share a single visibly selected source. Bars show the weekly allowance percentage observed as used on each local calendar day, derived from reset-aware increases between consecutive same-source account reports and never from Tokens, calls, or cost. Gaps and ambiguous transitions remain unavailable rather than zero; the current reset timestamp sits directly below the ring, while the daily chart does not add ambiguous reset labels. Inventory excludes project counts/instructions. Rankings contain only observed calls and explain that frequency is not effectiveness in their detailed context rather than a module subtitle.
 
@@ -393,10 +393,16 @@ The approved [startup repair plan](../../docs/plans/2026-08-28-startup-performan
 
 ### 11.8 Menu-bar status
 
-- Default to a single template-style symbol plus an optional short state indicator.
-- Never display prompt text, task titles, file paths, or tool arguments by default.
-- Use a privacy-safe popover for current state, elapsed time, pending approval, last outcome, and Open Director.
-- Allow the user to hide the menu item and disable launch at login.
+- The 1.0.0 implementation is enabled by default for new installs and uses one template-style gauge symbol plus
+  a short weekly remaining percentage; unavailable data is shown as `—`.
+- The native popover is a compact single-column `.window` surface. Its fixed
+  order is weekly remaining, next reset, reset-card count, Refresh data, and
+  Open main window.
+- Never display prompt text, task titles, file paths, tool arguments, account
+  identifiers, model names, or provider/source labels in the menu bar, its
+  accessibility tree, help text, or logs.
+- The menu item is user-controlled from Settings and does not imply login
+  launch, unrestricted polling, reset-card consumption, or a second indexer.
 
 ### 11.9 Desktop pet
 
@@ -560,8 +566,9 @@ the active sidebar row and Home welcome title's `Codex Director` fragment use
 the brand gradient while the toolbar title remains native; page titles move to
 52/36pt; Home module headings use symmetric spacing and omit the
 two overview subtitles; the quota source uses a segmented switch and reset time
-sits below the centered ring; project groups gain explicit inter-group spacing
-and tinted icon-led headers; dark teal data text uses `#5FD7EE`; and Settings
+sits below the centered ring; project groups gain exactly 20pt inter-group
+spacing with tinted icon-led headers; group-internal row spacing is unchanged;
+dark teal data text uses `#5FD7EE`; and Settings
 uses balanced section padding with equal compact index actions.
 
 The screenshot-correction pass removes competing system chrome from those
@@ -578,6 +585,36 @@ indexing, cache schema, startup scheduling, source capability files, or real
 user data. The implementation validation matrix is recorded in
 `VALIDATION_PLAN.md`; GUI, VoiceOver, screenshot and Release evidence remain
 explicit gates and are not inferred from source or unit tests.
+
+## 19. Menu-bar quota surface — 1.0.0
+
+The user-controlled menu-bar surface is a thin projection of the app-scoped model. It is enabled by default for new installs, while an explicit Settings opt-out remains persisted across launches. The
+template symbol is `gauge.with.dots.needle.50percent`; the persistent label is
+only the rounded current-week remaining percentage or `—`. Opening the native
+`.window` popover shows, in order, current week remaining, next reset time,
+reset-card count, the shared branded Refresh data control, and Open main window.
+The refresh control uses the existing indeterminate native progress indicator
+and cannot be activated twice. Opening the popover may request one account-usage
+read when the cached reading is missing, older than two minutes, or past its
+reported reset; it never starts a capability indexer.
+
+When enabled, the app schedules only account-usage reads after the normal
+startup grace. While the Mac is awake, unlocked and not in Low Power Mode, an
+active session uses a five-minute cadence and an aggregate idle duration of at
+least 30 minutes uses a 30-minute cadence. Locked, sleeping and Low Power Mode
+states cancel the account schedule until the next OS state notification. Read
+failures back off to 5, 15 and 30 minutes and reset after a successful read.
+The scheduler has one bounded next-due wake-up, reads no event contents, and
+does not poll, read SQLite, or start a second indexer.
+
+Account values come only from the local Codex app-server read boundary and are
+reduced to validated percentage, reset date, reset-card count, and capture time
+before reaching this surface or the optional v1 cache field. Source/provider
+selection, model names (including GPT-5.3), account IDs, reset-card IDs and
+descriptions are intentionally absent from view, accessibility, help, logs and
+persistence. A failed read preserves an unexpired prior value and otherwise
+shows `—`, never an inferred zero or full allowance. Light/Dark and localization
+use the same app-level stores as the main window.
 
 ### Native recomposition delivery record — 2026-08-31
 

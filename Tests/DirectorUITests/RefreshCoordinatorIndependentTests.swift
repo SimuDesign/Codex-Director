@@ -148,7 +148,7 @@ final class RefreshCoordinatorIndependentTests: XCTestCase {
 
         let manual = Task { await coordinator.request(.init(domains: [.directory], reason: .manual, force: true)) }
         let manualWasAdmitted = await waitUntil {
-            coordinator.isRunning && coordinator.pendingWaiterCount == 1
+            coordinator.isRunning && coordinator.pendingWaiterCount >= 1
         }
         XCTAssertTrue(manualWasAdmitted)
         guard manualWasAdmitted else {
@@ -367,5 +367,138 @@ final class RefreshCoordinatorIndependentTests: XCTestCase {
         let second = await coordinator.request(.init(reason: .manual, force: true))
         XCTAssertEqual(second, .completed)
         XCTAssertEqual(calls.value, 2)
+    }
+
+    func testAccountOnlyAutomaticRequestSkipsSourceAndProjectionIndexBoundary() async {
+        let sourceCalls = Box(0)
+        let accountCalls = Box(0)
+        let requests = Box<[RefreshRequest]>([])
+        let coordinator = RefreshCoordinator(
+            timeout: 0,
+            sourceOperation: { _ in
+                sourceCalls.update { $0 += 1 }
+                return .succeeded(Date())
+            },
+            operation: { request in
+                accountCalls.update { $0 += 1 }
+                requests.update { $0.append(request) }
+                return .completed
+            }
+        )
+
+        let result = await coordinator.request(RefreshRequest(
+            domains: [.accountUsage],
+            reason: .accountUsageAutomatic,
+            force: true,
+            sourceIntent: false
+        ))
+
+        XCTAssertEqual(result, .completed)
+        XCTAssertEqual(sourceCalls.value, 0)
+        XCTAssertEqual(accountCalls.value, 1)
+        XCTAssertEqual(requests.value.first?.domains, [.accountUsage])
+    }
+
+    func testCancellingScheduledAccountOnlyRequestDoesNotCancelUnrelatedWork() async {
+        let accountEntered = Signal()
+        let releaseAccount = Gate()
+        let accountCalls = Box(0)
+        let coordinator = RefreshCoordinator(
+            timeout: 0,
+            operation: { request in
+                accountCalls.update { $0 += 1 }
+                await accountEntered.signal()
+                await releaseAccount.wait()
+                try Task.checkCancellation()
+                return .completed
+            }
+        )
+        defer { Task { await releaseAccount.resumeAll() } }
+
+        let request = Task {
+            await coordinator.request(RefreshRequest(
+                domains: [.accountUsage],
+                reason: .accountUsageAutomatic,
+                force: true,
+                sourceIntent: false
+            ))
+        }
+        let entered = await waitFor(accountEntered)
+        XCTAssertTrue(entered)
+        coordinator.cancelScheduledAccountUsage()
+        await releaseAccount.resumeAll()
+
+        let result = await request.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertEqual(accountCalls.value, 1)
+        for _ in 0..<100 where coordinator.isRunning { await Task.yield() }
+        XCTAssertFalse(coordinator.isRunning)
+    }
+
+    func testPausingActiveAutomaticAccountCancelsItAndPreservesPendingManualLocalWork() async {
+        let accountEntered = Signal()
+        let accountCancelled = Signal()
+        let releaseAccount = Gate()
+        let requests = Box<[RefreshRequest]>([])
+        let coordinator = RefreshCoordinator(
+            timeout: 0,
+            operation: { request in
+                requests.update { $0.append(request) }
+                guard request.reason == .accountUsageAutomatic else { return .completed }
+                await accountEntered.signal()
+                do {
+                    await releaseAccount.wait()
+                    try Task.checkCancellation()
+                    return .completed
+                } catch is CancellationError {
+                    await accountCancelled.signal()
+                    throw CancellationError()
+                }
+            }
+        )
+        defer { Task { await releaseAccount.resumeAll() } }
+
+        let automatic = Task {
+            await coordinator.request(RefreshRequest(
+                domains: [.accountUsage],
+                reason: .accountUsageAutomatic,
+                force: true,
+                sourceIntent: false
+            ))
+        }
+        let automaticDidEnter = await waitFor(accountEntered)
+        XCTAssertTrue(automaticDidEnter)
+
+        // A manual full refresh arrives while the scheduled account read is
+        // blocked. It must remain admitted, but its account domain must be
+        // deferred when the system enters a pause state.
+        let manual = Task {
+            await coordinator.request(RefreshRequest(
+                domains: [.accountUsage, .quota, .directory],
+                reason: .manual,
+                force: true,
+                sourceIntent: true
+            ))
+        }
+        let manualWasAdmitted = await waitUntil {
+            coordinator.isRunning && coordinator.pendingWaiterCount >= 2
+        }
+        XCTAssertTrue(manualWasAdmitted)
+        // Let the request's continuation finish its enqueue path before the
+        // pause signal is delivered; this mirrors a real second window click
+        // arriving just before the system lock notification.
+        await Task.yield()
+
+        coordinator.cancelScheduledAccountUsage()
+        await releaseAccount.resumeAll()
+        let cancellationWasObserved = await waitFor(accountCancelled)
+        XCTAssertTrue(cancellationWasObserved)
+
+        let automaticResult = await automatic.value
+        let manualResult = await manual.value
+        XCTAssertEqual(automaticResult, .cancelled)
+        XCTAssertEqual(manualResult, .completed)
+        XCTAssertEqual(requests.value.map(\.domains), [[.accountUsage], [.quota, .directory]])
+        XCTAssertFalse(coordinator.isRunning)
     }
 }

@@ -16,7 +16,7 @@ Branch: `ui-optimization`
 - Home module headings have equal top and bottom breathing room. Capability-summary and usage-ranking module subtitles are removed.
 - Quota evidence is reduced to reset time below a horizontally centered ring. Recorded time and the evidence heading are removed. Daily bars and date labels share the same categorical center.
 - Toolbar refresh uses a 28 pt compact control height. Settings index actions use one compact inline size and equal width.
-- Capability project groups have a tinted, icon-led header and a 16 pt gap between group outlines.
+- Capability project groups have a tinted, icon-led header and an exact 20 pt gap between group outlines; group-internal row spacing remains unchanged.
 - The dark teal data accent uses the high-contrast cyan-teal value already approved for dark emphasis.
 - Settings omits the hero subtitle. Every section uses equal 24 pt top/bottom padding, and its ordinal aligns to the top of the section title.
 
