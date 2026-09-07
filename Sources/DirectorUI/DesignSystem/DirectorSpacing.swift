@@ -44,6 +44,9 @@ public enum DirectorSpacing {
     /// visual signal beside the seven-day snapshot chart.
     public static let homeQuotaRingDiameter: CGFloat = 216
     public static let homeQuotaRingLineWidth: CGFloat = 20
+    public static let homeQuotaRingInnerDiameter: CGFloat = 154
+    public static let homeQuotaRingInnerLineWidth: CGFloat = 12
+    public static let homeQuotaCenterDividerWidth: CGFloat = 40
 }
 
 /// Shared workspace grid for every primary destination. Scroll containers stay

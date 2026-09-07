@@ -65,6 +65,8 @@ public struct UIValidationHost: View {
                     languageStore: languageStore,
                     themeStore: themeStore
                 )
+                .environmentObject(languageStore)
+                .environmentObject(themeStore)
             } else {
                 VStack(spacing: DirectorSpacing.space4) {
                     Label("Synthetic validation unavailable", systemImage: "exclamationmark.triangle")

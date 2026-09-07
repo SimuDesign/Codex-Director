@@ -1,6 +1,6 @@
 # Codex Director Design System v1
 
-Version: `1.0.0` (visible marketing version; internal build `21`)  
+Version: `1.1.0` (visible marketing version; internal build `22`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
 Last updated: 2026-09-06
@@ -83,7 +83,7 @@ Compact and ambient surfaces must not expose prompts, tool arguments, tokens, ra
 
 There are exactly six primary destinations. Old Capabilities, Tasks, Review, Usage and Data Status entries are removed. Related calls and findings remain detail content; indexing and diagnostics move into Settings. Topology, workflow and desktop-pet contracts below remain dormant platform guidance; the user-controlled menu-bar quota surface is defined in §19 and defaults to visible for new installs.
 
-Home contains exactly three Card Atlas modules. Their outer boundaries are one restrained outline grammar, while their internals remain distinct: quota ring/reset/chart, continuous metrics with responsive internal rules, and a top-aligned ranking ledger. The quota ring and daily bars share a single visibly selected source. Bars show the weekly allowance percentage observed as used on each local calendar day, derived from reset-aware increases between consecutive same-source account reports and never from Tokens, calls, or cost. Gaps and ambiguous transitions remain unavailable rather than zero; the current reset timestamp sits directly below the ring, while the daily chart does not add ambiguous reset labels. Inventory excludes project counts/instructions. Rankings contain only observed calls and explain that frequency is not effectiveness in their detailed context rather than a module subtitle.
+Home contains exactly three Card Atlas modules. Their outer boundaries are one restrained outline grammar, while their internals remain distinct: quota rings/reset/chart, continuous metrics with responsive internal rules, and a top-aligned ranking ledger. The quota rings and daily bars share a single visibly selected source. Bars show the weekly allowance percentage observed as used on each local calendar day, derived from reset-aware increases between consecutive same-source account reports and never from Tokens, calls, or cost. Gaps and ambiguous transitions remain unavailable rather than zero; valid five-hour and weekly reset timestamps sit directly below the ring, while the daily chart does not add ambiguous reset labels. Inventory excludes project counts/instructions. Rankings contain only observed calls and explain that frequency is not effectiveness in their detailed context rather than a module subtitle.
 
 Capability ownership and usage project are different dimensions. Default list scope is all capabilities; groups put global configuration first, then localized project name and stable ID. Project configuration overview includes unused project resources; selecting “Project · Usage” includes all current capabilities actually used there, including global ones, and still groups by the capability's own configuration owner. Category totals do not respond to search. The seven-day period is today plus six preceding local calendar days, and the thirty-day inactive period is today plus 29 preceding local calendar days, both independent of UI language.
 
@@ -325,8 +325,8 @@ Under Reduce Motion:
 ### 11.3a Quota and ranking charts
 
 - Use Swift Charts with native dynamic colors. Content charts are not glass panels.
-- Quota: used/remaining donut, textual remaining percentage and reset time below the centered ring. The quota-column heading aligns to the leading content edge; the ring and reset group remain centered. The ring diameter is 216pt with a 20pt ring-to-reset gap. Recorded time and an extra evidence heading are omitted. If the active observation expired, show “waiting for a new quota record”, not a newly full allowance. Multiple sources use an outlined segmented switch whose selected border uses the shared brand gradient; no system-blue selected fill is allowed.
-- Daily weekly-quota usage bars: seven local calendar dates, each containing the reset-aware percentage-point increase observed from consecutive same-source weekly allowance reports. Retain use observed before and after a reported reset within one day. A day without an observation, an adjacent-day baseline, or sufficient reset evidence is unavailable rather than zero; only a confirmed flat sequence displays 0%. The current day ends at its latest report. Use the shared vertical brand gradient, a data-dependent percentage axis with annotation headroom, horizontal grid lines only, and centered date/bar columns whose labels and marks share the exact categorical center. Do not add ambiguous per-day reset text.
+- Quota: a weekly outer ring (216pt / 20pt) and, when a valid same-source five-hour window exists, a concentric inner ring (154pt / 12pt). The center presents five-hour then weekly values with a 40pt divider; a single valid window uses one appropriately sized ring, and an expired/missing window is hidden independently. Reset time(s) sit below the centered ring. The quota-column heading aligns to the leading content edge; the ring and reset group remain centered. Recorded time and an extra evidence heading are omitted. If a current observation expired, show “waiting for a new quota record”, not a newly full allowance. Multiple sources use an outlined segmented switch whose selected border uses the shared brand gradient; no system-blue selected fill is allowed.
+- Daily weekly-quota usage bars: seven local calendar dates, each containing the reset-aware percentage-point increase observed from consecutive same-source weekly allowance reports. Retain use observed before and after a reported reset within one day. A day without an observation, an adjacent-day baseline, or sufficient reset evidence is unavailable rather than zero; only a confirmed flat sequence displays 0%. The current day ends at its latest report. Use the shared vertical brand gradient, a data-dependent percentage axis with annotation headroom, horizontal grid lines only, and centered date/bar columns whose labels and marks share the exact categorical center. If only a five-hour window is available, show “weekly quota history unavailable” rather than creating bars from the short window. Do not add ambiguous per-day reset text.
 - Rankings: current category resources with positive recent-seven-day calls only, descending count, up to ten, proportional bars and explicit inferred labels.
 - Provide accessible labels and textual counts/time/missing states without hover. Do not use decorative symbols as extra AX content.
 - Distinguish loading, unindexed, no inventory, filter empty, not observed, attribution unavailable and update failure.
@@ -393,11 +393,11 @@ The approved [startup repair plan](../../docs/plans/2026-08-28-startup-performan
 
 ### 11.8 Menu-bar status
 
-- The 1.0.0 implementation is enabled by default for new installs and uses one template-style gauge symbol plus
-  a short weekly remaining percentage; unavailable data is shown as `—`.
+- The 1.1.0 implementation is enabled by default for new installs and uses one template-style gauge symbol plus
+  a short five-hour/weekly remaining percentage presentation; unavailable data is shown as `—`.
 - The native popover is a compact single-column `.window` surface. Its fixed
-  order is weekly remaining, next reset, reset-card count, Refresh data, and
-  Open main window.
+  order is five-hour remaining/reset when available, weekly remaining/reset
+  when available, reset-card count, Refresh data, and Open main window.
 - Never display prompt text, task titles, file paths, tool arguments, account
   identifiers, model names, or provider/source labels in the menu bar, its
   accessibility tree, help text, or logs.
@@ -586,16 +586,19 @@ user data. The implementation validation matrix is recorded in
 `VALIDATION_PLAN.md`; GUI, VoiceOver, screenshot and Release evidence remain
 explicit gates and are not inferred from source or unit tests.
 
-## 19. Menu-bar quota surface — 1.0.0
+## 19. Menu-bar quota surface — 1.1.0
 
 The user-controlled menu-bar surface is a thin projection of the app-scoped model. It is enabled by default for new installs, while an explicit Settings opt-out remains persisted across launches. The
 template symbol is `gauge.with.dots.needle.50percent`; the persistent label is
-only the rounded current-week remaining percentage or `—`. Opening the native
-`.window` popover shows, in order, current week remaining, next reset time,
-reset-card count, the shared branded Refresh data control, and Open main window.
+`5h <percent> w <percent>` when both valid windows are present, a bare rounded
+percentage when only one window is available, or `—`. Opening the native
+`.window` popover shows available windows in this order: five-hour remaining,
+five-hour reset, weekly remaining, weekly reset, reset-card count, the shared
+branded Refresh data control, and Open main window. An unavailable or expired
+window contributes neither a persistent label value nor popover rows.
 The refresh control uses the existing indeterminate native progress indicator
 and cannot be activated twice. Opening the popover may request one account-usage
-read when the cached reading is missing, older than two minutes, or past its
+read when the cached reading is missing, older than thirty minutes, or past its
 reported reset; it never starts a capability indexer.
 
 When enabled, the app schedules only account-usage reads after the normal
@@ -608,8 +611,9 @@ The scheduler has one bounded next-due wake-up, reads no event contents, and
 does not poll, read SQLite, or start a second indexer.
 
 Account values come only from the local Codex app-server read boundary and are
-reduced to validated percentage, reset date, reset-card count, and capture time
-before reaching this surface or the optional v1 cache field. Source/provider
+reduced to validated five-hour and weekly percentages, their independent reset
+dates, reset-card count, and capture time before reaching this surface or the
+optional v1 cache field. Source/provider
 selection, model names (including GPT-5.3), account IDs, reset-card IDs and
 descriptions are intentionally absent from view, accessibility, help, logs and
 persistence. A failed read preserves an unexpired prior value and otherwise

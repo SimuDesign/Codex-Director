@@ -92,6 +92,8 @@ final class PresentationSnapshotStoreTests: XCTestCase {
     func testAccountUsageIsOptionalV1CacheDataAndRoundTrips() async throws {
         let file = url(); defer { try? FileManager.default.removeItem(at: file) }
         let accountUsage = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: Date(timeIntervalSince1970: 2_000_300),
             weeklyRemainingPercent: 74,
             weeklyResetsAt: Date(timeIntervalSince1970: 2_001_000),
             resetCreditCount: 2,
@@ -109,9 +111,16 @@ final class PresentationSnapshotStoreTests: XCTestCase {
 
         let loaded = try await store.read()
         XCTAssertEqual(loaded?.accountUsage, accountUsage)
+        XCTAssertEqual(loaded?.accountUsage?.fiveHourRemainingPercent, 82)
         let encoded = String(decoding: try Data(contentsOf: file), as: UTF8.self)
         XCTAssertFalse(encoded.localizedCaseInsensitiveContains("accountId"))
         XCTAssertFalse(encoded.localizedCaseInsensitiveContains("token"))
+    }
+
+    func testLegacyV1QuotaProjectionDecodesWithoutShortWindow() throws {
+        let legacy = Data(#"{"id":"source","name":"Synthetic","rawDisplayName":"Synthetic","current":null,"daily":[]}"#.utf8)
+        let decoded = try JSONDecoder().decode(QuotaOverviewSourceSnapshot.self, from: legacy)
+        XCTAssertNil(decoded.shortCurrent)
     }
 
     func testLegacyV1CacheWithoutAccountUsageStillReads() async throws {

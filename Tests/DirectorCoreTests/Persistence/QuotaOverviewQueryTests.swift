@@ -25,7 +25,37 @@ final class QuotaOverviewQueryTests: XCTestCase {
         XCTAssertEqual(result.sources.map(\.id), ["id:acct", "name:Named"])
         XCTAssertEqual(result.sources.first?.daily.count, 7)
         XCTAssertEqual(result.sources.first?.daily.first?.observation?.id, "b")
+        XCTAssertEqual(result.sources.first?.shortCurrent?.id, "short")
         XCTAssertNil(result.sources.last?.daily[0].observation)
+    }
+
+    func testShortOnlySourceIsProjectedWithoutSyntheticWeeklyHistory() async throws {
+        let store = try store()
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.startOfDay(for: base)
+        let window = CapabilityQueryWindow(
+            start: start,
+            end: start.addingTimeInterval(6 * 86_400 + 3_600),
+            timeZone: calendar.timeZone
+        )
+        let short = try quota(
+            "short-only",
+            start.addingTimeInterval(3_600),
+            limitID: "short-account",
+            name: "Short account",
+            used: 18,
+            window: 300,
+            reset: start.addingTimeInterval(5 * 3_600)
+        )
+        try await insert(store, [short])
+
+        let result = try await store.fetchQuotaOverview(window: window)
+        let source = try XCTUnwrap(result.sources.first)
+        XCTAssertEqual(source.id, "id:short-account")
+        XCTAssertEqual(source.name, "Short account")
+        XCTAssertNil(source.current)
+        XCTAssertEqual(source.shortCurrent?.id, "short-only")
+        XCTAssertTrue(source.daily.allSatisfy { $0.observation == nil && $0.usedPercentDelta == nil })
     }
 
     func testHistoricalOnlySourceKeepsExactlyItsLatestPredecessor() async throws {

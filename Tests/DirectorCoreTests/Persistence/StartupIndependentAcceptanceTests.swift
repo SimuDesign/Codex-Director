@@ -486,7 +486,7 @@ final class StartupIndependentAcceptanceTests: XCTestCase {
         let snapshots = try [
             // Empty IDs use the stable source name rather than an empty id:.
             quota("empty-name", day.addingTimeInterval(3_600), day.addingTimeInterval(86_400), "", "Alpha"),
-            // A short window must not enter the weekly overview.
+            // A short window is projected independently from the weekly overview.
             quota("short-window", day.addingTimeInterval(7_200), day.addingTimeInterval(300), "short", "Short", 300),
             // Same limit ID with a later renamed display source remains one source.
             quota("rename-old", day.addingTimeInterval(-3_600), day.addingTimeInterval(86_400), "renamed", "Old name"),
@@ -505,11 +505,13 @@ final class StartupIndependentAcceptanceTests: XCTestCase {
 
         let window = CapabilityQueryWindow(start: windowStart, end: windowEnd, timeZone: TimeZone(secondsFromGMT: 0)!)
         let overview = try await store.fetchQuotaOverview(window: window)
-        XCTAssertEqual(overview.sources.count, 4)
+        XCTAssertEqual(overview.sources.count, 5)
         let alpha = try XCTUnwrap(overview.sources.first(where: { $0.id == "name:Alpha" }))
         XCTAssertEqual(alpha.daily.count, 7)
         XCTAssertEqual(alpha.daily.compactMap(\.observation).count, 1)
-        XCTAssertNil(overview.sources.first(where: { $0.id == "id:short" }))
+        let short = try XCTUnwrap(overview.sources.first(where: { $0.id == "id:short" }))
+        XCTAssertNil(short.current)
+        XCTAssertEqual(short.shortCurrent?.id, "short-window")
         let renamed = try XCTUnwrap(overview.sources.first(where: { $0.id == "id:renamed" }))
         XCTAssertEqual(renamed.name, "New name")
         XCTAssertEqual(renamed.current?.id, "rename-new")

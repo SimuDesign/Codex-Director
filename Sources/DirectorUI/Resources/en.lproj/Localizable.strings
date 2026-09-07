@@ -20,7 +20,7 @@
 "settings.appearance.light" = "Light";
 "settings.appearance.dark" = "Dark";
 "settings.menuBar" = "Show in menu bar";
-"settings.menuBar.hint" = "Show a privacy-safe weekly quota summary in the macOS menu bar. It is enabled by default; you can turn it off here.";
+"settings.menuBar.hint" = "Show a privacy-safe five-hour and weekly quota summary in the macOS menu bar. It is enabled by default; you can turn it off here.";
 "settings.index.title" = "Index";
 "settings.index.status" = "Status";
 "settings.index.updated" = "Last updated";
@@ -88,6 +88,10 @@
 "home.refresh.lastUpdated" = "Last updated: %@";
 "home.refresh.never" = "Not updated yet";
 "menuBar.weeklyRemaining" = "Current week remaining";
+"menuBar.fiveHourRemaining" = "Five-hour remaining";
+"menuBar.fiveHourRemainingValue" = "Five-hour remaining %@";
+"menuBar.weeklyRemainingValue" = "Weekly remaining %@";
+"menuBar.fiveHourReset" = "Five-hour reset";
 "menuBar.nextReset" = "Next reset";
 "menuBar.resetCredits" = "Reset cards";
 "menuBar.refresh" = "Refresh data";
@@ -176,6 +180,13 @@
 "library.stats" = "%lld capabilities · %lld used";
 "home.quota.source" = "Quota source";
 "home.quota.current" = "Current weekly allowance";
+"home.quota.currentAllowance" = "Current allowance";
+"home.quota.fiveHour" = "5-hour";
+"home.quota.weekly" = "Weekly";
+"home.quota.fiveHourResets" = "5-hour resets";
+"home.quota.weeklyResets" = "Weekly resets";
+"home.quota.fiveHourRemaining" = "five-hour remaining";
+"home.quota.weeklyRemaining" = "weekly remaining";
 "home.quota.used" = "Used";
 "home.quota.remaining" = "Remaining";
 "home.quota.recorded" = "Recorded";
@@ -185,6 +196,7 @@
 "home.quota.awaitingShort" = "Awaiting\nnew data";
 "home.quota.dailyUsage" = "Daily weekly-quota use";
 "home.quota.dailyUsageSubtitle" = "Observed increase from same-source quota records";
+"home.quota.weeklyHistoryUnavailable" = "Weekly quota history unavailable";
 "home.quota.date" = "Date";
 "home.quota.dailyUsedPercent" = "Daily weekly-quota use";
 "home.quota.usedValue" = "%.0f%% used";

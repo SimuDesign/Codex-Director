@@ -149,6 +149,9 @@ struct CodexDirectorApp: App {
                 .preferredColorScheme(themeStore.theme.colorScheme)
         } label: {
             DirectorMenuBarLabel(model: launchState.model)
+                // MenuBarExtra's label is a separate scene subtree and does
+                // not inherit the content closure's environment objects.
+                .environmentObject(languageStore)
         }
         .menuBarExtraStyle(.window)
     }

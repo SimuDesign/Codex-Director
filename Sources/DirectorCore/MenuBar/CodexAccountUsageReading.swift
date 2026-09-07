@@ -8,17 +8,49 @@ import Darwin
 /// bar.  This type intentionally has no account, model, plan, or reset-credit
 /// identity fields.
 public struct CodexAccountUsageSnapshot: Codable, Equatable, Sendable {
+    public let fiveHourRemainingPercent: Double?
+    public let fiveHourResetsAt: Date?
     public let weeklyRemainingPercent: Double?
     public let weeklyResetsAt: Date?
     public let resetCreditCount: Int?
     public let capturedAt: Date
 
+    public var hasUsableAllowance: Bool {
+        fiveHourRemainingPercent != nil || weeklyRemainingPercent != nil
+    }
+
+    public func hasUsableAllowance(at date: Date) -> Bool {
+        (fiveHourRemainingPercent != nil && (fiveHourResetsAt.map { $0 > date } ?? true))
+            || (weeklyRemainingPercent != nil && (weeklyResetsAt.map { $0 > date } ?? true))
+    }
+
+    public func nextResetDate(after date: Date) -> Date? {
+        [fiveHourResetsAt, weeklyResetsAt].compactMap { reset in
+            guard let reset, reset > date else { return nil }
+            return reset
+        }.min()
+    }
+
     public init(
+        fiveHourRemainingPercent: Double? = nil,
+        fiveHourResetsAt: Date? = nil,
         weeklyRemainingPercent: Double?,
         weeklyResetsAt: Date?,
         resetCreditCount: Int?,
         capturedAt: Date
     ) throws {
+        if let fiveHourRemainingPercent {
+            guard fiveHourRemainingPercent.isFinite, (0...100).contains(fiveHourRemainingPercent) else {
+                throw CodexAccountUsageReadError.invalidValue
+            }
+        }
+        if let fiveHourResetsAt {
+            guard fiveHourResetsAt.timeIntervalSinceReferenceDate.isFinite,
+                  fiveHourResetsAt >= .distantPast,
+                  fiveHourResetsAt <= .distantFuture else {
+                throw CodexAccountUsageReadError.invalidValue
+            }
+        }
         if let weeklyRemainingPercent {
             guard weeklyRemainingPercent.isFinite, (0...100).contains(weeklyRemainingPercent) else {
                 throw CodexAccountUsageReadError.invalidValue
@@ -37,6 +69,8 @@ public struct CodexAccountUsageSnapshot: Codable, Equatable, Sendable {
         guard capturedAt.timeIntervalSinceReferenceDate.isFinite else {
             throw CodexAccountUsageReadError.invalidValue
         }
+        self.fiveHourRemainingPercent = fiveHourRemainingPercent
+        self.fiveHourResetsAt = fiveHourResetsAt
         self.weeklyRemainingPercent = weeklyRemainingPercent
         self.weeklyResetsAt = weeklyResetsAt
         self.resetCreditCount = resetCreditCount
@@ -44,6 +78,8 @@ public struct CodexAccountUsageSnapshot: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case fiveHourRemainingPercent
+        case fiveHourResetsAt
         case weeklyRemainingPercent
         case weeklyResetsAt
         case resetCreditCount
@@ -54,6 +90,8 @@ public struct CodexAccountUsageSnapshot: Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         do {
             self = try Self(
+                fiveHourRemainingPercent: values.decodeIfPresent(Double.self, forKey: .fiveHourRemainingPercent),
+                fiveHourResetsAt: values.decodeIfPresent(Date.self, forKey: .fiveHourResetsAt),
                 weeklyRemainingPercent: values.decodeIfPresent(Double.self, forKey: .weeklyRemainingPercent),
                 weeklyResetsAt: values.decodeIfPresent(Date.self, forKey: .weeklyResetsAt),
                 resetCreditCount: values.decodeIfPresent(Int.self, forKey: .resetCreditCount),
@@ -72,6 +110,8 @@ public struct CodexAccountUsageSnapshot: Codable, Equatable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(fiveHourRemainingPercent, forKey: .fiveHourRemainingPercent)
+        try values.encodeIfPresent(fiveHourResetsAt, forKey: .fiveHourResetsAt)
         try values.encodeIfPresent(weeklyRemainingPercent, forKey: .weeklyRemainingPercent)
         try values.encodeIfPresent(weeklyResetsAt, forKey: .weeklyResetsAt)
         try values.encodeIfPresent(resetCreditCount, forKey: .resetCreditCount)
@@ -133,7 +173,7 @@ public struct CodexAccountUsageReading: Sendable {
 
     public func read() async throws -> CodexAccountUsageSnapshot {
         guard let executableURL else { throw CodexAccountUsageReadError.unavailable }
-        let request = Self.requestPayload(version: "1.0.0")
+        let request = Self.requestPayload(version: "1.1.0")
         do {
             let response = try await exchange(executableURL, request, timeoutSeconds, maxOutputBytes)
             return try Self.parse(response: response, capturedAt: now())
@@ -147,8 +187,10 @@ public struct CodexAccountUsageReading: Sendable {
     }
 
     /// Parses one JSON-RPC response without retaining the response or any
-    /// account metadata. The `codex` bucket is preferred; legacy overall
-    /// limits are used only when that bucket is absent.
+    /// account metadata. A `codex` bucket containing either supported window
+    /// is authoritative for both projections; a missing sibling stays
+    /// unknown. Legacy overall limits are used only when that bucket contains
+    /// no supported window.
     public static func parse(response: Data, capturedAt: Date) throws -> CodexAccountUsageSnapshot {
         guard response.count <= 512 * 1024 else { throw CodexAccountUsageReadError.outputTooLarge }
         guard let object = try? JSONSerialization.jsonObject(with: response),
@@ -161,34 +203,14 @@ public struct CodexAccountUsageReading: Sendable {
             throw CodexAccountUsageReadError.malformedResponse
         }
 
-        let weekly = [rateLimits["primary"], rateLimits["secondary"]]
+        let windows = [rateLimits["primary"], rateLimits["secondary"]]
             .compactMap { $0 as? [String: Any] }
-            .first { numericInt($0["windowDurationMins"] ?? $0["window_minutes"]) == 10_080 }
-        let weeklyRemaining: Double?
-        let resetsAt: Date?
-        if let weekly {
-            guard let used = numericDouble(weekly["usedPercent"] ?? weekly["used_percent"]), used.isFinite,
-                  (0...100).contains(used) else { throw CodexAccountUsageReadError.invalidValue }
-            weeklyRemaining = 100 - used
-            if let resetValue = weekly["resetsAt"] ?? weekly["resets_at"] {
-                guard let reset = numericDouble(resetValue) else {
-                    throw CodexAccountUsageReadError.invalidValue
-                }
-                guard reset.isFinite, reset >= 0, reset <= Date.distantFuture.timeIntervalSince1970 else {
-                    throw CodexAccountUsageReadError.invalidValue
-                }
-                let date = Date(timeIntervalSince1970: reset)
-                guard date >= .distantPast, date <= .distantFuture else {
-                    throw CodexAccountUsageReadError.invalidValue
-                }
-                resetsAt = date
-            } else {
-                resetsAt = nil
+            .filter { window in
+                let minutes = numericInt(window["windowDurationMins"] ?? window["window_minutes"])
+                return minutes == 10_080 || minutes == 300
             }
-        } else {
-            weeklyRemaining = nil
-            resetsAt = nil
-        }
+        let weekly = windows.first { numericInt($0["windowDurationMins"] ?? $0["window_minutes"]) == 10_080 }
+        let fiveHour = windows.first { numericInt($0["windowDurationMins"] ?? $0["window_minutes"]) == 300 }
 
         var resetCreditCount: Int?
         if let credits = result["rateLimitResetCredits"] as? [String: Any] {
@@ -199,26 +221,63 @@ public struct CodexAccountUsageReading: Sendable {
         }
 
         return try CodexAccountUsageSnapshot(
-            weeklyRemainingPercent: weeklyRemaining,
-            weeklyResetsAt: resetsAt,
+            fiveHourRemainingPercent: try parseWindow(fiveHour)?.remaining,
+            fiveHourResetsAt: try parseWindow(fiveHour)?.resetsAt,
+            weeklyRemainingPercent: try parseWindow(weekly)?.remaining,
+            weeklyResetsAt: try parseWindow(weekly)?.resetsAt,
             resetCreditCount: resetCreditCount,
             capturedAt: capturedAt
         )
     }
 
     private static func selectedRateLimits(from result: [String: Any]) -> [String: Any]? {
+        // A codex bucket is authoritative for both supported windows as soon
+        // as it contains either one. Keep a missing sibling unknown rather
+        // than mixing it with legacy overall data. The legacy fallback is
+        // valid only when codex has no supported window at all.
         if let byID = result["rateLimitsByLimitId"] as? [String: Any],
            let codex = byID["codex"] as? [String: Any],
-           containsWeeklyWindow(codex) {
+           containsSupportedWindow(codex) {
             return codex
         }
         return result["rateLimits"] as? [String: Any]
     }
 
-    private static func containsWeeklyWindow(_ limits: [String: Any]) -> Bool {
+    private struct ParsedWindow {
+        let remaining: Double
+        let resetsAt: Date?
+    }
+
+    private static func parseWindow(_ window: [String: Any]?) throws -> ParsedWindow? {
+        guard let window else { return nil }
+        guard let used = numericDouble(window["usedPercent"] ?? window["used_percent"]),
+              used.isFinite, (0...100).contains(used) else {
+            throw CodexAccountUsageReadError.invalidValue
+        }
+        let resetsAt: Date?
+        if let resetValue = window["resetsAt"] ?? window["resets_at"] {
+            guard let reset = numericDouble(resetValue), reset.isFinite,
+                  reset >= 0, reset <= Date.distantFuture.timeIntervalSince1970 else {
+                throw CodexAccountUsageReadError.invalidValue
+            }
+            let date = Date(timeIntervalSince1970: reset)
+            guard date >= .distantPast, date <= .distantFuture else {
+                throw CodexAccountUsageReadError.invalidValue
+            }
+            resetsAt = date
+        } else {
+            resetsAt = nil
+        }
+        return ParsedWindow(remaining: 100 - used, resetsAt: resetsAt)
+    }
+
+    private static func containsSupportedWindow(_ limits: [String: Any]) -> Bool {
         [limits["primary"], limits["secondary"]]
             .compactMap { $0 as? [String: Any] }
-            .contains { numericInt($0["windowDurationMins"] ?? $0["window_minutes"]) == 10_080 }
+            .contains {
+                let minutes = numericInt($0["windowDurationMins"] ?? $0["window_minutes"])
+                return minutes == 10_080 || minutes == 300
+            }
     }
 
     private static func numericDouble(_ value: Any?) -> Double? {

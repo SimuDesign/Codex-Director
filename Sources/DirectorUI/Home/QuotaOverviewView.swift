@@ -136,29 +136,43 @@ public struct QuotaOverviewView: View {
     }
 
     private var ringSection: some View {
-        let ring = QuotaRingPresentation.make(remainingPercent: displayModel.remainingPercent)
+        let weeklyRing = QuotaRingPresentation.make(remainingPercent: displayModel.remainingPercent)
+        let shortRing = QuotaRingPresentation.make(remainingPercent: displayModel.shortRemainingPercent)
+        let hasWeekly = displayModel.remainingPercent != nil
+        let hasShort = displayModel.shortRemainingPercent != nil
         return VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
-            Text(copy("home.quota.current", fallback: "Current weekly allowance"))
+            Text(copy(
+                hasShort && !hasWeekly ? "home.quota.currentAllowance" : "home.quota.current",
+                fallback: hasShort && !hasWeekly ? "Current allowance" : "Current weekly allowance"
+            ))
                 .font(DirectorTypography.supporting)
                 .frame(maxWidth: .infinity, alignment: .leading)
             VStack(alignment: .center, spacing: DirectorSpacing.space5) {
                 ZStack {
-                    HomeQuotaProgressRing(presentation: ring)
-                    VStack(spacing: DirectorSpacing.space1) {
-                        Text(ring.centerText)
-                            .font(HomeNumericTypography.percentage)
-                            .foregroundStyle(DirectorColor.textPrimary)
-                        Text(centerCaption(for: ring))
-                            .font(DirectorTypography.supporting)
-                            .homeSecondaryText()
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
+                    if hasWeekly || !hasShort {
+                        HomeQuotaProgressRing(
+                            presentation: weeklyRing,
+                            diameter: DirectorSpacing.homeQuotaRingDiameter,
+                            lineWidth: DirectorSpacing.homeQuotaRingLineWidth
+                        )
                     }
-                    .accessibilityHidden(true)
+                    if hasShort {
+                        HomeQuotaProgressRing(
+                            presentation: shortRing,
+                            diameter: hasWeekly ? DirectorSpacing.homeQuotaRingInnerDiameter : DirectorSpacing.homeQuotaRingDiameter,
+                            lineWidth: hasWeekly ? DirectorSpacing.homeQuotaRingInnerLineWidth : DirectorSpacing.homeQuotaRingLineWidth
+                        )
+                    }
+                    centerQuotaContent(
+                        weekly: weeklyRing,
+                        short: shortRing,
+                        hasWeekly: hasWeekly,
+                        hasShort: hasShort
+                    )
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(centerAccessibility(for: ring))
+                .accessibilityLabel(centerAccessibility(weekly: weeklyRing, short: shortRing, hasWeekly: hasWeekly, hasShort: hasShort))
                 .accessibilityAddTraits(.isStaticText)
                 resetSummary
             }
@@ -169,13 +183,33 @@ public struct QuotaOverviewView: View {
 
     @ViewBuilder
     private var resetSummary: some View {
-        if let current = displayModel.currentObservation {
+        let hasWeekly = displayModel.remainingPercent != nil
+        let hasShort = displayModel.shortRemainingPercent != nil
+        if hasWeekly, let current = displayModel.currentObservation {
             detailRow(
-                copy("home.quota.resets", fallback: "Resets"),
+                copy("home.quota.weeklyResets", fallback: "Weekly resets"),
                 value: current.resetsAt.map { languageStore.localizer.date($0) }
                     ?? copy("home.quota.unknown", fallback: "Unknown")
             )
+            if hasShort, let short = displayModel.shortCurrentObservation {
+                detailRow(
+                    copy("home.quota.fiveHourResets", fallback: "5-hour resets"),
+                    value: short.resetsAt.map { languageStore.localizer.date($0) }
+                        ?? copy("home.quota.unknown", fallback: "Unknown")
+                )
+            }
             if displayModel.isAwaitingNewData {
+                Text(copy("home.quota.awaiting", fallback: "Waiting for a new quota record"))
+                    .font(DirectorTypography.label)
+                    .homeSecondaryText()
+            }
+        } else if hasShort, let short = displayModel.shortCurrentObservation {
+            detailRow(
+                copy("home.quota.fiveHourResets", fallback: "5-hour resets"),
+                value: short.resetsAt.map { languageStore.localizer.date($0) }
+                    ?? copy("home.quota.unknown", fallback: "Unknown")
+            )
+            if displayModel.isShortAwaitingNewData {
                 Text(copy("home.quota.awaiting", fallback: "Waiting for a new quota record"))
                     .font(DirectorTypography.label)
                     .homeSecondaryText()
@@ -197,78 +231,93 @@ public struct QuotaOverviewView: View {
                     .homeSecondaryText()
             }
 
-            Chart {
-                ForEach(displayModel.dailySnapshots) { day in
-                    if let used = day.usedPercent {
-                        BarMark(
-                            x: .value(copy("home.quota.date", fallback: "Date"), chartCategory(for: day)),
-                            y: .value(copy("home.quota.dailyUsedPercent", fallback: "Daily weekly-quota use"), used),
-                            width: .fixed(44)
-                        )
-                        .foregroundStyle(DirectorGradient.quotaBar)
-                        .accessibilityLabel(dayAccessibilityDate(day))
-                        .accessibilityValue(dayAccessibilityValue(day, value: used))
-                        .annotation(position: .top, alignment: .center, spacing: 4) {
-                            Text(percentLabel(used))
-                                .font(DirectorTypography.label.monospacedDigit())
-                                .foregroundStyle(DirectorColor.accentIce)
+            if hasWeeklyHistory {
+                Chart {
+                    ForEach(displayModel.dailySnapshots) { day in
+                        if let used = day.usedPercent {
+                            BarMark(
+                                x: .value(copy("home.quota.date", fallback: "Date"), chartCategory(for: day)),
+                                y: .value(copy("home.quota.dailyUsedPercent", fallback: "Daily weekly-quota use"), used),
+                                width: .fixed(44)
+                            )
+                            .foregroundStyle(DirectorGradient.quotaBar)
+                            .accessibilityLabel(dayAccessibilityDate(day))
+                            .accessibilityValue(dayAccessibilityValue(day, value: used))
+                            .annotation(position: .top, alignment: .center, spacing: 4) {
+                                Text(percentLabel(used))
+                                    .font(DirectorTypography.label.monospacedDigit())
+                                    .foregroundStyle(DirectorColor.accentIce)
+                            }
+                        } else {
+                            PointMark(
+                                x: .value(copy("home.quota.date", fallback: "Date"), chartCategory(for: day)),
+                                y: .value(copy("home.quota.dailyUsedPercent", fallback: "Daily weekly-quota use"), 0)
+                            )
+                            .foregroundStyle(.clear)
+                            .accessibilityLabel(dayAccessibilityDate(day))
+                            .accessibilityValue(dayAccessibilityValue(day, value: nil))
+                            .annotation(position: .top, alignment: .center, spacing: 4) {
+                                Text(copy("home.quota.noRecord", fallback: "No record"))
+                                    .font(DirectorTypography.label)
+                                    .homeSecondaryText()
+                            }
                         }
-                    } else {
-                        PointMark(
-                            x: .value(copy("home.quota.date", fallback: "Date"), chartCategory(for: day)),
-                            y: .value(copy("home.quota.dailyUsedPercent", fallback: "Daily weekly-quota use"), 0)
-                        )
-                        .foregroundStyle(.clear)
-                        .accessibilityLabel(dayAccessibilityDate(day))
-                        .accessibilityValue(dayAccessibilityValue(day, value: nil))
-                        .annotation(position: .top, alignment: .center, spacing: 4) {
-                            Text(copy("home.quota.noRecord", fallback: "No record"))
-                                .font(DirectorTypography.label)
+                    }
+                }
+                // Treat each local day as one categorical slot. Marks and labels
+                // therefore share the exact same horizontal center instead of
+                // relying on separate continuous-date midpoint calculations.
+                .chartXScale(
+                    domain: chartCategories,
+                    range: .plotDimension(padding: DirectorSpacing.space6)
+                )
+                // Keep an annotation lane above the highest labeled axis value.
+                .chartYScale(domain: 0...chartPlotMaximum)
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: chartYAxisValues) { value in
+                        AxisGridLine(stroke: StrokeStyle(lineWidth: 1))
+                            .foregroundStyle(HomeVisual.boundary.opacity(colorSchemeContrast == .increased ? 0.8 : 0.45))
+                        AxisValueLabel(centered: false) {
+                            Text("\(Int((value.as(Double.self) ?? 0).rounded()))%")
+                                .font(DirectorTypography.label.monospacedDigit())
                                 .homeSecondaryText()
                         }
                     }
                 }
-            }
-            // Treat each local day as one categorical slot. Marks and labels
-            // therefore share the exact same horizontal center instead of
-            // relying on separate continuous-date midpoint calculations.
-            .chartXScale(
-                domain: chartCategories,
-                range: .plotDimension(padding: DirectorSpacing.space6)
-            )
-            // Keep an annotation lane above the highest labeled axis value.
-            .chartYScale(domain: 0...chartPlotMaximum)
-            .chartYAxis {
-                AxisMarks(position: .leading, values: chartYAxisValues) { value in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 1))
-                        .foregroundStyle(HomeVisual.boundary.opacity(colorSchemeContrast == .increased ? 0.8 : 0.45))
-                    AxisValueLabel(centered: false) {
-                        Text("\(Int((value.as(Double.self) ?? 0).rounded()))%")
-                            .font(DirectorTypography.label.monospacedDigit())
-                            .homeSecondaryText()
-                    }
-                }
-            }
-            .chartXAxis {
-                AxisMarks(values: chartCategories) { value in
-                    AxisValueLabel(centered: true) {
-                        if let category = value.as(String.self),
-                           let index = chartCategories.firstIndex(of: category) {
-                            Text(languageStore.localizer.date(displayModel.dailySnapshots[index].date, style: Date.FormatStyle().month(.twoDigits).day(.twoDigits)))
-                                .font(DirectorTypography.label)
-                                .fixedSize()
+                .chartXAxis {
+                    AxisMarks(values: chartCategories) { value in
+                        AxisValueLabel(centered: true) {
+                            if let category = value.as(String.self),
+                               let index = chartCategories.firstIndex(of: category) {
+                                Text(languageStore.localizer.date(displayModel.dailySnapshots[index].date, style: Date.FormatStyle().month(.twoDigits).day(.twoDigits)))
+                                    .font(DirectorTypography.label)
+                                    .fixedSize()
+                            }
                         }
                     }
                 }
+                .frame(minHeight: 180)
+                .padding(.top, DirectorSpacing.space2)
+            } else {
+                Text(copy(
+                    "home.quota.weeklyHistoryUnavailable",
+                    fallback: "Weekly quota history unavailable"
+                ))
+                .font(DirectorTypography.supporting)
+                .homeSecondaryText()
+                .frame(maxWidth: .infinity, minHeight: 180, alignment: .center)
+                .accessibilityAddTraits(.isStaticText)
             }
-            .frame(minHeight: 180)
-            .padding(.top, DirectorSpacing.space2)
         }
         .frame(minWidth: 260, maxWidth: .infinity, alignment: .leading)
     }
 
     private var chartCategories: [String] {
         displayModel.dailySnapshots.map(chartCategory)
+    }
+
+    private var hasWeeklyHistory: Bool {
+        displayModel.dailySnapshots.contains { $0.observation != nil || $0.usedPercent != nil }
     }
 
     private var chartAxisMaximum: Double {
@@ -293,11 +342,79 @@ public struct QuotaOverviewView: View {
             : copy("home.quota.remaining", fallback: "remaining")
     }
 
-    private func centerAccessibility(for ring: QuotaRingPresentation) -> String {
-        guard let remaining = displayModel.remainingPercent, !ring.isAwaitingNewRecord else {
-            return copy("home.quota.awaiting", fallback: "Waiting for a new quota record")
+    @ViewBuilder
+    private func centerQuotaContent(
+        weekly: QuotaRingPresentation,
+        short: QuotaRingPresentation,
+        hasWeekly: Bool,
+        hasShort: Bool
+    ) -> some View {
+        if hasWeekly && hasShort {
+            VStack(spacing: DirectorSpacing.space2) {
+                quotaCenterLine(
+                    title: copy("home.quota.fiveHour", fallback: "5-hour"),
+                    value: short.centerText
+                )
+                Rectangle()
+                    .fill(DirectorColor.boundary)
+                    .frame(width: DirectorSpacing.homeQuotaCenterDividerWidth, height: 1)
+                    .accessibilityHidden(true)
+                quotaCenterLine(
+                    title: copy("home.quota.weekly", fallback: "Weekly"),
+                    value: weekly.centerText
+                )
+            }
+        } else if hasWeekly {
+            quotaCenterLine(
+                title: copy("home.quota.weekly", fallback: "Weekly"),
+                value: weekly.centerText,
+                prominent: true
+            )
+        } else if hasShort {
+            quotaCenterLine(
+                title: copy("home.quota.fiveHour", fallback: "5-hour"),
+                value: short.centerText,
+                prominent: true
+            )
+        } else {
+            VStack(spacing: DirectorSpacing.space1) {
+                Text("—")
+                    .font(HomeNumericTypography.percentage)
+                    .foregroundStyle(DirectorColor.textPrimary)
+                Text(copy("home.quota.awaitingShort", fallback: "Awaiting new data"))
+                    .font(DirectorTypography.supporting)
+                    .homeSecondaryText()
+            }
         }
-        return String(format: "%.0f%% %@", remaining, copy("home.quota.remaining", fallback: "remaining"))
+    }
+
+    private func quotaCenterLine(title: String, value: String, prominent: Bool = false) -> some View {
+        VStack(spacing: DirectorSpacing.space1) {
+            Text(title)
+                .font(DirectorTypography.label)
+                .homeSecondaryText()
+            Text(value)
+                .font(prominent ? HomeNumericTypography.percentage : DirectorTypography.data.weight(.semibold))
+                .foregroundStyle(DirectorColor.textPrimary)
+        }
+    }
+
+    private func centerAccessibility(
+        weekly: QuotaRingPresentation,
+        short: QuotaRingPresentation,
+        hasWeekly: Bool,
+        hasShort: Bool
+    ) -> String {
+        var values: [String] = []
+        if hasShort, let remaining = displayModel.shortRemainingPercent {
+            values.append(String(format: "%.0f%% %@", remaining, copy("home.quota.fiveHourRemaining", fallback: "five-hour remaining")))
+        }
+        if hasWeekly, let remaining = displayModel.remainingPercent {
+            values.append(String(format: "%.0f%% %@", remaining, copy("home.quota.weeklyRemaining", fallback: "weekly remaining")))
+        }
+        return values.isEmpty
+            ? copy("home.quota.awaiting", fallback: "Waiting for a new quota record")
+            : values.joined(separator: ", ")
     }
 
     private func percentLabel(_ value: Double) -> String {

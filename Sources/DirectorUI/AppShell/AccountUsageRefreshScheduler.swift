@@ -357,19 +357,18 @@ public final class AccountUsageRefreshScheduler: ObservableObject {
         }
         guard let snapshot else { return now.addingTimeInterval(initialGrace) }
         guard snapshot.capturedAt <= now,
-              snapshot.weeklyRemainingPercent != nil,
-              snapshot.weeklyResetsAt.map({ $0 > now }) ?? true else {
+              snapshot.hasUsableAllowance(at: now) else {
             return now.addingTimeInterval(initialGrace)
         }
-        let candidate = snapshot.capturedAt.addingTimeInterval(state.cadence)
-        return max(now, candidate)
+        let cadenceDate = snapshot.capturedAt.addingTimeInterval(state.cadence)
+        let resetDate = snapshot.nextResetDate(after: now)
+        return max(now, min(cadenceDate, resetDate ?? cadenceDate))
     }
 
     private func snapshotNeedsRefresh(at now: Date, cadence: TimeInterval) -> Bool {
         guard let snapshot else { return true }
         guard snapshot.capturedAt <= now,
-              snapshot.weeklyRemainingPercent != nil,
-              snapshot.weeklyResetsAt.map({ $0 > now }) ?? true else { return true }
+              snapshot.hasUsableAllowance(at: now) else { return true }
         return now.timeIntervalSince(snapshot.capturedAt) >= cadence
     }
 

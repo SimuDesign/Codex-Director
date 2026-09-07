@@ -60,9 +60,12 @@ public struct QuotaOverviewSourceSnapshot: Codable, Equatable, Sendable, Identif
     public let name: String
     public let rawDisplayName: String?
     public let current: QuotaSnapshot?
+    /// Latest five-hour observation for this same canonical source. Optional
+    /// so schema-v1 presentation caches remain readable.
+    public let shortCurrent: QuotaSnapshot?
     public let daily: [QuotaOverviewDay]
-    public init(id: String, name: String, rawDisplayName: String? = nil, current: QuotaSnapshot?, daily: [QuotaOverviewDay]) {
-        self.id = id; self.name = name; self.rawDisplayName = rawDisplayName; self.current = current; self.daily = Array(daily.prefix(7))
+    public init(id: String, name: String, rawDisplayName: String? = nil, current: QuotaSnapshot?, shortCurrent: QuotaSnapshot? = nil, daily: [QuotaOverviewDay]) {
+        self.id = id; self.name = name; self.rawDisplayName = rawDisplayName; self.current = current; self.shortCurrent = shortCurrent; self.daily = Array(daily.prefix(7))
     }
 }
 
@@ -339,8 +342,8 @@ public struct PresentationSnapshot: Codable, Equatable, Sendable {
     public let quota: QuotaOverviewSnapshot?
     public let home: PresentationHomeSummary?
     /// Optional v1-compatible account projection for menu-bar presentation.
-    /// It contains only validated weekly allowance and reset-credit count; no
-    /// account or model identifiers are persisted.
+    /// It contains only validated five-hour/weekly allowance windows and
+    /// reset-credit count; no account or model identifiers are persisted.
     public let accountUsage: CodexAccountUsageSnapshot?
     public let failureCount: Int
     public let nextRetryAt: Date?

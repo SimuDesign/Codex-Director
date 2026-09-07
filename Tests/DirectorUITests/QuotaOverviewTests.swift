@@ -46,6 +46,45 @@ final class QuotaOverviewTests: XCTestCase {
         XCTAssertEqual(model.remainingPercent, 75)
     }
 
+    func testProjectsFiveHourAndWeeklyObservationsForSameSource() throws {
+        let now = date("2026-08-28 12:00")
+        let weekly = try quota("weekly", "2026-08-28 09:00", 43)
+        let short = try shortQuota("short", "2026-08-28 11:00", 18)
+
+        let model = QuotaOverviewModel(snapshots: [weekly, short], now: now, calendar: calendar)
+
+        XCTAssertEqual(model.currentObservation?.id, weekly.id)
+        XCTAssertEqual(model.shortCurrentObservation?.id, short.id)
+        XCTAssertEqual(model.remainingPercent, 57)
+        XCTAssertEqual(model.shortRemainingPercent, 82)
+    }
+
+    func testShortOnlySourceRemainsVisibleAndWeeklyHistoryStaysUnavailable() throws {
+        let now = date("2026-08-28 12:00")
+        let short = try shortQuota("short", "2026-08-28 11:00", 18)
+
+        let model = QuotaOverviewModel(snapshots: [short], now: now, calendar: calendar)
+
+        XCTAssertEqual(model.sources.count, 1)
+        XCTAssertNil(model.currentObservation)
+        XCTAssertEqual(model.shortCurrentObservation?.id, short.id)
+        XCTAssertEqual(model.shortRemainingPercent, 82)
+        XCTAssertTrue(model.dailySnapshots.allSatisfy { $0.usedPercent == nil })
+    }
+
+    func testQuotaWindowsExpireIndependently() throws {
+        let now = date("2026-08-28 12:00")
+        let weekly = try quota("weekly", "2026-08-28 09:00", 43, resetsAt: "2026-09-04 08:00")
+        let expiredShort = try shortQuota("short", "2026-08-28 11:00", 18, resetsAt: "2026-08-28 11:30")
+
+        let model = QuotaOverviewModel(snapshots: [weekly, expiredShort], now: now, calendar: calendar)
+
+        XCTAssertEqual(model.remainingPercent, 57)
+        XCTAssertNil(model.shortRemainingPercent)
+        XCTAssertFalse(model.isAwaitingNewData)
+        XCTAssertTrue(model.isShortAwaitingNewData)
+    }
+
     func testStaleCurrentObservationAwaitsNewDataWithoutClaimingFull() throws {
         let now = date("2026-08-28 12:00")
         let stale = try quota("stale", "2026-08-28 09:00", 72, resetsAt: "2026-08-28 11:00")
@@ -234,6 +273,17 @@ final class QuotaOverviewTests: XCTestCase {
     ) throws -> QuotaSnapshot {
         try QuotaSnapshot(
             id: id, capturedAt: date(capturedAt), windowMinutes: 10_080,
+            usedPercent: used, resetsAt: resetsAt.map(date), limitID: limitID,
+            limitName: limitName, confidence: .exact
+        )
+    }
+
+    private func shortQuota(
+        _ id: String, _ capturedAt: String, _ used: Double,
+        resetsAt: String? = "2026-08-28 17:00", limitID: String? = "weekly", limitName: String? = "Weekly"
+    ) throws -> QuotaSnapshot {
+        try QuotaSnapshot(
+            id: id, capturedAt: date(capturedAt), windowMinutes: 300,
             usedPercent: used, resetsAt: resetsAt.map(date), limitID: limitID,
             limitName: limitName, confidence: .exact
         )
