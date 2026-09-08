@@ -136,6 +136,28 @@ public final class DirectorAppModel: ObservableObject {
 
     public var canReadAccountUsage: Bool { accountUsageReading != nil }
 
+    /// The Home header represents the newest fact currently visible on that
+    /// surface. Account-only refreshes may update the current rings without
+    /// rebuilding the historical projection.
+    public var homeLastUpdatedAt: Date? {
+        let accountDate = accountUsageSnapshot.flatMap { snapshot -> Date? in
+            guard snapshot.hasUsableAllowance, snapshot.capturedAt <= nowProvider() else { return nil }
+            return snapshot.capturedAt
+        }
+        return [lastRefresh, accountDate].compactMap { $0 }.max()
+    }
+
+    /// Manual main-window refresh shares the account domain only while the
+    /// menu-bar account feature is enabled. An explicit opt-out must not start
+    /// the Codex account process.
+    internal var manualRefreshDomains: Set<RefreshDomain> {
+        var domains: Set<RefreshDomain> = [.quota, .directory]
+        if menuBarEnabled, accountUsageReading != nil {
+            domains.insert(.accountUsage)
+        }
+        return domains
+    }
+
     public func setMenuBarEnabled(_ enabled: Bool) {
         guard menuBarEnabled != enabled else { return }
         menuBarEnabled = enabled
@@ -152,7 +174,7 @@ public final class DirectorAppModel: ObservableObject {
         let outcome = await requestAccountUsageRefresh(force: true, reason: .menuBar)
         if accountUsageReadRevision != before {
             accountUsageRefreshScheduler?.recordExternalResult(
-                accountUsageSnapshot?.weeklyRemainingPercent == nil ? .unavailable : .succeeded
+                accountUsageSnapshot?.hasUsableAllowance == false ? .unavailable : .succeeded
             )
         } else if outcome == .cancelled {
             accountUsageRefreshScheduler?.recordExternalResult(.cancelled)
@@ -185,7 +207,7 @@ public final class DirectorAppModel: ObservableObject {
         if accountUsageReading != nil {
             if accountUsageReadRevision != before {
                 accountUsageRefreshScheduler?.recordExternalResult(
-                    accountUsageSnapshot?.weeklyRemainingPercent == nil ? .unavailable : .succeeded
+                    accountUsageSnapshot?.hasUsableAllowance == false ? .unavailable : .succeeded
                 )
             } else if outcome == .cancelled {
                 accountUsageRefreshScheduler?.recordExternalResult(.cancelled)
@@ -198,14 +220,22 @@ public final class DirectorAppModel: ObservableObject {
 
     private var accountUsageNeedsRefresh: Bool {
         guard let snapshot = accountUsageSnapshot else { return true }
-        // A snapshot without a weekly allowance is a valid transport result,
-        // but it cannot populate the menu-bar primary value. Treat it like a
-        // missing reading so a later popover can retry the account domain.
-        guard snapshot.weeklyRemainingPercent != nil else { return true }
+        // A snapshot without either supported allowance is a valid transport
+        // result, but it cannot populate the menu-bar primary value. Treat it
+        // like a missing reading so a later popover can retry the account domain.
+        guard snapshot.hasUsableAllowance else { return true }
         let now = nowProvider()
         guard snapshot.capturedAt <= now else { return true }
-        if let reset = snapshot.weeklyResetsAt, reset <= now { return true }
-        return now.timeIntervalSince(snapshot.capturedAt) > 2 * 60
+        // Either reported window can expire independently. A valid weekly
+        // value must not suppress the refresh needed to obtain a new
+        // five-hour value (and vice versa).
+        if let reset = snapshot.fiveHourResetsAt,
+           snapshot.fiveHourRemainingPercent != nil,
+           reset <= now { return true }
+        if let reset = snapshot.weeklyResetsAt,
+           snapshot.weeklyRemainingPercent != nil,
+           reset <= now { return true }
+        return now.timeIntervalSince(snapshot.capturedAt) > 30 * 60
     }
 
     @discardableResult
@@ -832,7 +862,11 @@ public final class DirectorAppModel: ObservableObject {
 
     /// Runs the full indexing pass on the configured roots.
     public func startIndexing() async {
-        _ = await requestPresentationRefresh(reason: .manual, force: true)
+        _ = await requestPresentationRefresh(
+            reason: .manual,
+            force: true,
+            domains: manualRefreshDomains
+        )
     }
 
     /// Long-running source work used by the application refresh worker. It
@@ -1514,7 +1548,8 @@ public final class DirectorAppModel: ObservableObject {
         }
         if let quotaOverviewSnapshot {
             for source in quotaOverviewSnapshot.sources {
-                let snapshots = source.daily.compactMap(\.observation) + [source.current].compactMap { $0 }
+                let snapshots = source.daily.compactMap(\.observation)
+                    + [source.current, source.shortCurrent].compactMap { $0 }
                 if let reset = snapshots.compactMap(\.resetsAt).filter({ $0 > now }).min() {
                     dates.append(reset)
                 }
@@ -2182,7 +2217,7 @@ public final class DirectorAppModel: ObservableObject {
             try Task.checkCancellation()
             accountUsageSnapshot = snapshot
             accountUsageReadRevision &+= 1
-            accountUsageError = snapshot.weeklyRemainingPercent == nil
+            accountUsageError = snapshot.hasUsableAllowance == false
                 ? "account_usage_incomplete"
                 : nil
             accountUsageRefreshScheduler?.updateSnapshot(snapshot)
@@ -2208,7 +2243,7 @@ public final class DirectorAppModel: ObservableObject {
         let before = accountUsageReadRevision
         let outcome = await requestAccountUsageRefresh(force: true, reason: .accountUsageAutomatic)
         if accountUsageReadRevision != before {
-            return accountUsageSnapshot?.weeklyRemainingPercent == nil ? .unavailable : .succeeded
+            return accountUsageSnapshot?.hasUsableAllowance == false ? .unavailable : .succeeded
         }
         if outcome == .cancelled { return .cancelled }
         return accountUsageReading == nil ? .unavailable : .failed
@@ -2321,6 +2356,7 @@ public final class DirectorAppModel: ObservableObject {
         for source in overview.sources {
             result.append(contentsOf: source.daily.compactMap(\.observation))
             if let current = source.current, !result.contains(where: { $0.id == current.id }) { result.append(current) }
+            if let shortCurrent = source.shortCurrent, !result.contains(where: { $0.id == shortCurrent.id }) { result.append(shortCurrent) }
         }
         return result
     }

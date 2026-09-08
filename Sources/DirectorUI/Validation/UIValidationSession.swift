@@ -13,6 +13,7 @@ public final class UIValidationSession: ObservableObject {
         case empty
         case stress
         case homeVisual
+        case fiveHourOnly
 
         public var id: String { rawValue }
 
@@ -22,6 +23,7 @@ public final class UIValidationSession: ObservableObject {
             case .empty: return "Empty"
             case .stress: return "Stress"
             case .homeVisual: return "Home visual edges"
+            case .fiveHourOnly: return "Five-hour quota only"
             }
         }
     }
@@ -239,7 +241,7 @@ public final class UIValidationSession: ObservableObject {
             environment: CapabilityExportEnvironment(
                 homeDirectory: home,
                 projects: [CapabilityExportProjectSource(directory: project, displayName: "Synthetic Project")],
-                producer: CapabilityPackageProducer(version: "1.0.0", build: "21"),
+                producer: CapabilityPackageProducer(version: "1.1.1", build: "23"),
                 platform: CapabilityPackagePlatform(operatingSystem: "macOS", operatingSystemVersion: "26.0", architecture: "arm64")
             ),
             pluginProvider: ValidationPluginProvider(),
@@ -253,6 +255,7 @@ public final class UIValidationSession: ObservableObject {
         case .empty: return FixtureCounts(resources: 0, sessions: 0, invocations: 0, findings: 0)
         case .stress: return FixtureCounts(resources: 165, sessions: 4, invocations: 520, findings: 4)
         case .homeVisual: return FixtureCounts(resources: 36, sessions: 4, invocations: 240, findings: 4)
+        case .fiveHourOnly: return FixtureCounts(resources: 14, sessions: 4, invocations: 20, findings: 2)
         }
     }
 
@@ -355,6 +358,8 @@ private struct Fixture {
             self = Self.stress()
         case .homeVisual:
             self = Self.homeVisual()
+        case .fiveHourOnly:
+            self = Self.fiveHourOnly()
         case .empty:
             self.init(resources: [], projects: [], provenance: [], relations: [], batches: [], evaluations: [])
         }
@@ -460,6 +465,17 @@ private struct Fixture {
             ))
         }
         return build(resources: resources, sessionCount: 4, invocationCount: 240, findingCount: 4, quotaFixtures: homeVisualQuotaSnapshots())
+    }
+
+    private static func fiveHourOnly() -> Fixture {
+        let base = representative()
+        return build(
+            resources: base.resources,
+            sessionCount: 4,
+            invocationCount: 20,
+            findingCount: 2,
+            quotaFixtures: fiveHourOnlyQuotaSnapshots()
+        )
     }
 
     private static func build(resources: [CapabilityResource], sessionCount: Int, invocationCount: Int, findingCount: Int, quotaFixtures: [QuotaSnapshot]? = nil) -> Fixture {
@@ -590,6 +606,14 @@ private struct Fixture {
             limitName: "Synthetic stale source", confidence: .inferred
         ))
         return snapshots
+    }
+
+    private static func fiveHourOnlyQuotaSnapshots() -> [QuotaSnapshot] {
+        [try! QuotaSnapshot(
+            id: "quota:five-hour-only:current", capturedAt: day(0, hour: 10), windowMinutes: 300,
+            usedPercent: 18, resetsAt: day(0, hour: 15), limitID: "five-hour-only-source",
+            limitName: "Synthetic five-hour source", confidence: .exact
+        )]
     }
 
     private static func finding(index: Int, resourceID: String, sessionID: String) -> ReviewFinding {

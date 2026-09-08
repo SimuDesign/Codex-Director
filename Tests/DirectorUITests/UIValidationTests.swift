@@ -11,7 +11,7 @@ final class UIValidationTests: XCTestCase {
             languageStore: AppLanguageStore(memoryLanguage: .simplifiedChinese),
             themeStore: AppThemeStore(memoryTheme: .dark)
         )
-        XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 4)
+        XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 5)
     }
 
     func testValidationHostExposesBilingualAppearanceAndWindowMatrix() throws {
@@ -130,6 +130,15 @@ final class UIValidationTests: XCTestCase {
             XCTAssertLessThanOrEqual(ranking.count, 10)
             XCTAssertTrue(ranking.allSatisfy { $0.count > 0 })
         }
+    }
+
+    func testFiveHourOnlyFixtureKeepsWeeklyQuotaUnknown() async throws {
+        let session = try UIValidationSession(dataset: .fiveHourOnly)
+        try await session.prepare()
+
+        let quotas = session.model.usage.quotaSnapshots
+        XCTAssertFalse(quotas.contains(where: { $0.windowMinutes == 10_080 }))
+        XCTAssertTrue(quotas.contains(where: { $0.windowMinutes == 300 }))
     }
 
     func testRepresentativeFixtureIsIsolatedAndOperational() async throws {

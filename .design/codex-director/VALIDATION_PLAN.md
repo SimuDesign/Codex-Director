@@ -1,16 +1,16 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.0.0`  
+Version: `1.1.1`  
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-09-06
+Last updated: 2026-09-08
 
-The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.0.0; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
+The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
 The approved [0.2.1 startup repair](../../docs/plans/2026-08-28-startup-performance.md) additionally requires cached, nonblocking startup and delayed background statistics. The gates below are acceptance requirements, not a statement that implementation or measurements have passed.
 
 ## 1. Validation objectives
 
-The approved Card Atlas Home contract supersedes the earlier numbered-module presentation. Home uses three outline modules with distinct quota, continuous-metric and comparison-ledger grammars, a compact illustration-free welcome hero and a window-level refresh action. The quota chart shows reset-aware observed daily use of the weekly allowance, not cumulative daily-end snapshots. The four capability pages use four independent metrics with visible hover states, a single flexible search field, narrow right-chevron menus, global-first project ledgers with item separators and closed bottom corners, plus a 380–420 pt dismissible right-side detail Sheet. Verify all four pages in zh/en x Light/Dark x 720×480, 1280×800 and wide windows, with long names, empty/confirmed-zero/pending/failure-with-old-data states, four-card filtering and 4/2/1 metric behavior. The whole capability surface must be one native `List(selection:)` scroll container; header, metrics, ribbon and groups must share the page grid without row-background spill. All six primary destinations share Home's 40/16pt horizontal gutters, 24pt vertical gutters, 1440pt maximum content measure and far-right scroll-indicator edge. Titles share the 52/36pt rounded semibold scale. Settings and capability titles keep the solid primary-text treatment and share the 24pt decorative symbol token, while Home remains illustration-free and applies the brand gradient only to the `Codex Director` fragment of its welcome title. The window toolbar product name retains the native title treatment. The selected sidebar destination uses only the brand gradient, black label and deep-gray symbol while retaining native List selection semantics. Home's additional gate covers symmetric module-title spacing, removed summary/ranking subtitles, a leading-aligned quota heading, the 216pt Reduce Motion-aware centered ring with a 20pt reset gap, an outlined brand-gradient source switch, dynamically scaled gradient daily-usage bars, horizontal grid only and date labels centered with their bars. Capability project groups require visibly tinted icon-led headers and exactly 20pt inter-group separation; group-internal row spacing remains unchanged. Settings keeps its title icon, omits the eyebrow and hero subtitle, presents section 01 as Language & appearance, balances section top/bottom padding, top-aligns ordinals, and uses equal-width/height index actions. The three Settings actions share the `settingsActionLabelWidth` token and a 48pt outer-height token, including loading, disabled, focus, and destructive states; toolbar and standard actions retain their own heights. The shared toolbar refresh remains labeled, uses the 28pt compact size and exposes no second glass/shadow container. Actual VoiceOver evidence and AX inspection must be recorded separately.
+The approved Card Atlas Home contract supersedes the earlier numbered-module presentation. Home uses three outline modules with distinct quota, continuous-metric and comparison-ledger grammars, a compact illustration-free welcome hero and a window-level refresh action. The quota chart shows reset-aware observed daily use of the weekly allowance, not cumulative daily-end snapshots. The four capability pages use four independent metrics with visible hover states, a single flexible search field, narrow right-chevron menus, global-first project ledgers with item separators and closed bottom corners, plus a 380–420 pt dismissible right-side detail Sheet. Verify all four pages in zh/en x Light/Dark x 720×480, 1280×800 and wide windows, with long names, empty/confirmed-zero/pending/failure-with-old-data states, four-card filtering and 4/2/1 metric behavior. The whole capability surface must be one native `List(selection:)` scroll container; header, metrics, ribbon and groups must share the page grid without row-background spill. All six primary destinations share Home's 40/16pt horizontal gutters, 24pt vertical gutters, 1440pt maximum content measure and far-right scroll-indicator edge. Titles share the 52/36pt rounded semibold scale. Settings and capability titles keep the solid primary-text treatment and share the 24pt decorative symbol token, while Home remains illustration-free and applies the brand gradient only to the `Codex Director` fragment of its welcome title. The window toolbar product name retains the native title treatment. The selected sidebar destination uses only the brand gradient, black label and deep-gray symbol while retaining native List selection semantics. Home's additional gate covers symmetric module-title spacing, removed summary/ranking subtitles, a leading-aligned quota heading, the 216pt/20pt weekly ring and optional 154pt/12pt five-hour concentric ring with a centered 40pt divider, an outlined brand-gradient source switch, dynamically scaled gradient daily-usage bars, horizontal grid only and date labels centered with their bars. Capability project groups require visibly tinted icon-led headers and exactly 20pt inter-group separation; group-internal row spacing remains unchanged. Settings keeps its title icon, omits the eyebrow and hero subtitle, presents section 01 as Language & appearance, balances section top/bottom padding, top-aligns ordinals, and uses equal-width/height index actions. The three Settings actions share the `settingsActionLabelWidth` token and a 48pt outer height token, including loading, disabled, focus, and destructive states; toolbar and standard actions retain their own heights. The shared toolbar refresh remains labeled, uses the 28pt compact size and exposes no second glass/shadow container. Actual VoiceOver evidence and AX inspection must be recorded separately.
 
 For Top5 cache upgrade verify immediate old-content display, at least5s foreground grace, a bounded read-only Home projection with zero quota/source scans, correct identity/classification/window/cancellation guards, old data retained on failure, existing retry semantics and no upgrade query on a fresh Top10 cache. Full tests and Release0.2.8(11) checks follow frozen-source visual acceptance; old results are not new evidence.
 
@@ -201,7 +201,7 @@ The v1 system matrix covers macOS 26.x only. Earlier macOS versions are outside 
 3. Change the visibly named source; both donut and bars switch together.
 4. Switch to an expired current observation; show waiting, not 100%, while retaining history.
 
-Expected: seven local dates; same-cycle increases become daily percentage-point use; a reset day retains observed use before and after the boundary; missing, cross-gap and ambiguous transitions remain unavailable; confirmed flat observations may show 0%. The named segmented source control switches ring and bars together. There is no Token conversion, recorded-time/evidence clutter, cross-source mixing or ambiguous reset label, and values remain readable without color/hover.
+Expected: seven local dates; same-cycle increases become daily percentage-point use; a reset day retains observed use before and after the boundary; missing, cross-gap and ambiguous transitions remain unavailable; confirmed flat observations may show 0%. A source with only a five-hour window shows “weekly quota history unavailable” and never creates weekly bars from short-window data. The named segmented source control switches ring and bars together. There is no Token conversion, recorded-time/evidence clutter, cross-source mixing or ambiguous reset label, and values remain readable without color/hover.
 
 ### Journey B — Inventory and project usage are distinct
 
@@ -240,7 +240,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.0.0 with internal build 21, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.1.1 with internal build 23, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -368,7 +368,7 @@ selection/focus, and compact staged-detail behavior. This gate is visual review
 evidence only and does not replace keyboard, AX, privacy, focused-test or
 Release checks.
 
-## 12. Refresh, theme and menu-bar matrix — 1.0.0
+## 12. Refresh, theme and menu-bar matrix — 1.1.1
 
 For zh/en at 720×480 and 1280×800, capture Settings and a representative main
 destination in both Light and Dark. Check the segmented theme selector, the
@@ -387,12 +387,15 @@ container announcement.
 On a new install, verify the default-enabled `MenuBarExtra` item and the
 template gauge. When the menu-bar toggle is explicitly off, no `MenuBarExtra`
 item, Codex process, SQLite read or passive timer is created. When enabled,
-verify the template gauge and
-the short percentage or `—` in the menu bar, then inspect the native window in
-the fixed order: current week remaining, next reset, reset-card count, Refresh
-data, Open main window. Verify the same matrix in zh/en × Light/Dark, with the
-main window visible and closed, missing/stale/expired data, account-read loading,
-failure recovery and explicit zero reset cards. VoiceOver and the AX tree must
+verify the template gauge and exact persistent formats: `5h 82% w 57%` for two
+valid windows, a bare `82%` or `57%` for one, and `—` for none. Inspect the
+native window in the fixed order: five-hour remaining/reset when available,
+weekly remaining/reset when available, reset-card count, Refresh data, Open
+main window. Expire either window independently and verify that only that
+window's ring, label and popover rows disappear. Verify the same matrix in
+zh/en × Light/Dark, with the main window visible and closed, missing/stale/
+expired data, account-read loading, failure recovery and explicit zero reset
+cards. VoiceOver and the AX tree must
 contain no account identifier, model/provider/source label, GPT-5.3 string,
 prompt, task title, path, argument, token or credential. Verify that opening a
 stale popover coalesces one account-usage request and that Refresh data reuses
@@ -402,6 +405,16 @@ states use 5 minutes, aggregate idle at least 30 minutes uses 30 minutes,
 failure backoff is 5/15/30 minutes, and lock/sleep/Low Power Mode cancel and
 resume the schedule. The menu-bar tick must not read SQLite or index source
 files, and a disabled menu bar must register no schedule or OS observers.
+
+For the canonical Codex source, inject an indexed weekly value followed by a
+newer sanitized account snapshot with different five-hour and weekly values.
+Verify Home's current rings and update time change immediately to the account
+values while the seven daily columns remain byte-for-byte equivalent to the
+indexed projection. Repeat with one missing account window, an expired window,
+an older account cache, a model-specific selected source, an account read
+failure with a prior valid snapshot, and an explicit menu-bar opt-out. Main
+Refresh data includes account usage only when enabled, and account-only refresh
+must perform zero SQLite reads and zero source scans.
 
 ## 9. Initial validation record — 2026-08-15
 

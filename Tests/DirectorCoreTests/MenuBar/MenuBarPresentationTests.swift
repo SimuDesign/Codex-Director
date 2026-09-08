@@ -20,6 +20,62 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertFalse(presentation.usesCachedValue)
     }
 
+    func testDualWindowStatusUsesFiveHourThenWeeklyFormat() throws {
+        let snapshot = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: now.addingTimeInterval(300),
+            weeklyRemainingPercent: 57,
+            weeklyResetsAt: now.addingTimeInterval(3_600),
+            resetCreditCount: 1,
+            capturedAt: now
+        )
+
+        let presentation = MenuBarPresentation(snapshot: snapshot, freshness: .fresh, now: now)
+
+        XCTAssertEqual(presentation.shortStatus, "5h 82% w 57%")
+        XCTAssertEqual(presentation.primaryValue, "57%")
+        XCTAssertEqual(presentation.fiveHourRemainingPercent, 82)
+        XCTAssertEqual(presentation.weeklyRemainingPercent, 57)
+    }
+
+    func testSingleWindowStatusOmitsWindowLabel() throws {
+        let shortOnly = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: now.addingTimeInterval(300),
+            weeklyRemainingPercent: nil,
+            weeklyResetsAt: nil,
+            resetCreditCount: nil,
+            capturedAt: now
+        )
+        let weeklyOnly = try CodexAccountUsageSnapshot(
+            weeklyRemainingPercent: 57,
+            weeklyResetsAt: now.addingTimeInterval(300),
+            resetCreditCount: nil,
+            capturedAt: now
+        )
+
+        XCTAssertEqual(MenuBarPresentation(snapshot: shortOnly, freshness: .fresh, now: now).shortStatus, "82%")
+        XCTAssertEqual(MenuBarPresentation(snapshot: weeklyOnly, freshness: .fresh, now: now).shortStatus, "57%")
+    }
+
+    func testExpiredWindowIsRemovedWithoutHidingOtherValidWindow() throws {
+        let snapshot = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: now.addingTimeInterval(-1),
+            weeklyRemainingPercent: 57,
+            weeklyResetsAt: now.addingTimeInterval(3_600),
+            resetCreditCount: nil,
+            capturedAt: now
+        )
+
+        let presentation = MenuBarPresentation(snapshot: snapshot, freshness: .fresh, now: now)
+
+        XCTAssertEqual(presentation.shortStatus, "57%")
+        XCTAssertNil(presentation.fiveHourRemainingPercent)
+        XCTAssertEqual(presentation.weeklyRemainingPercent, 57)
+        XCTAssertEqual(presentation.state, .available)
+    }
+
     func testMissingAndExpiredSnapshotNeverMasqueradeAsZero() throws {
         let missing = MenuBarPresentation(snapshot: nil, freshness: .unavailable, now: now)
         let expired = MenuBarPresentation(

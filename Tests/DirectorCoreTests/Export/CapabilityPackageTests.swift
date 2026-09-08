@@ -286,9 +286,10 @@ final class CapabilityPackageTests: XCTestCase {
 
     func testCancellationCleansStagingDirectory() async throws {
         let fixture = try makeFixture()
-        let coordinator = makeCoordinator(fixture: fixture)
+        let stagingPrefix = "CodexDirectorCancellation-"
+        let coordinator = makeCoordinator(fixture: fixture, stagingPrefix: stagingPrefix)
         let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
-        let before = temporaryItems(withPrefix: "CodexDirectorExport-")
+        let before = temporaryItems(withPrefix: stagingPrefix)
         let started = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
         let task = Task {
@@ -308,7 +309,7 @@ final class CapabilityPackageTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? CapabilityExportError, .cancelled)
         }
-        XCTAssertEqual(temporaryItems(withPrefix: "CodexDirectorExport-"), before)
+        XCTAssertEqual(temporaryItems(withPrefix: stagingPrefix), before)
     }
 
     func testVerificationFailureLeavesNoDestinationOrPartialArchive() async throws {
@@ -437,12 +438,14 @@ final class CapabilityPackageTests: XCTestCase {
 
     private func makeCoordinator(
         fixture: Fixture,
-        pluginStatus: CapabilityPluginInventoryStatus = .complete
+        pluginStatus: CapabilityPluginInventoryStatus = .complete,
+        stagingPrefix: String = "CodexDirectorExport-"
     ) -> CapabilityExportCoordinator {
         CapabilityExportCoordinator(
             environment: environment(fixture: fixture),
             pluginProvider: PluginProvider(status: pluginStatus),
-            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+            now: { Date(timeIntervalSince1970: 1_800_000_000) },
+            stagingPrefix: stagingPrefix
         )
     }
 

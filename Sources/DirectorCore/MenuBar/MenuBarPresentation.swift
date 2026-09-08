@@ -33,6 +33,9 @@ public struct MenuBarPresentation: Equatable, Sendable {
     public let state: State
     public let shortStatus: String
     public let primaryValue: String
+    public let fiveHourRemainingPercent: Double?
+    public let fiveHourResetsAt: Date?
+    public let fiveHourResetDisplay: ResetDisplay
     public let weeklyRemainingPercent: Double?
     public let weeklyResetsAt: Date?
     public let resetCreditCount: Int?
@@ -47,34 +50,29 @@ public struct MenuBarPresentation: Equatable, Sendable {
         activity: Activity = .idle,
         now: Date
     ) {
-        let resetElapsed = snapshot?.weeklyResetsAt.map { $0 <= now } ?? false
-        let usableValue = resetElapsed ? nil : snapshot?.weeklyRemainingPercent
-        weeklyRemainingPercent = usableValue
+        let shortResetElapsed = snapshot?.fiveHourResetsAt.map { $0 <= now } ?? false
+        let weeklyResetElapsed = snapshot?.weeklyResetsAt.map { $0 <= now } ?? false
+        let usableShort = shortResetElapsed ? nil : snapshot?.fiveHourRemainingPercent
+        let usableWeekly = weeklyResetElapsed ? nil : snapshot?.weeklyRemainingPercent
+        fiveHourRemainingPercent = usableShort
+        fiveHourResetsAt = snapshot?.fiveHourResetsAt
+        weeklyRemainingPercent = usableWeekly
         weeklyResetsAt = snapshot?.weeklyResetsAt
         resetCreditCount = snapshot?.resetCreditCount
 
-        let percentage = usableValue.map(Self.percentageText) ?? "—"
-        shortStatus = percentage
-        primaryValue = percentage
+        shortStatus = Self.statusText(short: usableShort, weekly: usableWeekly)
+        primaryValue = usableWeekly.map(Self.percentageText) ?? usableShort.map(Self.percentageText) ?? "—"
 
-        if let resetAt = snapshot?.weeklyResetsAt {
-            if resetAt <= now {
-                resetDisplay = .elapsed
-            } else {
-                resetDisplay = .countdown(
-                    seconds: max(1, Int(ceil(resetAt.timeIntervalSince(now))))
-                )
-            }
-        } else {
-            resetDisplay = .unavailable
-        }
+        fiveHourResetDisplay = Self.resetDisplay(for: snapshot?.fiveHourResetsAt, now: now)
+        resetDisplay = Self.resetDisplay(for: snapshot?.weeklyResetsAt, now: now)
 
         let baseState: State
         if snapshot == nil {
             baseState = .missing
-        } else if resetElapsed {
+        } else if usableShort == nil && usableWeekly == nil,
+                  shortResetElapsed || weeklyResetElapsed {
             baseState = .expired
-        } else if usableValue != nil {
+        } else if usableShort != nil || usableWeekly != nil {
             baseState = freshness == .fresh ? .available : .stale
         } else {
             baseState = .missing
@@ -91,8 +89,25 @@ public struct MenuBarPresentation: Equatable, Sendable {
 
         canRefresh = activity != .refreshing
         canOpenMainWindow = true
-        usesCachedValue = usableValue != nil
+        usesCachedValue = (usableShort != nil || usableWeekly != nil)
             && (freshness != .fresh || activity != .idle)
+    }
+
+    private static func resetDisplay(for date: Date?, now: Date) -> ResetDisplay {
+        guard let date else { return .unavailable }
+        if date <= now { return .elapsed }
+        return .countdown(seconds: max(1, Int(ceil(date.timeIntervalSince(now)))))
+    }
+
+    private static func statusText(short: Double?, weekly: Double?) -> String {
+        switch (short, weekly) {
+        case let (.some(short), .some(weekly)):
+            return "5h \(percentageText(short)) w \(percentageText(weekly))"
+        case let (.some(value), .none), let (.none, .some(value)):
+            return percentageText(value)
+        case (.none, .none):
+            return "—"
+        }
     }
 
     private static func percentageText(_ value: Double) -> String {

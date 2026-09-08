@@ -30,6 +30,20 @@ final class MenuBarContractTests: XCTestCase {
         XCTAssertTrue(viewSource.contains("DirectorSymbol.menuBarUsage"))
     }
 
+    func testMenuBarViewAddsIndependentFiveHourRowsBeforeWeeklyRows() throws {
+        let root = projectRoot()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/DirectorUI/MenuBar/DirectorMenuBarView.swift"), encoding: .utf8)
+        let body = try XCTUnwrap(source.components(separatedBy: "public var body: some View").last)
+        let order = [
+            "menuBar.fiveHourRemaining", "menuBar.fiveHourReset",
+            "menuBar.weeklyRemaining", "menuBar.nextReset",
+            "menuBar.resetCredits", "menuBar.refresh", "menuBar.openMainWindow",
+        ].compactMap { body.range(of: $0)?.lowerBound }
+        XCTAssertEqual(order.count, 7)
+        XCTAssertEqual(order, order.sorted())
+        XCTAssertTrue(body.contains("Five-hour remaining"))
+    }
+
     func testMenuBarSourceContainsNoProviderModelOrAccountIdentitySurface() throws {
         let root = projectRoot()
         let files = [
@@ -70,7 +84,8 @@ final class MenuBarContractTests: XCTestCase {
         let english = try String(contentsOf: root.appendingPathComponent("Sources/DirectorUI/Resources/en.lproj/Localizable.strings"), encoding: .utf8)
         let chinese = try String(contentsOf: root.appendingPathComponent("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
         let required = [
-            "menuBar.weeklyRemaining", "menuBar.nextReset", "menuBar.resetCredits",
+            "menuBar.fiveHourRemaining", "menuBar.fiveHourReset", "menuBar.fiveHourRemainingValue",
+            "menuBar.weeklyRemaining", "menuBar.weeklyRemainingValue", "menuBar.nextReset", "menuBar.resetCredits",
             "menuBar.refresh", "menuBar.refresh.running", "menuBar.openMainWindow", "menuBar.unavailable",
             "menuBar.cached", "menuBar.unavailableStatus",
         ]

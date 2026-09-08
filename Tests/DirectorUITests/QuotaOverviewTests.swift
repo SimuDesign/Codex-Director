@@ -46,6 +46,45 @@ final class QuotaOverviewTests: XCTestCase {
         XCTAssertEqual(model.remainingPercent, 75)
     }
 
+    func testProjectsFiveHourAndWeeklyObservationsForSameSource() throws {
+        let now = date("2026-08-28 12:00")
+        let weekly = try quota("weekly", "2026-08-28 09:00", 43)
+        let short = try shortQuota("short", "2026-08-28 11:00", 18)
+
+        let model = QuotaOverviewModel(snapshots: [weekly, short], now: now, calendar: calendar)
+
+        XCTAssertEqual(model.currentObservation?.id, weekly.id)
+        XCTAssertEqual(model.shortCurrentObservation?.id, short.id)
+        XCTAssertEqual(model.remainingPercent, 57)
+        XCTAssertEqual(model.shortRemainingPercent, 82)
+    }
+
+    func testShortOnlySourceRemainsVisibleAndWeeklyHistoryStaysUnavailable() throws {
+        let now = date("2026-08-28 12:00")
+        let short = try shortQuota("short", "2026-08-28 11:00", 18)
+
+        let model = QuotaOverviewModel(snapshots: [short], now: now, calendar: calendar)
+
+        XCTAssertEqual(model.sources.count, 1)
+        XCTAssertNil(model.currentObservation)
+        XCTAssertEqual(model.shortCurrentObservation?.id, short.id)
+        XCTAssertEqual(model.shortRemainingPercent, 82)
+        XCTAssertTrue(model.dailySnapshots.allSatisfy { $0.usedPercent == nil })
+    }
+
+    func testQuotaWindowsExpireIndependently() throws {
+        let now = date("2026-08-28 12:00")
+        let weekly = try quota("weekly", "2026-08-28 09:00", 43, resetsAt: "2026-09-04 08:00")
+        let expiredShort = try shortQuota("short", "2026-08-28 11:00", 18, resetsAt: "2026-08-28 11:30")
+
+        let model = QuotaOverviewModel(snapshots: [weekly, expiredShort], now: now, calendar: calendar)
+
+        XCTAssertEqual(model.remainingPercent, 57)
+        XCTAssertNil(model.shortRemainingPercent)
+        XCTAssertFalse(model.isAwaitingNewData)
+        XCTAssertTrue(model.isShortAwaitingNewData)
+    }
+
     func testStaleCurrentObservationAwaitsNewDataWithoutClaimingFull() throws {
         let now = date("2026-08-28 12:00")
         let stale = try quota("stale", "2026-08-28 09:00", 72, resetsAt: "2026-08-28 11:00")
@@ -139,6 +178,180 @@ final class QuotaOverviewTests: XCTestCase {
 
         XCTAssertNil(model.dailySnapshots.first?.usedPercent)
         XCTAssertEqual(model.dailySnapshots.last?.usedPercent, 18)
+    }
+
+    func testNewerLiveAccountValuesReplaceCurrentRingsWithoutChangingWeeklyHistory() throws {
+        let now = date("2026-08-28 12:00")
+        let localWeekly = try quota(
+            "indexed-weekly", "2026-08-28 09:00", 54,
+            resetsAt: "2026-09-04 08:00", limitID: "codex", limitName: "codex"
+        )
+        let localShort = try shortQuota(
+            "indexed-short", "2026-08-28 09:05", 32,
+            resetsAt: "2026-08-28 14:00", limitID: "codex", limitName: "codex"
+        )
+        let day = calendar.startOfDay(for: now)
+        let overview = QuotaOverviewSnapshot(
+            identity: PresentationIdentity(databaseEpoch: "epoch", dataGeneration: 1),
+            generatedAt: date("2026-08-28 09:10"),
+            window: CapabilityQueryWindow(start: day, end: now, timeZone: tz),
+            coverage: .complete,
+            sources: [
+                QuotaOverviewSourceSnapshot(
+                    id: "id:codex",
+                    name: "codex",
+                    current: localWeekly,
+                    shortCurrent: localShort,
+                    daily: [QuotaOverviewDay(day: day, observation: localWeekly, usedPercentDelta: 10)]
+                )
+            ]
+        )
+        let account = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: date("2026-08-28 17:00"),
+            weeklyRemainingPercent: 100,
+            weeklyResetsAt: date("2026-09-05 12:00"),
+            resetCreditCount: 2,
+            capturedAt: date("2026-08-28 11:59")
+        )
+
+        let model = QuotaOverviewModel(
+            snapshot: overview,
+            accountUsage: account,
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(model.remainingPercent, 100)
+        XCTAssertEqual(model.shortRemainingPercent, 82)
+        XCTAssertEqual(model.currentObservation?.id, "live-account-10080")
+        XCTAssertEqual(model.shortCurrentObservation?.id, "live-account-300")
+        XCTAssertEqual(model.dailySnapshots.last?.observation?.id, localWeekly.id)
+        XCTAssertEqual(model.dailySnapshots.last?.usedPercent, 10)
+    }
+
+    func testNewerSingleWindowAccountReadingMakesMissingWindowUnavailable() throws {
+        let now = date("2026-08-28 12:00")
+        let localWeekly = try quota(
+            "indexed-weekly", "2026-08-28 09:00", 54,
+            limitID: "codex", limitName: "codex"
+        )
+        let localShort = try shortQuota(
+            "indexed-short", "2026-08-28 09:05", 32,
+            limitID: "codex", limitName: "codex"
+        )
+        let overview = compactOverview(current: localWeekly, shortCurrent: localShort, now: now)
+        let account = try CodexAccountUsageSnapshot(
+            weeklyRemainingPercent: 100,
+            weeklyResetsAt: date("2026-09-05 12:00"),
+            resetCreditCount: nil,
+            capturedAt: date("2026-08-28 11:59")
+        )
+
+        let model = QuotaOverviewModel(snapshot: overview, accountUsage: account, now: now, calendar: calendar)
+
+        XCTAssertEqual(model.remainingPercent, 100)
+        XCTAssertNil(model.shortCurrentObservation)
+        XCTAssertNil(model.shortRemainingPercent)
+        XCTAssertTrue(model.isShortAwaitingNewData)
+    }
+
+    func testNewerIndexedWindowIsNotReplacedByOlderAccountCache() throws {
+        let now = date("2026-08-28 12:00")
+        let localWeekly = try quota(
+            "indexed-weekly", "2026-08-28 11:30", 54,
+            limitID: "codex", limitName: "codex"
+        )
+        let localShort = try shortQuota(
+            "indexed-short", "2026-08-28 11:31", 32,
+            limitID: "codex", limitName: "codex"
+        )
+        let account = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: date("2026-08-28 17:00"),
+            weeklyRemainingPercent: 100,
+            weeklyResetsAt: date("2026-09-05 12:00"),
+            resetCreditCount: nil,
+            capturedAt: date("2026-08-28 10:00")
+        )
+
+        let model = QuotaOverviewModel(
+            snapshot: compactOverview(current: localWeekly, shortCurrent: localShort, now: now),
+            accountUsage: account,
+            now: now,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(model.currentObservation?.id, localWeekly.id)
+        XCTAssertEqual(model.remainingPercent, 46)
+        XCTAssertEqual(model.shortCurrentObservation?.id, localShort.id)
+        XCTAssertEqual(model.shortRemainingPercent, 68)
+    }
+
+    func testLiveAccountValuesOnlyOverlayCanonicalCodexSource() throws {
+        let now = date("2026-08-28 12:00")
+        let codex = try quota(
+            "codex-weekly", "2026-08-28 09:00", 54,
+            limitID: "codex", limitName: "codex"
+        )
+        let modelSpecific = try quota(
+            "model-weekly", "2026-08-28 10:00", 20,
+            limitID: "codex_bengalfox", limitName: "Model-specific"
+        )
+        let day = calendar.startOfDay(for: now)
+        let overview = QuotaOverviewSnapshot(
+            identity: PresentationIdentity(databaseEpoch: "epoch", dataGeneration: 1),
+            window: CapabilityQueryWindow(start: day, end: now, timeZone: tz),
+            coverage: .complete,
+            sources: [
+                QuotaOverviewSourceSnapshot(id: "id:codex", name: "codex", current: codex, daily: []),
+                QuotaOverviewSourceSnapshot(id: "id:codex_bengalfox", name: "Model-specific", current: modelSpecific, daily: [])
+            ]
+        )
+        let account = try CodexAccountUsageSnapshot(
+            weeklyRemainingPercent: 100,
+            weeklyResetsAt: date("2026-09-05 12:00"),
+            resetCreditCount: nil,
+            capturedAt: date("2026-08-28 11:59")
+        )
+
+        let model = QuotaOverviewModel(
+            snapshot: overview,
+            accountUsage: account,
+            now: now,
+            calendar: calendar,
+            selectedSourceID: "id:codex_bengalfox"
+        )
+
+        XCTAssertEqual(model.remainingPercent, 80)
+        XCTAssertEqual(model.selectingSource("id:codex").remainingPercent, 100)
+    }
+
+    func testLiveAccountCreatesCanonicalSourceWithoutManufacturingHistory() throws {
+        let now = date("2026-08-28 12:00")
+        let day = calendar.startOfDay(for: now)
+        let overview = QuotaOverviewSnapshot(
+            identity: PresentationIdentity(databaseEpoch: "epoch", dataGeneration: 1),
+            window: CapabilityQueryWindow(start: day, end: now, timeZone: tz),
+            coverage: .unknown,
+            sources: []
+        )
+        let account = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: date("2026-08-28 17:00"),
+            weeklyRemainingPercent: 57,
+            weeklyResetsAt: date("2026-09-05 12:00"),
+            resetCreditCount: nil,
+            capturedAt: date("2026-08-28 11:59")
+        )
+
+        let model = QuotaOverviewModel(snapshot: overview, accountUsage: account, now: now, calendar: calendar)
+
+        XCTAssertEqual(model.selectedSourceID, "id:codex")
+        XCTAssertEqual(model.remainingPercent, 57)
+        XCTAssertEqual(model.shortRemainingPercent, 82)
+        XCTAssertEqual(model.dailySnapshots.count, 7)
+        XCTAssertTrue(model.dailySnapshots.allSatisfy { $0.observation == nil && $0.usedPercent == nil })
     }
 
     func testLegacyCompactProjectionDerivesOnlyUnambiguousAdjacentDayIncrease() throws {
@@ -236,6 +449,39 @@ final class QuotaOverviewTests: XCTestCase {
             id: id, capturedAt: date(capturedAt), windowMinutes: 10_080,
             usedPercent: used, resetsAt: resetsAt.map(date), limitID: limitID,
             limitName: limitName, confidence: .exact
+        )
+    }
+
+    private func shortQuota(
+        _ id: String, _ capturedAt: String, _ used: Double,
+        resetsAt: String? = "2026-08-28 17:00", limitID: String? = "weekly", limitName: String? = "Weekly"
+    ) throws -> QuotaSnapshot {
+        try QuotaSnapshot(
+            id: id, capturedAt: date(capturedAt), windowMinutes: 300,
+            usedPercent: used, resetsAt: resetsAt.map(date), limitID: limitID,
+            limitName: limitName, confidence: .exact
+        )
+    }
+
+    private func compactOverview(
+        current: QuotaSnapshot?,
+        shortCurrent: QuotaSnapshot?,
+        now: Date
+    ) -> QuotaOverviewSnapshot {
+        let day = calendar.startOfDay(for: now)
+        return QuotaOverviewSnapshot(
+            identity: PresentationIdentity(databaseEpoch: "epoch", dataGeneration: 1),
+            window: CapabilityQueryWindow(start: day, end: now, timeZone: tz),
+            coverage: .complete,
+            sources: [
+                QuotaOverviewSourceSnapshot(
+                    id: "id:codex",
+                    name: "codex",
+                    current: current,
+                    shortCurrent: shortCurrent,
+                    daily: [QuotaOverviewDay(day: day, observation: current)]
+                )
+            ]
         )
     }
 }

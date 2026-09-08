@@ -105,6 +105,8 @@ public actor PresentationSnapshotStore {
         }
         if let accountUsage = snapshot.accountUsage {
             guard accountUsage.capturedAt.timeIntervalSinceReferenceDate.isFinite,
+                  accountUsage.fiveHourResetsAt.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
+                  accountUsage.fiveHourRemainingPercent.map({ $0.isFinite && (0...100).contains($0) }) ?? true,
                   accountUsage.weeklyResetsAt.map({ $0.timeIntervalSinceReferenceDate.isFinite }) ?? true,
                   accountUsage.weeklyRemainingPercent.map({ $0.isFinite && (0...100).contains($0) }) ?? true,
                   accountUsage.resetCreditCount.map({ $0 >= 0 }) ?? true else {

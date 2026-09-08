@@ -15,18 +15,24 @@ struct CapabilityPackageBuilder: Sendable {
     let pluginProvider: any CapabilityPluginInventoryProviding
     let now: @Sendable () -> Date
     let afterFileRead: (@Sendable (URL) -> Void)?
+    /// A caller-provided prefix keeps isolated test runs from observing each
+    /// other's staging directories. Production retains the stable prefix so
+    /// recovery diagnostics remain recognizable.
+    let stagingPrefix: String
     private var fileManager: FileManager { .default }
 
     init(
         environment: CapabilityExportEnvironment,
         pluginProvider: any CapabilityPluginInventoryProviding,
         now: @escaping @Sendable () -> Date,
-        afterFileRead: (@Sendable (URL) -> Void)? = nil
+        afterFileRead: (@Sendable (URL) -> Void)? = nil,
+        stagingPrefix: String = "CodexDirectorExport-"
     ) {
         self.environment = environment
         self.pluginProvider = pluginProvider
         self.now = now
         self.afterFileRead = afterFileRead
+        self.stagingPrefix = stagingPrefix
     }
 
     func prepare(
@@ -44,7 +50,7 @@ struct CapabilityPackageBuilder: Sendable {
         try cancellation.check()
 
         let root = fileManager.temporaryDirectory
-            .appendingPathComponent("CodexDirectorExport-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("\(stagingPrefix)\(UUID().uuidString)", isDirectory: true)
         try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
         var shouldKeepRoot = false
         defer {

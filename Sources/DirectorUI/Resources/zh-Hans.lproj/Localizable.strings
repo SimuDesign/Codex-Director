@@ -20,7 +20,7 @@
 "settings.appearance.light" = "浅色";
 "settings.appearance.dark" = "深色";
 "settings.menuBar" = "在菜单栏显示";
-"settings.menuBar.hint" = "在 macOS 菜单栏显示隐私安全的本周额度摘要。默认开启，可在此关闭。";
+"settings.menuBar.hint" = "在 macOS 菜单栏显示隐私安全的五小时和本周额度摘要。默认开启，可在此关闭。";
 "settings.index.title" = "索引";
 "settings.index.status" = "状态";
 "settings.index.updated" = "最近更新";
@@ -88,6 +88,10 @@
 "home.refresh.lastUpdated" = "最近更新：%@";
 "home.refresh.never" = "尚未更新";
 "menuBar.weeklyRemaining" = "当前周额度剩余";
+"menuBar.fiveHourRemaining" = "当前五小时额度剩余";
+"menuBar.fiveHourRemainingValue" = "五小时额度剩余 %@";
+"menuBar.weeklyRemainingValue" = "周额度剩余 %@";
+"menuBar.fiveHourReset" = "五小时重置时间";
 "menuBar.nextReset" = "下次重置时间";
 "menuBar.resetCredits" = "重置卡数量";
 "menuBar.refresh" = "刷新数据";
@@ -184,6 +188,13 @@
 "library.stats" = "%lld 项能力 · %lld 项已使用";
 "home.quota.source" = "额度来源";
 "home.quota.current" = "当前每周额度";
+"home.quota.currentAllowance" = "当前额度";
+"home.quota.fiveHour" = "五小时";
+"home.quota.weekly" = "本周";
+"home.quota.fiveHourResets" = "五小时重置时间";
+"home.quota.weeklyResets" = "本周重置时间";
+"home.quota.fiveHourRemaining" = "五小时额度剩余";
+"home.quota.weeklyRemaining" = "周额度剩余";
 "home.quota.used" = "已使用";
 "home.quota.remaining" = "剩余";
 "home.quota.recorded" = "记录时间";
@@ -193,6 +204,7 @@
 "home.quota.awaitingShort" = "等待\n新数据";
 "home.quota.dailyUsage" = "每日周额度使用";
 "home.quota.dailyUsageSubtitle" = "按同一来源的额度记录增量计算";
+"home.quota.weeklyHistoryUnavailable" = "周额度历史不可用";
 "home.quota.date" = "日期";
 "home.quota.dailyUsedPercent" = "每日周额度使用";
 "home.quota.usedValue" = "已使用 %.0f%%";

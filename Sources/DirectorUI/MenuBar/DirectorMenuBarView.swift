@@ -6,6 +6,7 @@ import DirectorCore
 /// main window or the Scene to rebuild its nested model.
 public struct DirectorMenuBarLabel: View {
     @ObservedObject private var model: DirectorAppModel
+    @EnvironmentObject private var languageStore: AppLanguageStore
 
     public init(model: DirectorAppModel) {
         _model = ObservedObject(wrappedValue: model)
@@ -19,7 +20,26 @@ public struct DirectorMenuBarLabel: View {
                 .monospacedDigit()
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.menuBarPresentation.shortStatus)
+        .accessibilityLabel(accessibilityLabel(for: model.menuBarPresentation))
+    }
+
+    private func accessibilityLabel(for presentation: MenuBarPresentation) -> String {
+        var values: [String] = []
+        if let value = presentation.fiveHourRemainingPercent {
+            values.append(languageStore.localizer.format("menuBar.fiveHourRemainingValue", fallback: "Five-hour remaining %@", presentationText(value)))
+        }
+        if let value = presentation.weeklyRemainingPercent {
+            values.append(languageStore.localizer.format("menuBar.weeklyRemainingValue", fallback: "Weekly remaining %@", presentationText(value)))
+        }
+        return values.isEmpty ? t("menuBar.unavailableStatus", "Account data is unavailable") : values.joined(separator: ", ")
+    }
+
+    private func presentationText(_ value: Double) -> String {
+        String(format: "%.0f%%", value)
+    }
+
+    private func t(_ key: String, _ fallback: String) -> String {
+        languageStore.localizer.text(key, fallback: fallback)
     }
 }
 
@@ -38,16 +58,30 @@ public struct DirectorMenuBarView: View {
     public var body: some View {
         let presentation = model.menuBarPresentation
         VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
-            usageRow(
-                title: t("menuBar.weeklyRemaining", "Current week remaining"),
-                value: presentation.primaryValue,
-                symbol: "chart.pie.fill"
-            )
-            usageRow(
-                title: t("menuBar.nextReset", "Next reset"),
-                value: resetValue(presentation),
-                symbol: "clock.arrow.circlepath"
-            )
+            if let value = presentation.fiveHourRemainingPercent {
+                usageRow(
+                    title: t("menuBar.fiveHourRemaining", "Five-hour remaining"),
+                    value: percent(value),
+                    symbol: "chart.pie.fill"
+                )
+                usageRow(
+                    title: t("menuBar.fiveHourReset", "Five-hour reset"),
+                    value: resetValue(presentation.fiveHourResetsAt, display: presentation.fiveHourResetDisplay),
+                    symbol: "clock.arrow.circlepath"
+                )
+            }
+            if let value = presentation.weeklyRemainingPercent {
+                usageRow(
+                    title: t("menuBar.weeklyRemaining", "Weekly remaining"),
+                    value: percent(value),
+                    symbol: "chart.pie.fill"
+                )
+                usageRow(
+                    title: t("menuBar.nextReset", "Next reset"),
+                    value: resetValue(presentation.weeklyResetsAt, display: presentation.resetDisplay),
+                    symbol: "clock.arrow.circlepath"
+                )
+            }
             usageRow(
                 title: t("menuBar.resetCredits", "Reset cards"),
                 value: presentation.resetCreditCount.map(String.init) ?? unavailableText,
@@ -106,12 +140,15 @@ public struct DirectorMenuBarView: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func resetValue(_ presentation: MenuBarPresentation) -> String {
-        guard let date = presentation.weeklyResetsAt,
-              case .countdown = presentation.resetDisplay else {
+    private func resetValue(_ date: Date?, display: MenuBarPresentation.ResetDisplay) -> String {
+        guard let date, case .countdown = display else {
             return unavailableText
         }
         return languageStore.localizer.date(date)
+    }
+
+    private func percent(_ value: Double) -> String {
+        String(format: "%.0f%%", value)
     }
 
     private var unavailableText: String {

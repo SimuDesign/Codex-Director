@@ -1,18 +1,20 @@
 import Foundation
 import DirectorCore
 
-/// Presentation model for the Home quota module. It deliberately consumes
-/// reported weekly quota observations only; token totals are not involved.
+/// Presentation model for the Home quota module. Account-reported windows are
+/// kept separate; token totals are not involved in either allowance.
 public struct QuotaOverviewModel: Equatable, Sendable {
     public struct Source: Identifiable, Equatable, Sendable {
         public let id: String
         public let name: String
         public let snapshotCount: Int
+        public let shortCurrent: QuotaSnapshot?
 
-        public init(id: String, name: String, snapshotCount: Int) {
+        public init(id: String, name: String, snapshotCount: Int, shortCurrent: QuotaSnapshot? = nil) {
             self.id = id
             self.name = name
             self.snapshotCount = snapshotCount
+            self.shortCurrent = shortCurrent
         }
     }
 
@@ -44,6 +46,7 @@ public struct QuotaOverviewModel: Equatable, Sendable {
     public let sources: [Source]
     public let selectedSourceID: String?
     public let currentObservation: QuotaSnapshot?
+    public let shortCurrentObservation: QuotaSnapshot?
     public let dailySnapshots: [DailySnapshot]
     private let compactSnapshot: QuotaOverviewSnapshot?
 
@@ -58,6 +61,17 @@ public struct QuotaOverviewModel: Equatable, Sendable {
         return currentObservation.remainingPercent
     }
     public var isAwaitingNewData: Bool { currentObservation == nil || isCurrentObservationStale }
+    public var isShortObservationStale: Bool {
+        guard let shortCurrentObservation else { return false }
+        return shortCurrentObservation.resetsAt.map { $0 <= now } ?? false
+    }
+    public var shortRemainingPercent: Double? {
+        guard let shortCurrentObservation, !isShortObservationStale else { return nil }
+        return shortCurrentObservation.remainingPercent
+    }
+    public var isShortAwaitingNewData: Bool {
+        shortCurrentObservation == nil || isShortObservationStale
+    }
 
     public init(
         snapshots: [QuotaSnapshot],
@@ -72,10 +86,15 @@ public struct QuotaOverviewModel: Equatable, Sendable {
         self.now = now
         self.calendar = calendar
 
-        let weekly = snapshots.filter { $0.isWeeklyWindow && $0.capturedAt <= now }
-        let grouped = Dictionary(grouping: weekly, by: Self.sourceID(for:))
+        let relevant = snapshots.filter { ($0.isWeeklyWindow || $0.isShortWindow) && $0.capturedAt <= now }
+        let grouped = Dictionary(grouping: relevant, by: Self.sourceID(for:))
         let builtSources = grouped.map { id, values in
-            Source(id: id, name: Self.sourceName(for: id, snapshots: values), snapshotCount: values.count)
+            Source(
+                id: id,
+                name: Self.sourceName(for: id, snapshots: values),
+                snapshotCount: values.count,
+                shortCurrent: values.filter(\.isShortWindow).max(by: Self.latestFirst)
+            )
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         self.sources = builtSources
 
@@ -89,12 +108,15 @@ public struct QuotaOverviewModel: Equatable, Sendable {
 
         guard let resolvedID else {
             currentObservation = nil
+            shortCurrentObservation = nil
             dailySnapshots = Self.emptyDays(now: now, calendar: calendar)
             return
         }
-        let sourceSnapshots = (grouped[resolvedID] ?? []).sorted { $0.capturedAt < $1.capturedAt }
-        currentObservation = sourceSnapshots.last
-        dailySnapshots = Self.makeDailySnapshots(sourceSnapshots, now: now, calendar: calendar)
+        let sourceSnapshots = grouped[resolvedID] ?? []
+        let weeklySnapshots = sourceSnapshots.filter(\.isWeeklyWindow).sorted(by: Self.earliestFirst)
+        currentObservation = weeklySnapshots.last
+        shortCurrentObservation = sourceSnapshots.filter(\.isShortWindow).max(by: Self.latestFirst)
+        dailySnapshots = Self.makeDailySnapshots(weeklySnapshots, now: now, calendar: calendar)
     }
 
     /// Adapts the compact startup projection without asking SQLite for the
@@ -102,28 +124,37 @@ public struct QuotaOverviewModel: Equatable, Sendable {
     /// authoritative, including cycle markers and stable source names.
     public init(
         snapshot: QuotaOverviewSnapshot,
+        accountUsage: CodexAccountUsageSnapshot? = nil,
         now: Date = Date(),
         calendar: Calendar = Calendar(identifier: .gregorian),
         selectedSourceID: String? = nil
     ) {
         var calendar = calendar
         calendar.locale = calendar.locale ?? Locale(identifier: "en_US_POSIX")
+        let projectedSnapshot = Self.applyingCurrentAccountUsage(
+            accountUsage,
+            to: snapshot,
+            now: now,
+            calendar: calendar
+        )
         self.allSnapshots = []
-        self.compactSnapshot = snapshot
+        self.compactSnapshot = projectedSnapshot
         self.now = now
         self.calendar = calendar
-        let sourceValues = snapshot.sources.map {
-            Source(id: $0.id, name: $0.name, snapshotCount: $0.daily.compactMap(\.observation).count)
+        let sourceValues = projectedSnapshot.sources.map {
+            Source(id: $0.id, name: $0.name, snapshotCount: $0.daily.compactMap(\.observation).count, shortCurrent: $0.shortCurrent)
         }
         self.sources = sourceValues
         let resolvedID = selectedSourceID.flatMap { id in sourceValues.contains { $0.id == id } ? id : nil } ?? sourceValues.first?.id
         self.selectedSourceID = resolvedID
-        guard let resolvedID, let source = snapshot.sources.first(where: { $0.id == resolvedID }) else {
+        guard let resolvedID, let source = projectedSnapshot.sources.first(where: { $0.id == resolvedID }) else {
             self.currentObservation = nil
+            self.shortCurrentObservation = nil
             self.dailySnapshots = Self.emptyDays(now: now, calendar: calendar)
             return
         }
         self.currentObservation = source.current
+        self.shortCurrentObservation = source.shortCurrent
         self.dailySnapshots = Self.makeCompactDailySnapshots(source.daily, calendar: calendar)
     }
 
@@ -155,10 +186,128 @@ public struct QuotaOverviewModel: Equatable, Sendable {
         return "unknown"
     }
 
+    private static func earliestFirst(_ lhs: QuotaSnapshot, _ rhs: QuotaSnapshot) -> Bool {
+        lhs.capturedAt < rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id < rhs.id)
+    }
+
+    private static func latestFirst(_ lhs: QuotaSnapshot, _ rhs: QuotaSnapshot) -> Bool {
+        lhs.capturedAt > rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id > rhs.id)
+    }
+
     private static func sourceName(for id: String, snapshots: [QuotaSnapshot]) -> String {
         if let name = snapshots.compactMap({ $0.limitName }).first(where: { !$0.isEmpty }) { return name }
         if let snapshot = snapshots.first, let limitID = snapshot.limitID, !limitID.isEmpty { return limitID }
         return id == "unknown" ? "Unknown source" : id.replacingOccurrences(of: "^(id:|name:)", with: "", options: .regularExpression)
+    }
+
+    /// Composes the sanitized app-server reading with the indexed Home
+    /// projection without turning a live reading into historical evidence.
+    /// The canonical Codex source receives only current-window replacements;
+    /// its daily observations remain byte-for-byte unchanged.
+    private static func applyingCurrentAccountUsage(
+        _ accountUsage: CodexAccountUsageSnapshot?,
+        to snapshot: QuotaOverviewSnapshot,
+        now: Date,
+        calendar: Calendar
+    ) -> QuotaOverviewSnapshot {
+        guard let accountUsage,
+              accountUsage.hasUsableAllowance,
+              accountUsage.capturedAt <= now else { return snapshot }
+
+        var sources = snapshot.sources
+        let targetIndex = sources.firstIndex(where: isCanonicalCodexSource)
+        let localWeekly = targetIndex.flatMap { sources[$0].current }
+        let localShort = targetIndex.flatMap { sources[$0].shortCurrent }
+        let liveWeekly = liveSnapshot(
+            remainingPercent: accountUsage.weeklyRemainingPercent,
+            resetsAt: accountUsage.weeklyResetsAt,
+            capturedAt: accountUsage.capturedAt,
+            windowMinutes: 10_080
+        )
+        let liveShort = liveSnapshot(
+            remainingPercent: accountUsage.fiveHourRemainingPercent,
+            resetsAt: accountUsage.fiveHourResetsAt,
+            capturedAt: accountUsage.capturedAt,
+            windowMinutes: 300
+        )
+        let resolvedWeekly = accountUsage.capturedAt >= (localWeekly?.capturedAt ?? .distantPast)
+            ? liveWeekly
+            : localWeekly
+        let resolvedShort = accountUsage.capturedAt >= (localShort?.capturedAt ?? .distantPast)
+            ? liveShort
+            : localShort
+
+        if let targetIndex {
+            let source = sources[targetIndex]
+            sources[targetIndex] = QuotaOverviewSourceSnapshot(
+                id: source.id,
+                name: source.name,
+                rawDisplayName: source.rawDisplayName,
+                current: resolvedWeekly,
+                shortCurrent: resolvedShort,
+                daily: source.daily
+            )
+        } else {
+            sources.append(QuotaOverviewSourceSnapshot(
+                id: "id:codex",
+                name: "codex",
+                rawDisplayName: "codex",
+                current: resolvedWeekly,
+                shortCurrent: resolvedShort,
+                daily: emptyOverviewDays(for: snapshot, calendar: calendar)
+            ))
+            sources.sort { $0.id < $1.id }
+        }
+
+        return QuotaOverviewSnapshot(
+            identity: snapshot.identity,
+            generatedAt: max(snapshot.generatedAt, accountUsage.capturedAt),
+            window: snapshot.window,
+            coverage: snapshot.coverage,
+            sources: sources
+        )
+    }
+
+    private static func isCanonicalCodexSource(_ source: QuotaOverviewSourceSnapshot) -> Bool {
+        if source.id.caseInsensitiveCompare("id:codex") == .orderedSame { return true }
+        if source.rawDisplayName?.caseInsensitiveCompare("codex") == .orderedSame { return true }
+        return source.name.caseInsensitiveCompare("codex") == .orderedSame
+    }
+
+    private static func liveSnapshot(
+        remainingPercent: Double?,
+        resetsAt: Date?,
+        capturedAt: Date,
+        windowMinutes: Int
+    ) -> QuotaSnapshot? {
+        guard let remainingPercent else { return nil }
+        return try? QuotaSnapshot(
+            id: "live-account-\(windowMinutes)",
+            capturedAt: capturedAt,
+            windowMinutes: windowMinutes,
+            usedPercent: 100 - remainingPercent,
+            resetsAt: resetsAt,
+            limitID: "codex",
+            limitName: "codex",
+            confidence: .exact
+        )
+    }
+
+    private static func emptyOverviewDays(
+        for snapshot: QuotaOverviewSnapshot,
+        calendar: Calendar
+    ) -> [QuotaOverviewDay] {
+        if let dates = snapshot.sources.first?.daily.map(\.day), !dates.isEmpty {
+            return dates.map { QuotaOverviewDay(day: $0, observation: nil) }
+        }
+        var calendar = calendar
+        calendar.timeZone = snapshot.window.timeZone
+        let start = calendar.startOfDay(for: snapshot.window.start)
+        return (0..<7).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: start).map {
+                QuotaOverviewDay(day: $0, observation: nil)
+            }
+        }
     }
 
     private static func emptyDays(now: Date, calendar: Calendar) -> [DailySnapshot] {

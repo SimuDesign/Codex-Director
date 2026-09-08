@@ -8,6 +8,64 @@ import Darwin
 final class CodexAccountUsageReadingTests: XCTestCase {
     private let capturedAt = Date(timeIntervalSince1970: 2_000_000)
 
+    func testParsesCodexFiveHourAndWeeklyWindowsWithoutMixingModelBuckets() throws {
+        let response = try json([
+            "id": 2,
+            "result": [
+                "rateLimitsByLimitId": [
+                    "codex": [
+                        "primary": ["usedPercent": 18, "windowDurationMins": 300, "resetsAt": 2_000_300],
+                        "secondary": ["usedPercent": 43, "windowDurationMins": 10_080, "resetsAt": 2_001_000]
+                    ],
+                    "gpt-5.3-codex-spark": [
+                        "primary": ["usedPercent": 99, "windowDurationMins": 300]
+                    ]
+                ]
+            ]
+        ])
+
+        let snapshot = try CodexAccountUsageReading.parse(response: response, capturedAt: capturedAt)
+
+        XCTAssertEqual(snapshot.fiveHourRemainingPercent, 82)
+        XCTAssertEqual(snapshot.fiveHourResetsAt, Date(timeIntervalSince1970: 2_000_300))
+        XCTAssertEqual(snapshot.weeklyRemainingPercent, 57)
+        XCTAssertEqual(snapshot.weeklyResetsAt, Date(timeIntervalSince1970: 2_001_000))
+    }
+
+    func testCodexShortOnlyBucketDoesNotMixLegacyWeeklyBucket() throws {
+        let response = try json([
+            "id": 2,
+            "result": [
+                "rateLimitsByLimitId": [
+                    "codex": ["primary": ["usedPercent": 18, "windowDurationMins": 300]],
+                ],
+                "rateLimits": ["primary": ["usedPercent": 43, "windowDurationMins": 10_080]]
+            ]
+        ])
+
+        let snapshot = try CodexAccountUsageReading.parse(response: response, capturedAt: capturedAt)
+
+        XCTAssertEqual(snapshot.fiveHourRemainingPercent, 82)
+        XCTAssertNil(snapshot.weeklyRemainingPercent)
+    }
+
+    func testCodexWeeklyOnlyBucketDoesNotMixLegacyFiveHourBucket() throws {
+        let response = try json([
+            "id": 2,
+            "result": [
+                "rateLimitsByLimitId": [
+                    "codex": ["primary": ["usedPercent": 43, "windowDurationMins": 10_080]]
+                ],
+                "rateLimits": ["primary": ["usedPercent": 18, "windowDurationMins": 300]]
+            ]
+        ])
+
+        let snapshot = try CodexAccountUsageReading.parse(response: response, capturedAt: capturedAt)
+
+        XCTAssertEqual(snapshot.weeklyRemainingPercent, 57)
+        XCTAssertNil(snapshot.fiveHourRemainingPercent)
+    }
+
     func testPrefersCodexWeeklyBucketAndIgnoresModelSpecificBuckets() throws {
         let response = try json([
             "id": 2,
@@ -52,7 +110,7 @@ final class CodexAccountUsageReadingTests: XCTestCase {
         XCTAssertNil(snapshot.resetCreditCount)
     }
 
-    func testFallsBackToLegacyOverallRateLimitsWhenCodexBucketHasNoWeeklyWindow() throws {
+    func testFallsBackToLegacyOverallRateLimitsWhenCodexBucketHasNoSupportedWindow() throws {
         let response = try json([
             "id": 2,
             "result": [
@@ -384,19 +442,29 @@ final class CodexAccountUsageReadingTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let expectedCapturedAt = capturedAt
-        let reading = CodexAccountUsageReading(executableURL: executable, timeoutSeconds: 1, now: { expectedCapturedAt })
-        do {
-            _ = try await reading.read()
-            XCTFail("expected a bounded timeout")
-        } catch let error as CodexAccountUsageReadError {
-            XCTAssertEqual(error, .timedOut)
-        } catch {
-            XCTFail("unexpected error: \(error)")
+        // Start the bounded read and observe the synthetic process while it
+        // is still alive. Waiting until after the timeout made this test
+        // scheduler-sensitive: cleanup could remove the PID files before the
+        // assertions got a chance to inspect the process tree.
+        // Keep enough headroom for the shell fixture to create both
+        // descendants when the complete suite is under parallel load. The
+        // assertion still requires the bounded exchange to time out.
+        let reading = CodexAccountUsageReading(executableURL: executable, timeoutSeconds: 8, now: { expectedCapturedAt })
+        let task = Task<CodexAccountUsageReadError?, Never> {
+            do {
+                _ = try await reading.read()
+                return nil
+            } catch let error as CodexAccountUsageReadError {
+                return error
+            } catch {
+                return nil
+            }
         }
-
         let parentPID = try await waitForPID(in: parentFile)
         let childPID = try await waitForPID(in: childFile)
         let grandchildPID = try await waitForPID(in: grandchildFile)
+        let outcome = await task.value
+        XCTAssertEqual(outcome, .timedOut)
         let parentExited = await waitForProcessToExit(parentPID)
         let childExited = await waitForProcessToExit(childPID)
         let grandchildExited = await waitForProcessToExit(grandchildPID)
@@ -521,7 +589,10 @@ final class CodexAccountUsageReadingTests: XCTestCase {
     }
 
     private func waitForPID(in file: URL) async throws -> Int32 {
-        for _ in 0..<100 {
+        // Process fixtures can be delayed by other xctest workers. Waiting
+        // longer here observes the same process tree without weakening the
+        // exit and cleanup assertions below.
+        for _ in 0..<1_000 {
             if let value = try? String(contentsOf: file, encoding: .utf8),
                let pid = Int32(value.trimmingCharacters(in: .whitespacesAndNewlines)) {
                 return pid

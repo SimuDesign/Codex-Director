@@ -9,6 +9,7 @@ public actor CapabilityExportCoordinator {
     private let environment: CapabilityExportEnvironment
     private let pluginProvider: any CapabilityPluginInventoryProviding
     private let now: @Sendable () -> Date
+    private let stagingPrefix: String
     private var prepared: CapabilityPreparedPackage?
     private var prepareTask: Task<CapabilityPreparedPackage, Error>?
     private var writeTask: Task<URL, Error>?
@@ -17,11 +18,13 @@ public actor CapabilityExportCoordinator {
     public init(
         environment: CapabilityExportEnvironment,
         pluginProvider: any CapabilityPluginInventoryProviding,
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        stagingPrefix: String = "CodexDirectorExport-"
     ) {
         self.environment = environment
         self.pluginProvider = pluginProvider
         self.now = now
+        self.stagingPrefix = stagingPrefix
     }
 
     public func options() throws -> CapabilityExportOptions {
@@ -35,7 +38,12 @@ public actor CapabilityExportCoordinator {
     ) async throws -> CapabilityExportPreview {
         guard prepareTask == nil, writeTask == nil else { throw CapabilityExportError.operationInProgress }
         discardPreparedPackage()
-        let builder = CapabilityPackageBuilder(environment: environment, pluginProvider: pluginProvider, now: now)
+        let builder = CapabilityPackageBuilder(
+            environment: environment,
+            pluginProvider: pluginProvider,
+            now: now,
+            stagingPrefix: stagingPrefix
+        )
         let cancellation = CapabilityExportCancellation()
         self.cancellation = cancellation
         let task = Task.detached(priority: .userInitiated) {

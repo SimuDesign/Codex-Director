@@ -13,11 +13,25 @@ The project follows semantic versioning for public releases.
 - Add reproducible synthetic startup gates and database/cache failure coverage for the public release baseline.
 - Reduce quota-history query sorting while preserving seven-day, source, predecessor, and deterministic tie semantics.
 
+## 1.1.1
+
+- Synchronized Home's current five-hour and weekly allowance rings with the sanitized live account reading used by the menu bar.
+- Kept the seven-day weekly chart on indexed same-source history and left presentation-cache schema v1 unchanged.
+- Added account usage to the main Refresh data action while the menu-bar account feature is enabled; an explicit opt-out still starts no Codex account process.
+- Updated the Home timestamp to reflect a newer account-only refresh and added regression coverage for source isolation, missing windows, and stale-cache ordering.
+
+## 1.1.0
+
+- Added same-source five-hour allowance projection alongside the existing weekly allowance, without a database migration.
+- Home now presents valid five-hour and weekly windows as concentric rings; expired or unavailable windows are hidden independently and the weekly daily chart remains weekly-only.
+- Menu-bar status now formats dual windows as `5h 82% w 57%`, or a single bare percentage when only one window is available. The popover lists each available reset independently.
+- Updated the local app-server reader, presentation cache compatibility, reset scheduling, bilingual copy, and synthetic coverage for both windows.
+
 ## 1.0.0
 
 - Prepared the first public open-source release with a clean 1.0.0 application identity.
 - Unified Settings action sizing across localized labels and kept capability project-group boundaries 20pt apart.
-- Unified the three Settings actions on a shared 176pt content width and 48pt outer height; the internal build remains 21 while the visible version is 1.0.0.
+- Unified the three Settings actions on a shared 176pt content width and 48pt outer height; the internal build was 21 while the visible version was 1.0.0.
 - Removed the trailing ellipsis from the capability-package export action for a stable compact control label.
 
 ## 0.6.2

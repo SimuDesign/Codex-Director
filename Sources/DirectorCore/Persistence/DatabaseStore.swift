@@ -919,6 +919,26 @@ public actor DatabaseStore {
                             ON predecessor_times.source_key = weekly.source_key
                            AND predecessor_times.captured_at = weekly.captured_at
                 ),
+                short_candidates AS (
+                    SELECT id, captured_at, window_minutes, used_percent,
+                           resets_at, limit_id, limit_name, confidence,
+                           CASE
+                               WHEN limit_id IS NOT NULL AND limit_id <> '' THEN 'id:' || limit_id
+                               WHEN limit_name IS NOT NULL AND limit_name <> '' THEN 'name:' || limit_name
+                               ELSE 'unknown'
+                           END AS source_key
+                    FROM quota_snapshots
+                    WHERE window_minutes = 300 AND captured_at <= ?
+                ),
+                ranked_short AS (
+                    SELECT id, captured_at, window_minutes, used_percent,
+                           resets_at, limit_id, limit_name, confidence,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY source_key
+                               ORDER BY captured_at DESC, id DESC
+                           ) AS source_rank
+                    FROM short_candidates
+                ),
                 selected AS (
                     SELECT id, captured_at, window_minutes, used_percent,
                            resets_at, limit_id, limit_name, confidence
@@ -929,6 +949,11 @@ public actor DatabaseStore {
                            resets_at, limit_id, limit_name, confidence
                     FROM ranked_predecessors
                     WHERE source_rank = 1
+                    UNION ALL
+                    SELECT id, captured_at, window_minutes, used_percent,
+                           resets_at, limit_id, limit_name, confidence
+                    FROM ranked_short
+                    WHERE source_rank = 1
                 )
                 SELECT id, captured_at, window_minutes, used_percent,
                        resets_at, limit_id, limit_name, confidence
@@ -938,7 +963,8 @@ public actor DatabaseStore {
             )
             statement.bind(window.end.timeIntervalSince1970, at: 1)
             statement.bind(window.start.timeIntervalSince1970, at: 2)
-            statement.bind(window.start.timeIntervalSince1970, at: 3)
+            statement.bind(window.end.timeIntervalSince1970, at: 3)
+            statement.bind(window.start.timeIntervalSince1970, at: 4)
             var values: [QuotaSnapshot] = []
             while try statement.step() == .row {
                 values.append(try QuotaSnapshot(id: statement.columnText(0) ?? "", capturedAt: Date(timeIntervalSince1970: statement.columnDouble(1)), windowMinutes: statement.columnInt(2), usedPercent: statement.columnDouble(3), resetsAt: statement.columnIsNull(4) ? nil : Date(timeIntervalSince1970: statement.columnDouble(4)), limitID: statement.columnText(5), limitName: statement.columnText(6), confidence: EvidenceConfidence(rawValue: statement.columnText(7) ?? "") ?? .unknown))
@@ -950,7 +976,10 @@ public actor DatabaseStore {
                 return "unknown"
             })
             let sources = groups.map { id, rows in
-                let ordered = rows.sorted { lhs, rhs in lhs.capturedAt < rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id < rhs.id) }
+                let weeklyRows = rows.filter(\.isWeeklyWindow)
+                let shortCurrent = rows.filter(\.isShortWindow)
+                    .max { lhs, rhs in lhs.capturedAt < rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id < rhs.id) }
+                let ordered = weeklyRows.sorted { lhs, rhs in lhs.capturedAt < rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id < rhs.id) }
                 let recent = ordered.filter { $0.capturedAt >= window.start }
                 let groupedDays = Dictionary(grouping: recent) { (observation: QuotaSnapshot) in calendar.startOfDay(for: observation.capturedAt) }
                 var previousObservation: QuotaSnapshot?
@@ -979,11 +1008,16 @@ public actor DatabaseStore {
                     )
                 }
                 let latest = ordered.last
-                let displayName = latest?.limitName.flatMap { $0.isEmpty ? nil : $0 }
-                    ?? latest?.limitID.flatMap { $0.isEmpty ? nil : $0 }
+                // A short-window-only source is still a valid Home source.
+                // Use its identity for the display name instead of reducing
+                // it to "Unknown source" just because it has no weekly
+                // history yet.
+                let displaySnapshot = latest ?? shortCurrent
+                let displayName = displaySnapshot?.limitName.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? displaySnapshot?.limitID.flatMap { $0.isEmpty ? nil : $0 }
                     ?? "Unknown source"
-                let rawName = latest?.limitName.flatMap { $0.isEmpty ? nil : $0 }
-                return QuotaOverviewSourceSnapshot(id: id, name: displayName, rawDisplayName: rawName, current: latest, daily: daily)
+                let rawName = displaySnapshot?.limitName.flatMap { $0.isEmpty ? nil : $0 }
+                return QuotaOverviewSourceSnapshot(id: id, name: displayName, rawDisplayName: rawName, current: latest, shortCurrent: shortCurrent, daily: daily)
             }.sorted { $0.id < $1.id }
             return QuotaOverviewSnapshot(identity: identity, window: window, coverage: values.isEmpty ? .unknown : .complete, sources: sources)
         }
