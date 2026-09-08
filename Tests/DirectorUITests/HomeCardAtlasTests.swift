@@ -117,7 +117,7 @@ final class HomeCardAtlasTests: XCTestCase {
         XCTAssertTrue(home.contains("lastUpdatedAt"))
         XCTAssertFalse(home.contains("onRefresh"))
         XCTAssertTrue(root.contains(".navigationTitle(DirectorUI.productName)"))
-        XCTAssertTrue(root.contains("lastUpdatedAt: model.lastRefresh"))
+        XCTAssertTrue(root.contains("lastUpdatedAt: model.homeLastUpdatedAt"))
         XCTAssertTrue(root.contains("ToolbarItem(placement: .primaryAction)"))
         XCTAssertTrue(root.contains("DirectorRefreshButton("))
         XCTAssertTrue(root.contains("size: .toolbar"))

@@ -118,6 +118,31 @@ final class MenuBarRefreshTests: XCTestCase {
         XCTAssertTrue(firstInsertion.wrappedValue)
         XCTAssertTrue(firstWindowModel.menuBarEnabled)
     }
+
+    func testMainManualRefreshIncludesAccountOnlyWhileMenuBarFeatureIsEnabled() throws {
+        let stores = TestMemoryPreferences.makeStores()
+        let reading = CodexAccountUsageReading(
+            transport: { _, _, _, _ in Data() },
+            executableURL: URL(fileURLWithPath: "/synthetic/codex")
+        )
+        let model = DirectorAppModel(
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            menuBarPreferences: MenuBarPreferences(memoryEnabled: true),
+            accountUsageReading: reading
+        )
+
+        XCTAssertEqual(model.manualRefreshDomains, [.quota, .directory, .accountUsage])
+
+        model.setMenuBarEnabled(false)
+        XCTAssertEqual(model.manualRefreshDomains, [.quota, .directory])
+    }
+
+    func testMainManualRefreshOmitsAccountWithoutReader() {
+        let model = DirectorAppModel(menuBarPreferences: MenuBarPreferences(memoryEnabled: true))
+
+        XCTAssertEqual(model.manualRefreshDomains, [.quota, .directory])
+    }
 }
 
 private actor CallCounter {

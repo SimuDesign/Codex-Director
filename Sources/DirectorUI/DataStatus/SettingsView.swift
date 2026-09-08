@@ -196,7 +196,7 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "1.1.0"
+        return version ?? "1.1.1"
     }
 
     private func section<Content: View>(ordinal: String, titleKey: String, fallback: String, tone: DirectorAccentTone, @ViewBuilder content: () -> Content) -> some View {

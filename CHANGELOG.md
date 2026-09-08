@@ -13,6 +13,13 @@ The project follows semantic versioning for public releases.
 - Add reproducible synthetic startup gates and database/cache failure coverage for the public release baseline.
 - Reduce quota-history query sorting while preserving seven-day, source, predecessor, and deterministic tie semantics.
 
+## 1.1.1
+
+- Synchronized Home's current five-hour and weekly allowance rings with the sanitized live account reading used by the menu bar.
+- Kept the seven-day weekly chart on indexed same-source history and left presentation-cache schema v1 unchanged.
+- Added account usage to the main Refresh data action while the menu-bar account feature is enabled; an explicit opt-out still starts no Codex account process.
+- Updated the Home timestamp to reflect a newer account-only refresh and added regression coverage for source isolation, missing windows, and stale-cache ordering.
+
 ## 1.1.0
 
 - Added same-source five-hour allowance projection alongside the existing weekly allowance, without a database migration.

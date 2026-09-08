@@ -1,10 +1,10 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.1.0`  
+Version: `1.1.1`  
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-09-06
+Last updated: 2026-09-08
 
-The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.0; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
+The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
 The approved [0.2.1 startup repair](../../docs/plans/2026-08-28-startup-performance.md) additionally requires cached, nonblocking startup and delayed background statistics. The gates below are acceptance requirements, not a statement that implementation or measurements have passed.
 
@@ -240,7 +240,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.1.0 with internal build 22, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.1.1 with internal build 23, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -368,7 +368,7 @@ selection/focus, and compact staged-detail behavior. This gate is visual review
 evidence only and does not replace keyboard, AX, privacy, focused-test or
 Release checks.
 
-## 12. Refresh, theme and menu-bar matrix — 1.1.0
+## 12. Refresh, theme and menu-bar matrix — 1.1.1
 
 For zh/en at 720×480 and 1280×800, capture Settings and a representative main
 destination in both Light and Dark. Check the segmented theme selector, the
@@ -405,6 +405,16 @@ states use 5 minutes, aggregate idle at least 30 minutes uses 30 minutes,
 failure backoff is 5/15/30 minutes, and lock/sleep/Low Power Mode cancel and
 resume the schedule. The menu-bar tick must not read SQLite or index source
 files, and a disabled menu bar must register no schedule or OS observers.
+
+For the canonical Codex source, inject an indexed weekly value followed by a
+newer sanitized account snapshot with different five-hour and weekly values.
+Verify Home's current rings and update time change immediately to the account
+values while the seven daily columns remain byte-for-byte equivalent to the
+indexed projection. Repeat with one missing account window, an expired window,
+an older account cache, a model-specific selected source, an account read
+failure with a prior valid snapshot, and an explicit menu-bar opt-out. Main
+Refresh data includes account usage only when enabled, and account-only refresh
+must perform zero SQLite reads and zero source scans.
 
 ## 9. Initial validation record — 2026-08-15
 

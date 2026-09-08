@@ -136,6 +136,28 @@ public final class DirectorAppModel: ObservableObject {
 
     public var canReadAccountUsage: Bool { accountUsageReading != nil }
 
+    /// The Home header represents the newest fact currently visible on that
+    /// surface. Account-only refreshes may update the current rings without
+    /// rebuilding the historical projection.
+    public var homeLastUpdatedAt: Date? {
+        let accountDate = accountUsageSnapshot.flatMap { snapshot -> Date? in
+            guard snapshot.hasUsableAllowance, snapshot.capturedAt <= nowProvider() else { return nil }
+            return snapshot.capturedAt
+        }
+        return [lastRefresh, accountDate].compactMap { $0 }.max()
+    }
+
+    /// Manual main-window refresh shares the account domain only while the
+    /// menu-bar account feature is enabled. An explicit opt-out must not start
+    /// the Codex account process.
+    internal var manualRefreshDomains: Set<RefreshDomain> {
+        var domains: Set<RefreshDomain> = [.quota, .directory]
+        if menuBarEnabled, accountUsageReading != nil {
+            domains.insert(.accountUsage)
+        }
+        return domains
+    }
+
     public func setMenuBarEnabled(_ enabled: Bool) {
         guard menuBarEnabled != enabled else { return }
         menuBarEnabled = enabled
@@ -840,7 +862,11 @@ public final class DirectorAppModel: ObservableObject {
 
     /// Runs the full indexing pass on the configured roots.
     public func startIndexing() async {
-        _ = await requestPresentationRefresh(reason: .manual, force: true)
+        _ = await requestPresentationRefresh(
+            reason: .manual,
+            force: true,
+            domains: manualRefreshDomains
+        )
     }
 
     /// Long-running source work used by the application refresh worker. It

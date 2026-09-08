@@ -1,9 +1,9 @@
 # Codex Director Design System v1
 
-Version: `1.1.0` (visible marketing version; internal build `22`)  
+Version: `1.1.1` (visible marketing version; internal build `23`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-09-06
+Last updated: 2026-09-08
 
 ## 1. Purpose
 
@@ -619,6 +619,24 @@ descriptions are intentionally absent from view, accessibility, help, logs and
 persistence. A failed read preserves an unexpired prior value and otherwise
 shows `—`, never an inferred zero or full allowance. Light/Dark and localization
 use the same app-level stores as the main window.
+
+## 20. Shared live current quota — 1.1.1
+
+Home and the menu bar project their current canonical Codex allowance from the
+same sanitized app-server snapshot. A newer account snapshot replaces only the
+current five-hour and weekly ring values and their reset times; the seven-day
+weekly chart remains entirely backed by indexed same-source observations. The
+merge is presentation-only and does not append a synthetic observation to
+SQLite, source sessions, or historical cache fields. Other selectable indexed
+quota sources remain isolated.
+
+The two windows reconcile independently. When a newer successful account
+snapshot omits a window, that current ring is unavailable rather than retained
+from an older indexed report. A newer indexed observation still wins over an
+older account cache. Account-only refresh republishes the current rings and the
+Home update time without rebuilding the history chart. Main-window Refresh data
+includes the account domain while the menu-bar account feature is enabled; an
+explicit menu-bar opt-out continues to start no Codex account process.
 
 ### Native recomposition delivery record — 2026-08-31
 
