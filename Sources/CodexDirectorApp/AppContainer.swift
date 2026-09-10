@@ -15,6 +15,7 @@ struct AppContainer: Sendable {
     let configuration: IndexingCoordinator.Configuration?
     let snapshotStore: PresentationSnapshotStore?
     let capabilityExportCoordinator: CapabilityExportCoordinator
+    let capabilityRestoreCoordinator: CapabilityRestoreCoordinator
     let runtimeStatus: CodexRuntimeStatus
     let accountUsageReading: CodexAccountUsageReading?
     let bootstrapError: String?
@@ -26,6 +27,7 @@ struct AppContainer: Sendable {
         configuration: IndexingCoordinator.Configuration?,
         snapshotStore: PresentationSnapshotStore? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator,
+        capabilityRestoreCoordinator: CapabilityRestoreCoordinator,
         runtimeStatus: CodexRuntimeStatus = .unavailable,
         accountUsageReading: CodexAccountUsageReading? = nil,
         bootstrapError: String? = nil
@@ -36,6 +38,7 @@ struct AppContainer: Sendable {
         self.configuration = configuration
         self.snapshotStore = snapshotStore
         self.capabilityExportCoordinator = capabilityExportCoordinator
+        self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
         self.runtimeStatus = runtimeStatus
         self.accountUsageReading = accountUsageReading
         self.bootstrapError = bootstrapError
@@ -46,6 +49,7 @@ struct AppContainer: Sendable {
         let fileManager = FileManager.default
         let selectedRuntime = CodexRuntimePreferenceStore().selectedURL()
         async let runtimeStatusTask = CodexRuntimeLocator().locate(userSelectedURL: selectedRuntime)
+        let migrationGate = CapabilityMigrationGate()
 
         guard let databaseURL = try? DatabaseStore.defaultDatabaseURL(),
               let writer = try? DatabaseStore(url: databaseURL),
@@ -58,8 +62,10 @@ struct AppContainer: Sendable {
                 configuration: nil,
                 capabilityExportCoordinator: makeCapabilityExportCoordinator(
                     home: home,
-                    executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil
+                    executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil,
+                    migrationGate: migrationGate
                 ),
+                capabilityRestoreCoordinator: CapabilityRestoreCoordinator(homeDirectory: URL(fileURLWithPath: home), migrationGate: migrationGate),
                 runtimeStatus: runtimeStatus,
                 accountUsageReading: runtimeStatus.isUsable ? runtimeStatus.executableURL.map { CodexAccountUsageReading(executableURL: $0) } : nil,
                 bootstrapError: "derived_database_unavailable"
@@ -92,8 +98,10 @@ struct AppContainer: Sendable {
             configuration: configuration,
             capabilityExportCoordinator: makeCapabilityExportCoordinator(
                 home: home,
-                executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil
+                executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil,
+                migrationGate: migrationGate
             ),
+            capabilityRestoreCoordinator: CapabilityRestoreCoordinator(homeDirectory: URL(fileURLWithPath: home), migrationGate: migrationGate),
             runtimeStatus: runtimeStatus,
             accountUsageReading: runtimeStatus.isUsable ? runtimeStatus.executableURL.map { CodexAccountUsageReading(executableURL: $0) } : nil
         )
@@ -121,7 +129,7 @@ struct AppContainer: Sendable {
         return support.appendingPathComponent("CodexDirector", isDirectory: true).appendingPathComponent("PresentationCache", isDirectory: true).appendingPathComponent("presentation-snapshot.json")
     }
 
-    private static func makeCapabilityExportCoordinator(home: String, executable: URL?) -> CapabilityExportCoordinator {
+    private static func makeCapabilityExportCoordinator(home: String, executable: URL?, migrationGate: CapabilityMigrationGate) -> CapabilityExportCoordinator {
         let codexDirectory = URL(fileURLWithPath: home).appendingPathComponent(".codex", isDirectory: true)
         let projectSources = projectPaths(fromConfigAt: codexDirectory.appendingPathComponent("config.toml"))
             .map { path in
@@ -149,7 +157,8 @@ struct AppContainer: Sendable {
                 producer: CapabilityPackageProducer(version: version, build: build),
                 platform: platform
             ),
-            pluginProvider: pluginProvider
+            pluginProvider: pluginProvider,
+            migrationGate: migrationGate
         )
     }
 

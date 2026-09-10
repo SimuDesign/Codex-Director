@@ -141,7 +141,7 @@ final class AnnotatedUIPolishTests: XCTestCase {
         XCTAssertTrue(settings.contains("size: .settings"))
         XCTAssertTrue(settings.contains("DirectorSecondaryActionButtonStyle(size: .settings, destructive: true)"))
         XCTAssertTrue(settings.contains("DirectorPrimaryActionButtonStyle(size: .settings)"))
-        XCTAssertEqual(settings.components(separatedBy: "size: .settings").count - 1, 3)
+        XCTAssertEqual(settings.components(separatedBy: "size: .settings").count - 1, 4)
         XCTAssertTrue(spacing.contains("settingsActionLabelWidth: CGFloat = 176"))
         XCTAssertTrue(spacing.contains("settingsActionHeight: CGFloat = 48"))
         XCTAssertTrue(scheme.contains("self == .settings ? DirectorSpacing.settingsActionLabelWidth : nil"))

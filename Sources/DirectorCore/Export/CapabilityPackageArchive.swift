@@ -68,13 +68,67 @@ struct CapabilityPackageArchiveWriter: Sendable {
     }
 }
 
+struct CapabilityVerifiedPackage: Sendable {
+    let extractionDirectory: URL
+    let manifest: CapabilityPackageManifestV1
+    let plugins: CapabilityPackagePluginList
+    let requirements: CapabilityPackageRequirementList
+
+    init(
+        extractionDirectory: URL,
+        manifest: CapabilityPackageManifestV1,
+        plugins: CapabilityPackagePluginList,
+        requirements: CapabilityPackageRequirementList
+    ) {
+        self.extractionDirectory = extractionDirectory
+        self.manifest = manifest
+        self.plugins = plugins
+        self.requirements = requirements
+    }
+}
+
 public struct CapabilityPackageArchiveVerifier: Sendable {
     private var fileManager: FileManager { .default }
 
     public init() {}
 
     public func verify(archiveURL: URL, extractionDirectory: URL? = nil) throws {
-        try verify(archiveURL: archiveURL, extractionDirectory: extractionDirectory, cancellation: nil)
+        if let extractionDirectory {
+            _ = try verifyAndExtract(archiveURL: archiveURL, extractionDirectory: extractionDirectory)
+            return
+        }
+        let temporary = fileManager.temporaryDirectory
+            .appendingPathComponent("CodexDirectorVerify-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: temporary) }
+        _ = try verifyAndExtract(archiveURL: archiveURL, extractionDirectory: temporary)
+    }
+
+    /// Verifies a package and leaves its isolated extraction directory for a
+    /// caller that needs to inspect or restore the payload. The caller owns
+    /// cleanup of the returned directory.
+    func verifyAndExtract(
+        archiveURL: URL,
+        extractionDirectory: URL? = nil
+    ) throws -> CapabilityVerifiedPackage {
+        if let extractionDirectory {
+            return try verifyAndExtract(
+                archiveURL: archiveURL,
+                extractionDirectory: extractionDirectory,
+                cancellation: nil
+            )
+        }
+        let temporary = fileManager.temporaryDirectory
+            .appendingPathComponent("CodexDirectorVerify-\(UUID().uuidString)", isDirectory: true)
+        do {
+            return try verifyAndExtract(
+                archiveURL: archiveURL,
+                extractionDirectory: temporary,
+                cancellation: nil
+            )
+        } catch {
+            try? fileManager.removeItem(at: temporary)
+            throw error
+        }
     }
 
     func verify(
@@ -82,11 +136,32 @@ public struct CapabilityPackageArchiveVerifier: Sendable {
         extractionDirectory: URL? = nil,
         cancellation: CapabilityExportCancellation?
     ) throws {
+        if let extractionDirectory {
+            _ = try verifyAndExtract(
+                archiveURL: archiveURL,
+                extractionDirectory: extractionDirectory,
+                cancellation: cancellation
+            )
+            return
+        }
+        let temporary = fileManager.temporaryDirectory
+            .appendingPathComponent("CodexDirectorVerify-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fileManager.removeItem(at: temporary) }
+        _ = try verifyAndExtract(
+            archiveURL: archiveURL,
+            extractionDirectory: temporary,
+            cancellation: cancellation
+        )
+    }
+
+    func verifyAndExtract(
+        archiveURL: URL,
+        extractionDirectory: URL? = nil,
+        cancellation: CapabilityExportCancellation?
+    ) throws -> CapabilityVerifiedPackage {
         try cancellation?.check() ?? Task.checkCancellation()
         let extractionRoot = extractionDirectory ?? fileManager.temporaryDirectory
             .appendingPathComponent("CodexDirectorVerify-\(UUID().uuidString)", isDirectory: true)
-        let ownsExtractionRoot = extractionDirectory == nil
-        defer { if ownsExtractionRoot { try? fileManager.removeItem(at: extractionRoot) } }
         try fileManager.createDirectory(at: extractionRoot, withIntermediateDirectories: true)
         guard try fileManager.contentsOfDirectory(atPath: extractionRoot.path).isEmpty else {
             throw CapabilityExportError.invalidArchive
@@ -235,6 +310,12 @@ public struct CapabilityPackageArchiveVerifier: Sendable {
                 }
             }
         }
+        return CapabilityVerifiedPackage(
+            extractionDirectory: extractionRoot,
+            manifest: manifest,
+            plugins: pluginList,
+            requirements: requirementList
+        )
     }
 
     public func isSafeArchivePath(_ path: String) -> Bool {

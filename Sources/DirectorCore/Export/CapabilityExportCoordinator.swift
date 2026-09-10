@@ -10,26 +10,40 @@ public actor CapabilityExportCoordinator {
     private let pluginProvider: any CapabilityPluginInventoryProviding
     private let now: @Sendable () -> Date
     private let stagingPrefix: String
+    private let migrationGate: CapabilityMigrationGate
     private var prepared: CapabilityPreparedPackage?
     private var prepareTask: Task<CapabilityPreparedPackage, Error>?
     private var writeTask: Task<URL, Error>?
     private var cancellation: CapabilityExportCancellation?
+    private var migrationToken: UUID?
 
     public init(
         environment: CapabilityExportEnvironment,
         pluginProvider: any CapabilityPluginInventoryProviding,
         now: @escaping @Sendable () -> Date = Date.init,
-        stagingPrefix: String = "CodexDirectorExport-"
+        stagingPrefix: String = "CodexDirectorExport-",
+        migrationGate: CapabilityMigrationGate = CapabilityMigrationGate()
     ) {
         self.environment = environment
         self.pluginProvider = pluginProvider
         self.now = now
         self.stagingPrefix = stagingPrefix
+        self.migrationGate = migrationGate
     }
 
-    public func options() throws -> CapabilityExportOptions {
-        guard prepareTask == nil, writeTask == nil else { throw CapabilityExportError.operationInProgress }
-        return CapabilityPackageDiscovery(environment: environment).options()
+    public func options() async throws -> CapabilityExportOptions {
+        guard prepareTask == nil, writeTask == nil, prepared == nil else {
+            throw CapabilityExportError.operationInProgress
+        }
+        let token: UUID
+        do {
+            token = try await migrationGate.acquire()
+        } catch {
+            throw CapabilityExportError.operationInProgress
+        }
+        let result = CapabilityPackageDiscovery(environment: environment).options()
+        await migrationGate.release(token)
+        return result
     }
 
     public func prepare(
@@ -37,7 +51,19 @@ public actor CapabilityExportCoordinator {
         progress: ProgressHandler? = nil
     ) async throws -> CapabilityExportPreview {
         guard prepareTask == nil, writeTask == nil else { throw CapabilityExportError.operationInProgress }
-        discardPreparedPackage()
+        if prepared != nil {
+            discardPreparedPackage()
+            if let oldToken = migrationToken {
+                migrationToken = nil
+                await migrationGate.release(oldToken)
+            }
+        }
+        let token: UUID
+        do {
+            token = try await migrationGate.acquire()
+        } catch {
+            throw CapabilityExportError.operationInProgress
+        }
         let builder = CapabilityPackageBuilder(
             environment: environment,
             pluginProvider: pluginProvider,
@@ -46,6 +72,7 @@ public actor CapabilityExportCoordinator {
         )
         let cancellation = CapabilityExportCancellation()
         self.cancellation = cancellation
+        self.migrationToken = token
         let task = Task.detached(priority: .userInitiated) {
             try await builder.prepare(selection: selection, progress: progress, cancellation: cancellation)
         }
@@ -59,10 +86,14 @@ public actor CapabilityExportCoordinator {
         } catch is CancellationError {
             prepareTask = nil
             self.cancellation = nil
+            migrationToken = nil
+            await migrationGate.release(token)
             throw CapabilityExportError.cancelled
         } catch {
             prepareTask = nil
             self.cancellation = nil
+            migrationToken = nil
+            await migrationGate.release(token)
             throw error
         }
     }
@@ -74,6 +105,17 @@ public actor CapabilityExportCoordinator {
         guard prepareTask == nil, writeTask == nil else { throw CapabilityExportError.operationInProgress }
         guard let prepared else { throw CapabilityExportError.noPreparedPackage }
         guard !prepared.preview.hasBlockingIssues else { throw CapabilityExportError.blockingIssues }
+        let token: UUID
+        if let existing = migrationToken {
+            token = existing
+        } else {
+            do {
+                token = try await migrationGate.acquire()
+            } catch {
+                throw CapabilityExportError.operationInProgress
+            }
+            migrationToken = token
+        }
         let cancellation = CapabilityExportCancellation()
         self.cancellation = cancellation
         let task = Task.detached(priority: .userInitiated) {
@@ -90,14 +132,20 @@ public actor CapabilityExportCoordinator {
             writeTask = nil
             self.cancellation = nil
             discardPreparedPackage()
+            migrationToken = nil
+            await migrationGate.release(token)
             return url
         } catch is CancellationError {
             writeTask = nil
             self.cancellation = nil
+            migrationToken = nil
+            await migrationGate.release(token)
             throw CapabilityExportError.cancelled
         } catch {
             writeTask = nil
             self.cancellation = nil
+            migrationToken = nil
+            await migrationGate.release(token)
             throw error
         }
     }
@@ -108,9 +156,13 @@ public actor CapabilityExportCoordinator {
         writeTask?.cancel()
     }
 
-    public func discardPrepared() throws {
+    public func discardPrepared() async throws {
         guard prepareTask == nil, writeTask == nil else { throw CapabilityExportError.operationInProgress }
         discardPreparedPackage()
+        if let token = migrationToken {
+            migrationToken = nil
+            await migrationGate.release(token)
+        }
     }
 
     public nonisolated static func suggestedFileName(at date: Date = Date()) -> String {

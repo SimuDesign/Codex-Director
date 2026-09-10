@@ -6,12 +6,22 @@ The project follows semantic versioning for public releases.
 
 ## Unreleased
 
+- Add a guided local-safe restore flow for trusted manifest v1 capability packages. It verifies the isolated package, requires manual project mappings, creates missing files only, reports conflicts, and supports an in-session undo without persisting target paths.
 - Prepare Codex Director for a privacy-reviewed open-source release.
 - Add public release auditing and open-source governance documents.
 - Add read-only CI and a pinned, attested, draft-prerelease workflow for universal unnotarized community builds.
 - Add stripped app, package, checksum, dependency, provenance metadata, and archive round-trip verification.
 - Add reproducible synthetic startup gates and database/cache failure coverage for the public release baseline.
 - Reduce quota-history query sorting while preserving seven-day, source, predecessor, and deterministic tie semantics.
+
+## 1.2.0
+
+- Added local restoration of trusted `.codexpack.zip` packages through a staged verify, project mapping, preflight, and final confirmation flow.
+- Existing files are never overwritten or merged. Identical entries are skipped; conflicting capabilities can be excluded while the package remains available for review.
+- Restore writes are anchored to approved directory descriptors, reject symlink ancestry and target races, journal every type before exclusive atomic publication, and preserve executable bits plus descriptor-verified relative symlinks.
+- Failed/cancelled restore and one-session undo never delete restored objects. Every approved root receives a private mode-0700 quarantine before writes; verified unchanged objects move there and remain available through an in-memory Finder reveal action, while replaced, moved, or user-modified objects stay in place and are reported. Sheet-close discard keeps the shared migration lock until active cleanup finishes.
+- Conflict review shows capped redacted text differences and metadata-only binary details. Plugins and external requirements are concrete read-only checklists; restore never executes content, installs dependencies/plugins, modifies Codex configuration, or uses the network.
+- Added bilingual restore UI, privacy copy, manifest v1 round-trip tests, and a shared export/restore migration lock.
 
 ## 1.1.1
 

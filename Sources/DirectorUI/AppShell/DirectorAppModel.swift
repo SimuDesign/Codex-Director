@@ -105,6 +105,8 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var diagnosticsError: String?
     @Published public private(set) var capabilityExportProgress: CapabilityExportProgress?
     @Published public private(set) var isCapabilityExporting = false
+    @Published public private(set) var capabilityRestoreProgress: CapabilityRestoreProgress?
+    @Published public private(set) var isCapabilityRestoring = false
     @Published public private(set) var menuBarEnabled: Bool
     @Published public private(set) var accountUsageSnapshot: CodexAccountUsageSnapshot?
     @Published public private(set) var accountUsageError: String?
@@ -288,6 +290,7 @@ public final class DirectorAppModel: ObservableObject {
     public private(set) var coordinator: IndexingCoordinator?
     public private(set) var configuration: IndexingCoordinator.Configuration?
     public private(set) var capabilityExportCoordinator: CapabilityExportCoordinator?
+    public private(set) var capabilityRestoreCoordinator: CapabilityRestoreCoordinator?
     public private(set) var presentationSnapshotStore: PresentationSnapshotStore?
     public private(set) var accountUsageReading: CodexAccountUsageReading?
     private var accountUsageRefreshScheduler: AccountUsageRefreshScheduler?
@@ -360,6 +363,7 @@ public final class DirectorAppModel: ObservableObject {
         coordinator: IndexingCoordinator? = nil,
         configuration: IndexingCoordinator.Configuration? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
+        capabilityRestoreCoordinator: CapabilityRestoreCoordinator? = nil,
         selection: DirectorSidebarItem? = .home,
         classificationOverrides: ResourceClassificationOverrideStore = ResourceClassificationOverrideStore(),
         evaluationStore: InvocationEvaluationStore = InvocationEvaluationStore(),
@@ -378,6 +382,9 @@ public final class DirectorAppModel: ObservableObject {
         self.coordinator = coordinator
         self.configuration = configuration
         self.capabilityExportCoordinator = capabilityExportCoordinator
+        self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
+        self.capabilityRestoreProgress = nil
+        self.isCapabilityRestoring = false
         self.presentationSnapshotStore = presentationSnapshotStore
         self.accountUsageReading = accountUsageReading
         self.accountUsageRefreshScheduler = nil
@@ -471,6 +478,7 @@ public final class DirectorAppModel: ObservableObject {
         coordinator: IndexingCoordinator?,
         configuration: IndexingCoordinator.Configuration?,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
+        capabilityRestoreCoordinator: CapabilityRestoreCoordinator? = nil,
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
         accountUsageReading: CodexAccountUsageReading? = nil,
         bootstrapError: String? = nil
@@ -487,6 +495,7 @@ public final class DirectorAppModel: ObservableObject {
         self.coordinator = coordinator
         self.configuration = configuration
         self.capabilityExportCoordinator = capabilityExportCoordinator
+        self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
         self.presentationSnapshotStore = presentationSnapshotStore
         self.accountUsageReading = accountUsageReading
         configureAccountUsageRefreshScheduler()
@@ -539,6 +548,75 @@ public final class DirectorAppModel: ObservableObject {
         return try await capabilityExportCoordinator.writePreparedPackage(to: destinationURL) { [weak self] progress in
             Task { @MainActor in self?.capabilityExportProgress = progress }
         }
+    }
+
+    // MARK: - Portable capability restore
+
+    public func openCapabilityRestorePackage(at url: URL, trustedSource: Bool) async throws -> CapabilityRestorePackageInfo {
+        guard let capabilityRestoreCoordinator else { throw CapabilityRestoreError.noPackage }
+        capabilityRestoreProgress = CapabilityRestoreProgress(phase: .verifying)
+        isCapabilityRestoring = true
+        do {
+            let info = try await capabilityRestoreCoordinator.openPackage(at: url, trustedSource: trustedSource) { [weak self] progress in
+                Task { @MainActor in self?.capabilityRestoreProgress = progress }
+            }
+            isCapabilityRestoring = false
+            capabilityRestoreProgress = nil
+            return info
+        } catch {
+            isCapabilityRestoring = false
+            capabilityRestoreProgress = nil
+            throw error
+        }
+    }
+
+    public func previewCapabilityRestore(selection: CapabilityRestoreSelection) async throws -> CapabilityRestorePreview {
+        guard let capabilityRestoreCoordinator else { throw CapabilityRestoreError.noPackage }
+        capabilityRestoreProgress = CapabilityRestoreProgress(phase: .preflighting)
+        defer { capabilityRestoreProgress = nil }
+        return try await capabilityRestoreCoordinator.preview(selection: selection) { [weak self] progress in
+            Task { @MainActor in self?.capabilityRestoreProgress = progress }
+        }
+    }
+
+    public func restoreCapabilityPackage(selection: CapabilityRestoreSelection) async throws -> CapabilityRestoreResult {
+        guard let capabilityRestoreCoordinator else { throw CapabilityRestoreError.noPackage }
+        isCapabilityRestoring = true
+        defer {
+            isCapabilityRestoring = false
+            capabilityRestoreProgress = nil
+        }
+        let result = try await capabilityRestoreCoordinator.restore(selection: selection) { [weak self] progress in
+            Task { @MainActor in self?.capabilityRestoreProgress = progress }
+        }
+        if result.rescanRequired, coordinator != nil {
+            await startIndexing()
+        }
+        return result
+    }
+
+    public func cancelCapabilityRestore() {
+        guard let capabilityRestoreCoordinator else { return }
+        Task { await capabilityRestoreCoordinator.cancel() }
+    }
+
+    public func discardCapabilityRestore() {
+        guard let capabilityRestoreCoordinator else { return }
+        Task { await capabilityRestoreCoordinator.discard() }
+        // An active restore owns the shared migration gate until cancellation
+        // and mandatory cleanup finish. Its own `defer` clears presentation
+        // state; closing the sheet must not make a still-running restore appear
+        // idle or permit a concurrent export.
+        if !isCapabilityRestoring { capabilityRestoreProgress = nil }
+    }
+
+    public func rollbackCapabilityRestore() async throws -> CapabilityRestoreRollbackResult {
+        guard let capabilityRestoreCoordinator else { throw CapabilityRestoreError.rollbackUnavailable }
+        let result = try await capabilityRestoreCoordinator.rollbackLastOperation()
+        if result.quarantinedCount > 0 || result.quarantinedDirectoryCount > 0, coordinator != nil {
+            await startIndexing()
+        }
+        return result
     }
 
     public func cancelCapabilityExport() {
