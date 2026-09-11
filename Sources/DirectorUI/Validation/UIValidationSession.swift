@@ -241,7 +241,7 @@ public final class UIValidationSession: ObservableObject {
             environment: CapabilityExportEnvironment(
                 homeDirectory: home,
                 projects: [CapabilityExportProjectSource(directory: project, displayName: "Synthetic Project")],
-                producer: CapabilityPackageProducer(version: "1.1.1", build: "23"),
+                producer: CapabilityPackageProducer(version: "1.2.0", build: "24"),
                 platform: CapabilityPackagePlatform(operatingSystem: "macOS", operatingSystemVersion: "26.0", architecture: "arm64")
             ),
             pluginProvider: ValidationPluginProvider(),

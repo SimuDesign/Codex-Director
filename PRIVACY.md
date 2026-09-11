@@ -26,6 +26,10 @@ Director-owned SQLite data contains normalized inventory, privacy-safe usage evi
 
 Capability packages are unencrypted local ZIP files written only to a location selected by the user. Export preflight blocks recognized credentials and unredacted personal paths. Binary resources may be included but are marked as not content-scanned. Users are responsible for protecting exported packages and restoring only trusted packages.
 
+## Restore quarantine
+
+Before any restore target write, Codex Director creates an operation-scoped private directory with mode 0700 inside each approved local mapping root. Failure cleanup and in-session Undo never unlink restored objects. They move only objects that can still be verified as created and unchanged into the private quarantine; changed, replaced, moved, or uncertain objects remain in place and are reported. Quarantine contents are never automatically deleted by the app. An in-memory local URL supports an explicit “Reveal in Finder” action, but the raw path is not rendered, logged, cached, written to the package, or persisted as a rollback receipt. Users may inspect and manually delete quarantine contents outside the app when ready.
+
 The menu-bar cache is part of the existing local presentation cache and remains
 on the device. It is not a second account database and is never uploaded by
 Codex Director. Users can disable the menu-bar surface in Settings; that

@@ -2,7 +2,7 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.1.1`. Requires macOS 26 or later.
+> Current development version: `1.2.0`. Requires macOS 26 or later.
 
 [简体中文](README.zh-CN.md)
 
@@ -12,6 +12,7 @@ Codex Director is a native macOS application for understanding and moving your p
 - Shows privacy-safe recent usage evidence and data freshness without treating activity as proof of effectiveness.
 - Records lightweight human evaluations and classification corrections alongside the evidence.
 - Exports an open, unencrypted `.codexpack.zip` with manifests, checksums, plugin and dependency lists, and bilingual recovery instructions.
+- Restores a trusted `.codexpack.zip` locally through an isolated verification and preflight flow. It creates missing files only, skips identical files, stops on conflicts, and never executes or installs package content. Before writing, it creates a private mode-0700 quarantine. Failure cleanup and in-session Undo move verified unchanged objects out of their logical paths into that quarantine without deleting them; Codex Director never automatically destroys quarantine contents. The result can reveal the local folder in Finder for manual review and deletion.
 - Supports Simplified Chinese and English, Light and Dark themes, and shared background refresh.
 - Shows a privacy-safe allowance summary in the macOS menu bar by default; when the Codex account reports both windows, it shows the five-hour and weekly percentages, otherwise it shows the one available percentage. Users can turn it off in Settings. The popover includes each available reset time, reset-card count, data refresh, and a shortcut to the main window. While enabled, account-only refresh adapts between bounded five- and thirty-minute intervals and pauses while the Mac is locked, asleep, or in Low Power Mode.
 - Keeps Home's current five-hour and weekly rings synchronized with the same sanitized live account reading while retaining indexed, same-source observations as the sole evidence for the seven-day weekly chart.

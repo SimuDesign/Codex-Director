@@ -28,6 +28,46 @@ If no usable runtime is available, filesystem inventory continues without runtim
 
 Exports use manifest v1 with checksums, logical roots, path placeholders, plugin inventory, dependency inventory, and bilingual recovery instructions. Packages are local and unencrypted. The app verifies the completed ZIP before moving it to the user-selected destination.
 
+Restore uses the same manifest v1 verifier but keeps the package in an isolated
+temporary extraction owned by an app-scoped `CapabilityRestoreCoordinator`.
+Global roots are fixed to the current user's approved Agent, Skill, and
+instruction locations; each project requires an explicit in-memory folder
+mapping. Preflight classifies each entry as create, identical skip, or
+conflict, treats an existing `AGENTS.md` as a conflict, and groups Agent
+configuration/Brief pairs and Skill directories atomically. The coordinator
+shares a migration lock with export and rechecks the archive and targets before
+writing. Target access is anchored to the approved Home/project directory file
+descriptor; every descendant is traversed with no-follow `*at` operations. An
+operation-scoped mode-0700 quarantine is prepared under every approved root
+before the first target write. Files, directories, and symlinks receive a
+pre-create journal record under unpredictable same-directory staging names;
+creation is then followed by descriptor binding and exclusive
+`renameatx_np(RENAME_EXCL)` publication. Relative
+symlink targets are resolved again through the approved root descriptor with
+no-follow traversal before and after publication. A staged symlink is first
+observed with `fstatat(AT_SYMLINK_NOFOLLOW)`, then opened with `O_SYMLINK`; an
+immediate `fstat` must match that observation exactly before the FD-derived
+identity enters the journal. The staging name is matched to the held FD again
+before publication, and the final name plus target are matched again after
+publication. Rollback records close-on-
+exec parent/object descriptors, inode, hash, type, mode, and placeholder path
+for every created item. Production cleanup contains no destructive unlink.
+Cancellation, failure, and in-session Undo move verified unchanged objects
+atomically from their logical names into the operation quarantine and preserve
+them there; changed, replaced, moved, nonempty, or uncertain objects stay in
+place and are reported. If post-create descriptor binding itself fails, the
+unpredictable staging name is left in place and reported because its current
+pathname cannot safely prove object ownership. A final rename race is verified after movement and any
+replacement is returned to its original name when possible. Quarantine content
+is never automatically destroyed. Its raw local URL remains in memory only for
+the explicit Finder reveal action. A generation
+guard defers sheet-close discard and migration-lock release until active
+restore/undo cleanup has reached a terminal state. No
+raw target path or restore receipt is persisted. Package content is never
+executed, merged, uploaded, or used to install plugins/dependencies. Conflict
+review shows capped redacted text differences or binary metadata only, plus
+the concrete read-only plugin and dependency checklists.
+
 ## Privacy boundary
 
 Only allowlisted normalized evidence reaches persistence. Prompts, arguments, raw outputs, credentials, cookies, session bodies, and unredacted personal paths are excluded.

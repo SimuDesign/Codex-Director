@@ -11,6 +11,7 @@ public struct DirectorStartupServices: Sendable {
     public let configuration: IndexingCoordinator.Configuration?
     public let snapshotStore: PresentationSnapshotStore?
     public let capabilityExportCoordinator: CapabilityExportCoordinator?
+    public let capabilityRestoreCoordinator: CapabilityRestoreCoordinator?
     public let accountUsageReading: CodexAccountUsageReading?
     public let safeError: String?
 
@@ -21,6 +22,7 @@ public struct DirectorStartupServices: Sendable {
         configuration: IndexingCoordinator.Configuration?,
         snapshotStore: PresentationSnapshotStore?,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
+        capabilityRestoreCoordinator: CapabilityRestoreCoordinator? = nil,
         accountUsageReading: CodexAccountUsageReading? = nil,
         safeError: String? = nil
     ) {
@@ -30,6 +32,7 @@ public struct DirectorStartupServices: Sendable {
         self.configuration = configuration
         self.snapshotStore = snapshotStore
         self.capabilityExportCoordinator = capabilityExportCoordinator
+        self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
         self.accountUsageReading = accountUsageReading
         self.safeError = safeError
     }
@@ -77,6 +80,7 @@ public final class DirectorStartupController: ObservableObject {
                 coordinator: services.coordinator,
                 configuration: services.configuration,
                 capabilityExportCoordinator: services.capabilityExportCoordinator,
+                capabilityRestoreCoordinator: services.capabilityRestoreCoordinator,
                 presentationSnapshotStore: cache ?? services.snapshotStore,
                 accountUsageReading: services.accountUsageReading,
                 // Keep the actor created by the prebootstrap cache path as

@@ -1,6 +1,6 @@
 # Codex Director Design System v1
 
-Version: `1.1.1` (visible marketing version; internal build `23`)  
+Version: `1.2.0` (visible marketing version; internal build `24`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
 Last updated: 2026-09-08
@@ -637,6 +637,46 @@ older account cache. Account-only refresh republishes the current rings and the
 Home update time without rebuilding the history chart. Main-window Refresh data
 includes the account domain while the menu-bar account feature is enabled; an
 explicit menu-bar opt-out continues to start no Codex account process.
+
+## 21. Local-safe capability restore — 1.2.0
+
+Settings section 03 exposes a guided restore sheet using the same Scheme A
+spacing, typography, contrast, and native macOS controls as export. The flow
+keeps these stages visible: choose package, confirm trusted source, verify in
+an isolated temporary directory, map every project manually, review a
+conflict-aware preview, confirm, restore, rescan, and show the result.
+
+The restore surface never displays or persists a raw destination path. Global
+entries map only to the approved current-user Agent, Skill, and instruction
+roots; each project entry requires an explicit per-session folder mapping.
+Missing files are the only create action. Identical files are skipped,
+`AGENTS.md` and all other differing type/content/executable-bit targets are
+conflicts, and a conflicting Agent or Skill is treated as an atomic capability
+that can be excluded before continuing. Text differences are short and
+redacted; binary and nested archive entries show metadata and an unscanned
+warning without opening or executing them.
+
+Restore prepares an operation-scoped mode-0700 private quarantine in every
+approved root before any target write, and pre-journals every same-directory
+staging name before its creation syscall. It shares the export migration lock,
+rechecks package, destination, and relative symlink target chains through
+no-follow directory descriptors, and publishes exclusively. Failure cleanup
+and in-session Undo perform no destructive unlink: verified unchanged objects
+move atomically out of their logical paths into private quarantine, while
+changed, replaced, moved, nonempty, or uncertain objects remain in place and
+are reported. A post-create item that cannot be bound to a stable descriptor
+also remains at its unpredictable staging name and is reported; the app does
+not move an object based on a mutable pathname alone. The app never
+automatically destroys quarantine contents. Result
+UI shows privacy-safe status plus a native secondary “Reveal in Finder” action;
+the raw URL stays in memory and is never rendered, logged, or persisted. A
+successful operation has one in-memory undo action guarded by object identity
+and post-restore hashes; closing the result
+requests cancellation but does not release the lock or discard state until an
+active restore/undo and mandatory cleanup finish. The
+UI and accessibility tree must not expose package instructions as commands,
+and no restore path installs plugins/dependencies, edits Codex configuration,
+uses the network, or executes package content.
 
 ### Native recomposition delivery record — 2026-08-31
 

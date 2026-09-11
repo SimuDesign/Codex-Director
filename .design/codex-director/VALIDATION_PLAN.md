@@ -1,6 +1,6 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.1.1`  
+Version: `1.2.0`  
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
 Last updated: 2026-09-08
 
@@ -240,7 +240,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.1.1 with internal build 23, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.2.0 with internal build 24, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -415,6 +415,61 @@ an older account cache, a model-specific selected source, an account read
 failure with a prior valid snapshot, and an explicit menu-bar opt-out. Main
 Refresh data includes account usage only when enabled, and account-only refresh
 must perform zero SQLite reads and zero source scans.
+
+## 13. Local-safe restore matrix — 1.2.0
+
+In a synthetic Home A → Home B round trip, verify the restore sheet in zh/en ×
+Light/Dark at 720×480 and 1280×800. Exercise package selection, explicit
+trusted-source confirmation, isolated verification, project mapping, preflight,
+conflict review, final confirmation, progress/cancel, success and in-session
+undo. Verify the fixed stage order and that Settings action sizing remains
+176pt content width by 48pt outer height.
+
+The package verifier must reject format changes, missing metadata, duplicate or
+escaping paths, checksum/size/executable-bit mismatches, and unsafe symlinks.
+Existing targets are classified as create, identical skip, or conflict; every
+existing `AGENTS.md` is a conflict even when bytes match. A conflicting Agent
+TOML/Brief pair or Skill directory blocks the atomic capability but permits
+other selected capabilities to continue after explicit exclusion. Text
+differences are redacted and capped; binary and nested archive content is never
+opened or executed.
+
+Before writing, mutate the synthetic package and target to prove the operation
+stops without a partial logical result. Confirm every approved root has an
+operation-scoped mode-0700 quarantine before the first target write; failure to
+prepare any quarantine blocks all target writes. Inject immediately after
+directory, regular-file, and symlink creation to prove each unpredictable
+staging name was pre-journaled. When the injected fault precedes stable
+descriptor binding, confirm the staging object remains in place with an
+`cleanup_unverified_staging_preserved` residual and the logical target remains
+absent; it must not be moved by pathname alone. Cancellation, disk/permission failure, and Undo
+must never unlink restored objects: verified unchanged items move out of their
+logical paths into quarantine and remain there until the user deletes them
+outside the app. Force replacement in the final verification-to-rename window
+and confirm the replacement is restored, then pre-create the random quarantine
+name and confirm the logical object remains in place. Modified, moved, nonempty,
+or uncertain objects must stay in place and produce structured residuals. Point
+a relative package link through an existing symlink directory and confirm no
+link is published. Inject failure after exclusive publication and during
+directory permission application to prove the journal handles both cases.
+For staged symlinks, deterministically replace the name between the first
+no-follow `fstatat` and `openat(O_SYMLINK)`, immediately before publication,
+and immediately after publication. Confirm the held FD identity mismatch is
+detected at every boundary, pre-publication replacements never reach the
+logical target, and both original and replacement links remain recoverable.
+Suspend restore, close the sheet,
+and prove a new export remains blocked until cancellation cleanup completes.
+After success, modify one restored file and confirm undo stops for that item
+without deleting it; closing the result invalidates the journal only after any
+active operation reaches a terminal state.
+
+Verify the result’s native secondary Reveal action opens the quarantine in
+Finder without deleting it. The AX tree, logs, and persistent cache must contain
+no raw quarantine URL, package path, project destination, prompt, token, cookie,
+credential, or package instruction.
+The flow performs no network access, script execution, plugin/dependency
+installation, Codex configuration write, or second indexer, and rescan uses the
+existing shared refresh/index coordinator only.
 
 ## 9. Initial validation record — 2026-08-15
 

@@ -10,6 +10,7 @@ public struct SettingsView: View {
     @State private var confirmDelete = false
     @State private var operationError: String?
     @State private var showsCapabilityExport = false
+    @State private var showsCapabilityRestore = false
 
     public init(model: DirectorAppModel) { _model = ObservedObject(wrappedValue: model) }
 
@@ -104,12 +105,23 @@ public struct SettingsView: View {
                                 Text(t("settings.migration.localWarning", "The package is an unencrypted local file. Source capability files are never modified, and the package is written only to the location you choose."))
                                     .font(DirectorTypography.supporting)
                                     .foregroundStyle(DirectorColor.textSecondary)
-                                Button(t("settings.migration.export", "Export capability package")) {
-                                    showsCapabilityExport = true
+                                HStack(spacing: DirectorSpacing.space3) {
+                                    Button(t("settings.migration.export", "Export capability package")) {
+                                        showsCapabilityExport = true
+                                    }
+                                    .buttonStyle(DirectorPrimaryActionButtonStyle(size: .settings))
+                                    .disabled(model.capabilityExportCoordinator == nil || model.isCapabilityExporting || model.isCapabilityRestoring)
+                                    .accessibilityHint(t("settings.migration.exportHint", "Choose content, run a safety preflight, then save a local ZIP package."))
+                                    Button(t("settings.migration.restore", "Restore capability package")) {
+                                        showsCapabilityRestore = true
+                                    }
+                                    .buttonStyle(DirectorSecondaryActionButtonStyle(size: .settings))
+                                    .disabled(model.capabilityRestoreCoordinator == nil || model.isCapabilityExporting || model.isCapabilityRestoring)
+                                    .accessibilityHint(t("settings.migration.restoreHint", "Verify a trusted local package, map projects manually, then add only missing files. Undo moves unchanged items to a private quarantine without deleting them."))
                                 }
-                                .buttonStyle(DirectorPrimaryActionButtonStyle(size: .settings))
-                                .disabled(model.capabilityExportCoordinator == nil || model.isCapabilityExporting)
-                                .accessibilityHint(t("settings.migration.exportHint", "Choose content, run a safety preflight, then save a local ZIP package."))
+                                Text(t("settings.migration.restoreQuarantine", "Restore cleanup and Undo never delete restored objects. Verified unchanged items move to a private quarantine that the result can reveal in Finder."))
+                                    .font(DirectorTypography.supporting)
+                                    .foregroundStyle(DirectorColor.textSecondary)
                             }
                             section(ordinal: "04", titleKey: "settings.privacy.title", fallback: "Privacy", tone: .mint) {
                                 Text(t("settings.privacy.body", "Codex Director runs locally. It reads resources and session logs read-only; prompts, responses, arguments, and output text are not stored."))
@@ -159,6 +171,10 @@ public struct SettingsView: View {
             CapabilityExportSheet(model: model)
                 .environmentObject(languageStore)
         }
+        .sheet(isPresented: $showsCapabilityRestore) {
+            CapabilityRestoreSheet(model: model)
+                .environmentObject(languageStore)
+        }
         .task { await model.loadDiagnosticsIfNeeded() }
     }
 
@@ -196,7 +212,7 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "1.1.1"
+        return version ?? "1.2.0"
     }
 
     private func section<Content: View>(ordinal: String, titleKey: String, fallback: String, tone: DirectorAccentTone, @ViewBuilder content: () -> Content) -> some View {

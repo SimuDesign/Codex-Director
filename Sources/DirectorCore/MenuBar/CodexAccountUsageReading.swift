@@ -173,7 +173,7 @@ public struct CodexAccountUsageReading: Sendable {
 
     public func read() async throws -> CodexAccountUsageSnapshot {
         guard let executableURL else { throw CodexAccountUsageReadError.unavailable }
-        let request = Self.requestPayload(version: "1.1.1")
+        let request = Self.requestPayload(version: "1.2.0")
         do {
             let response = try await exchange(executableURL, request, timeoutSeconds, maxOutputBytes)
             return try Self.parse(response: response, capturedAt: now())
