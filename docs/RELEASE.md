@@ -28,11 +28,11 @@ All reusable GitHub Actions are pinned to full commit SHAs. The workflow verifie
 
 The `v<marketing-version>` tag must match `MARKETING_VERSION`. `CURRENT_PROJECT_VERSION` is a monotonically increasing integer. Public release notes must state the exact signing and notarization status.
 
-The public application currently targets `1.2.0` (build `24`). The planned
+The public application currently targets `1.3.0` (build `25`). The planned
 sequence remains historical release context; create a new tag only after the
 project version and build number are updated together and all release gates
-pass. The `1.2.0` release includes local-safe restore while retaining manifest
-v1 compatibility.
+pass. The `1.3.0` release includes local-safe restore and Capability Groups
+while retaining manifest v1 compatibility.
 
 ## Workflow security
 

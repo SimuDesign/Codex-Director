@@ -86,6 +86,11 @@ public final class UIValidationSession: ObservableObject {
             writeData: { [preferences] data in preferences.set(data, forKey: InvocationEvaluationStore.defaultsKey); return true },
             removeData: { [preferences] in preferences.removeObject(forKey: InvocationEvaluationStore.defaultsKey); return true }
         )
+        let groupingStore = CapabilityGroupingStore(
+            readData: { [preferences] in preferences.data(forKey: CapabilityGroupingStore.defaultsKey) },
+            writeData: { [preferences] data in preferences.set(data, forKey: CapabilityGroupingStore.defaultsKey); return true },
+            removeData: { [preferences] in preferences.removeObject(forKey: CapabilityGroupingStore.defaultsKey) }
+        )
         let store: DatabaseStore
         do {
             store = try DatabaseStore(url: databaseURL)
@@ -102,7 +107,8 @@ public final class UIValidationSession: ObservableObject {
             classificationOverrides: classificationStore,
             evaluationStore: evaluationStore,
             nowProvider: { Fixture.referenceNow },
-            calendar: Fixture.validationCalendar
+            calendar: Fixture.validationCalendar,
+            capabilityGroupingStore: groupingStore
         )
     }
 
@@ -151,6 +157,11 @@ public final class UIValidationSession: ObservableObject {
                 writeData: { [newPreferences] data in newPreferences.set(data, forKey: InvocationEvaluationStore.defaultsKey); return true },
                 removeData: { [newPreferences] in newPreferences.removeObject(forKey: InvocationEvaluationStore.defaultsKey); return true }
             )
+            let groupingStore = CapabilityGroupingStore(
+                readData: { [newPreferences] in newPreferences.data(forKey: CapabilityGroupingStore.defaultsKey) },
+                writeData: { [newPreferences] data in newPreferences.set(data, forKey: CapabilityGroupingStore.defaultsKey); return true },
+                removeData: { [newPreferences] in newPreferences.removeObject(forKey: CapabilityGroupingStore.defaultsKey) }
+            )
             let newStore = try DatabaseStore(url: newURL)
             let newModel = DirectorAppModel(
                 store: newStore,
@@ -160,7 +171,8 @@ public final class UIValidationSession: ObservableObject {
                 classificationOverrides: classificationStore,
                 evaluationStore: evaluationStore,
                 nowProvider: { Fixture.referenceNow },
-                calendar: Fixture.validationCalendar
+                calendar: Fixture.validationCalendar,
+                capabilityGroupingStore: groupingStore
             )
             try await seed(dataset: dataset, store: newStore, evaluationStore: evaluationStore)
             try await newModel.refresh()

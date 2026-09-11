@@ -40,7 +40,12 @@ private final class StartupPerformanceLaunchState: ObservableObject {
                 removeData: { preferences.remove(InvocationEvaluationStore.defaultsKey); return true }
             ),
             previewMode: false,
-            bootstrapPending: true
+            bootstrapPending: true,
+            capabilityGroupingStore: CapabilityGroupingStore(
+                readData: { preferences.data(forKey: CapabilityGroupingStore.defaultsKey) },
+                writeData: { preferences.set($0, forKey: CapabilityGroupingStore.defaultsKey); return true },
+                removeData: { preferences.remove(CapabilityGroupingStore.defaultsKey) }
+            )
         )
 
         // Capture only immutable, test-owned values in the @Sendable factories.

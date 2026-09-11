@@ -5,7 +5,7 @@ Codex Director separates local source discovery from Director-owned projections 
 ## Layers
 
 - **DirectorCore** discovers local resources, parses allowlisted evidence, coordinates refresh, persists projections and evaluations, and builds capability packages.
-- **DirectorUI** renders the six primary destinations, detail flows, settings, export flow, themes, localization, and accessibility states.
+- **DirectorUI** renders the seven primary destinations, detail flows, settings, export flow, themes, localization, and accessibility states.
 - **CodexDirectorApp** owns application composition, dependency injection, windows, and app-level shared stores.
 
 ## Data authority
@@ -71,3 +71,15 @@ the concrete read-only plugin and dependency checklists.
 ## Privacy boundary
 
 Only allowlisted normalized evidence reaches persistence. Prompts, arguments, raw outputs, credentials, cookies, session bodies, and unredacted personal paths are excluded.
+
+## Capability grouping
+
+Capability Groups is a presentation-only projection over the current Agent and
+Skill directory. `CapabilityGroupingClassifier` uses versioned deterministic
+name and declared-purpose rules without AI, network access, or source writes.
+`CapabilityGroupingStore` persists only user-created category names and manual
+stable-resource-ID overrides under its dedicated UserDefaults key. Automatic
+results are recomputed after each directory projection, disappearing IDs retain
+their manual override, and deleting a custom category moves its assignments to
+the immutable Uncategorized group. Grouping preferences survive derived-index
+deletion and are not included in manifest v1 capability packages.

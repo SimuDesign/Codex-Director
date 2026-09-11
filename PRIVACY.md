@@ -22,6 +22,14 @@ or index capability files.
 
 Director-owned SQLite data contains normalized inventory, privacy-safe usage evidence, cache metadata, user classifications, and manual evaluations. Application preferences use Director-specific UserDefaults keys. Removing Director data does not remove source Agents, Skills, plugins, projects, or Codex sessions.
 
+Capability grouping preferences use a separate Director-owned UserDefaults key
+and contain only custom category names, stable resource IDs, and category IDs.
+They do not contain source paths, capability bodies, prompts, sessions, or
+account data. Automatic group suggestions are computed locally from indexed
+names and declared purposes; no AI service or network request is used. Grouping
+preferences are retained when derived index data is deleted and are not added
+to capability packages.
+
 ## Exports
 
 Capability packages are unencrypted local ZIP files written only to a location selected by the user. Export preflight blocks recognized credentials and unredacted personal paths. Binary resources may be included but are marked as not content-scanned. Users are responsible for protecting exported packages and restoring only trusted packages.

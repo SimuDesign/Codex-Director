@@ -111,6 +111,9 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var accountUsageSnapshot: CodexAccountUsageSnapshot?
     @Published public private(set) var accountUsageError: String?
     @Published public private(set) var accountUsageReadRevision: UInt64 = 0
+    @Published public private(set) var capabilityGroupingProjection: CapabilityGroupingProjection
+    @Published public private(set) var capabilityGroupingPreferencesState: CapabilityGroupingPreferencesState
+    @Published public private(set) var capabilityGroupingError: String?
 
     /// One truthful application-wide busy state for refresh controls. Source
     /// indexing and bounded presentation projection are both visible; queued,
@@ -279,6 +282,7 @@ public final class DirectorAppModel: ObservableObject {
     private var libraryReloadGeneration: [String: Int] = [:]
     public let classificationOverrides: ResourceClassificationOverrideStore
     public let evaluationStore: InvocationEvaluationStore
+    public let capabilityGroupingStore: CapabilityGroupingStore
     private let menuBarPreferences: MenuBarPreferences
     /// Keeps model instances in separate windows aligned with the shared
     /// application preference. The App scene and Settings may observe the
@@ -375,7 +379,8 @@ public final class DirectorAppModel: ObservableObject {
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
         presentationRefreshCoordinator: RefreshCoordinator? = nil,
         menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
-        accountUsageReading: CodexAccountUsageReading? = nil
+        accountUsageReading: CodexAccountUsageReading? = nil,
+        capabilityGroupingStore: CapabilityGroupingStore = CapabilityGroupingStore(defaults: .standard)
     ) {
         self.store = store
         self.readStore = readStore ?? store
@@ -396,6 +401,7 @@ public final class DirectorAppModel: ObservableObject {
         self.selection = selection
         self.classificationOverrides = classificationOverrides
         self.evaluationStore = evaluationStore
+        self.capabilityGroupingStore = capabilityGroupingStore
         var statisticsCalendar = calendar
         statisticsCalendar.locale = Locale(identifier: "en_US_POSIX")
         self.statisticsCalendar = statisticsCalendar
@@ -432,6 +438,14 @@ public final class DirectorAppModel: ObservableObject {
             findings: usesPreview ? SyntheticPreviewData.findings : [],
             sessions: usesPreview ? SyntheticPreviewData.tasks : []
         )
+        let previewCatalog = CapabilityCatalog(resources: usesPreview ? SyntheticPreviewData.resources : [], relations: usesPreview ? SyntheticPreviewData.relations : []).entries
+        self.capabilityGroupingProjection = CapabilityGroupingProjection(
+            resources: usesPreview ? SyntheticPreviewData.resources : [],
+            catalog: previewCatalog,
+            preferences: capabilityGroupingStore.preferences()
+        )
+        self.capabilityGroupingPreferencesState = capabilityGroupingStore.preferencesState()
+        self.capabilityGroupingError = nil
         self.libraryModels = CapabilityCategory.allCases.map { CapabilityLibraryViewModel(category: $0) }
         if usesPreview {
             let catalog = CapabilityCatalog(resources: SyntheticPreviewData.resources, relations: SyntheticPreviewData.relations).entries
@@ -1061,6 +1075,7 @@ public final class DirectorAppModel: ObservableObject {
             )
         )
         applyClassificationOverrides()
+        refreshCapabilityGroupingProjection()
         tasks = TasksViewModel(
             sessions: sessions,
             invocationsBySession: [:],
@@ -1260,11 +1275,188 @@ public final class DirectorAppModel: ObservableObject {
         }
     }
 
+    // MARK: - Capability groups
+
+    /// Current Agent/Skill grouping projection. Automatic rules are evaluated
+    /// from the live directory; only explicit user overrides are persisted.
+    public var capabilityGroups: CapabilityGroupingProjection {
+        capabilityGroupingProjection
+    }
+
+    @discardableResult
+    public func createCapabilityGroup(named name: String) throws -> CapabilityGroupDefinition {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try validateCapabilityGroupName(trimmed, excluding: nil)
+        } catch {
+            capabilityGroupingError = groupingErrorKey(error)
+            throw error
+        }
+        var preferences = capabilityGroupingStore.preferences()
+        let definition = CapabilityGroupDefinition(id: "custom-\(UUID().uuidString.lowercased())", name: trimmed)
+        preferences = CapabilityGroupingPreferencesV1(
+            customGroups: preferences.customGroups + [definition],
+            manualAssignments: preferences.manualAssignments
+        )
+        try persistCapabilityGrouping(preferences)
+        return definition
+    }
+
+    public func renameCapabilityGroup(id: String, to name: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try validateCapabilityGroupName(trimmed, excluding: id)
+        } catch {
+            capabilityGroupingError = groupingErrorKey(error)
+            throw error
+        }
+        var preferences = capabilityGroupingStore.preferences()
+        guard let index = preferences.customGroups.firstIndex(where: { $0.id == id }) else {
+            capabilityGroupingError = groupingErrorKey(CapabilityGroupingStoreError.immutableGroup)
+            throw CapabilityGroupingStoreError.immutableGroup
+        }
+        preferences = CapabilityGroupingPreferencesV1(
+            customGroups: preferences.customGroups.enumerated().map { offset, item in
+                offset == index ? CapabilityGroupDefinition(id: item.id, name: trimmed) : item
+            },
+            manualAssignments: preferences.manualAssignments
+        )
+        try persistCapabilityGrouping(preferences)
+    }
+
+    /// Removes a custom group. Its existing members are explicitly moved to
+    /// the built-in Uncategorized group so deletion never silently changes a
+    /// user's visible classification.
+    public func deleteCapabilityGroup(id: String) throws {
+        let preferences = capabilityGroupingStore.preferences()
+        guard preferences.customGroups.contains(where: { $0.id == id }) else {
+            capabilityGroupingError = groupingErrorKey(CapabilityGroupingStoreError.immutableGroup)
+            throw CapabilityGroupingStoreError.immutableGroup
+        }
+        let moved = preferences.manualAssignments.map { assignment in
+            assignment.groupID == id
+                ? CapabilityGroupAssignment(resourceID: assignment.resourceID, groupID: BuiltInCapabilityGroup.uncategorized.id, source: .manual)
+                : assignment
+        }
+        let updated = CapabilityGroupingPreferencesV1(
+            customGroups: preferences.customGroups.filter { $0.id != id },
+            manualAssignments: moved
+        )
+        try persistCapabilityGrouping(updated)
+    }
+
+    public func setCapabilityGroup(resourceID: String, groupID: String) {
+        do {
+            let preferences = capabilityGroupingStore.preferences()
+            guard allCapabilityGroupDefinitions.contains(where: { $0.id == groupID }) else {
+                throw CapabilityGroupingStoreError.missingGroup
+            }
+            var assignments = preferences.manualAssignments.filter { $0.resourceID != resourceID }
+            assignments.append(CapabilityGroupAssignment(resourceID: resourceID, groupID: groupID, source: .manual))
+            try persistCapabilityGrouping(CapabilityGroupingPreferencesV1(customGroups: preferences.customGroups, manualAssignments: assignments))
+        } catch {
+            capabilityGroupingError = groupingErrorKey(error)
+        }
+    }
+
+    public func assignCapabilityGroup(resourceID: String, groupID: String) {
+        setCapabilityGroup(resourceID: resourceID, groupID: groupID)
+    }
+
+    public func resetCapabilityGroup(resourceID: String) {
+        do {
+            let preferences = capabilityGroupingStore.preferences()
+            let assignments = preferences.manualAssignments.filter { $0.resourceID != resourceID }
+            try persistCapabilityGrouping(CapabilityGroupingPreferencesV1(customGroups: preferences.customGroups, manualAssignments: assignments))
+        } catch {
+            capabilityGroupingError = groupingErrorKey(error)
+        }
+    }
+
+    public func restoreAutomaticCapabilityGroup(resourceID: String) {
+        resetCapabilityGroup(resourceID: resourceID)
+    }
+
+    public func clearCapabilityGroupingError() {
+        capabilityGroupingError = nil
+    }
+
+    /// Re-reads the preference boundary without writing to it. This is the
+    /// safe retry path when a transient read or presentation error is shown.
+    public func retryCapabilityGroupingPreferences() {
+        refreshCapabilityGroupingProjection()
+        capabilityGroupingError = nil
+    }
+
+    /// Removes only confirmed-corrupt grouping bytes. No valid preferences or
+    /// capability source files are touched.
+    public func clearCorruptedCapabilityGroupingPreferences() {
+        capabilityGroupingStore.clearCorruptedPreferences()
+        refreshCapabilityGroupingProjection()
+        capabilityGroupingError = nil
+    }
+
+    private var allCapabilityGroupDefinitions: [CapabilityGroupDefinition] {
+        CapabilityGroupDefinition.builtInDefinitions + capabilityGroupingStore.preferences().customGroups
+    }
+
+    private func validateCapabilityGroupName(_ name: String, excluding id: String?) throws {
+        guard !name.isEmpty, name.count <= 40 else { throw CapabilityGroupingStoreError.invalidGroupName }
+        let normalized = name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        let builtInNames = BuiltInCapabilityGroup.allCases.flatMap { [$0.englishTitle, $0.simplifiedChineseTitle] }
+        let duplicateBuiltIn = builtInNames.contains {
+            $0.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == normalized
+        }
+        let duplicateCustom = allCapabilityGroupDefinitions.contains { definition in
+            definition.id != id && definition.name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current) == normalized
+        }
+        if duplicateBuiltIn || duplicateCustom { throw CapabilityGroupingStoreError.duplicateGroupName }
+    }
+
+    private func persistCapabilityGrouping(_ preferences: CapabilityGroupingPreferencesV1) throws {
+        do {
+            guard capabilityGroupingStore.preferencesState() != .corrupted else {
+                throw CapabilityGroupingStoreError.corruptedPreferences
+            }
+            try capabilityGroupingStore.save(preferences)
+            capabilityGroupingError = nil
+            refreshCapabilityGroupingProjection()
+        } catch {
+            capabilityGroupingError = groupingErrorKey(error)
+            throw error
+        }
+    }
+
+    private func groupingErrorKey(_ error: Error) -> String {
+        if let error = error as? CapabilityGroupingStoreError {
+            switch error {
+            case .corruptedPreferences: return "capabilityGroups.corrupted"
+            case .invalidGroupName: return "capabilityGroups.invalidName"
+            case .duplicateGroupName: return "capabilityGroups.duplicateName"
+            case .immutableGroup: return "capabilityGroups.immutable"
+            case .missingGroup: return "capabilityGroups.missingGroup"
+            case .persistenceFailed: return "capabilityGroups.saveFailed"
+            }
+        }
+        return "capabilityGroups.saveFailed"
+    }
+
+    private func refreshCapabilityGroupingProjection() {
+        capabilityGroupingPreferencesState = capabilityGroupingStore.preferencesState()
+        let catalog = CapabilityCatalog(resources: capabilities.allRows.map(\.resource), relations: capabilities.relations).entries
+        capabilityGroupingProjection = CapabilityGroupingProjection(
+            resources: capabilities.allRows.map(\.resource),
+            catalog: catalog,
+            preferences: capabilityGroupingStore.preferences()
+        )
+    }
+
     private func syncLibraryCatalog() {
         let catalog = CapabilityCatalog(resources: capabilities.allRows.map(\.resource), relations: capabilities.relations).entries
         for library in libraryModels {
             library.setDirectory(catalog: catalog, projects: library.projects)
         }
+        refreshCapabilityGroupingProjection()
     }
 
     private func classificationDidChange() {
@@ -2196,6 +2388,7 @@ public final class DirectorAppModel: ObservableObject {
         for library in libraryModels {
             library.setDirectory(catalog: catalog, projects: directory.projects)
         }
+        refreshCapabilityGroupingProjection()
         hasIndexedData = !resources.isEmpty || directory.indexedSessionCount > 0
         directoryLoaded = true
         lastIndexCompletedAt = directory.metadata.lastIndexCompletedAt
@@ -2260,6 +2453,7 @@ public final class DirectorAppModel: ObservableObject {
                             usageProjects: library.usageProjects)
             library.setProjects(projects)
         }
+        refreshCapabilityGroupingProjection()
         hasIndexedData = !resources.isEmpty || directory.indexedSessionCount > 0
         lastIndexCompletedAt = metadata.lastIndexCompletedAt
         sourceDataLastCheckedAt = metadata.lastSourceCheckAt
@@ -2588,6 +2782,7 @@ public final class DirectorAppModel: ObservableObject {
             library.setPluginData([], browseStats: [])
             library.selectedID = nil
         }
+        refreshCapabilityGroupingProjection()
         lastRefresh = nil
         lastIndexCompletedAt = nil
         hasCompletedIndexPass = false

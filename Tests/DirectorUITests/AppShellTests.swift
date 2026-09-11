@@ -57,6 +57,44 @@ final class AppShellTests: XCTestCase {
         }
     }
 
+    func testSyntheticModelUsesIsolatedGroupingPreferences() {
+        let defaults = UserDefaults.standard
+        let prior = defaults.data(forKey: CapabilityGroupingStore.defaultsKey)
+        defaults.set(Data("production-only".utf8), forKey: CapabilityGroupingStore.defaultsKey)
+        defer {
+            if let prior { defaults.set(prior, forKey: CapabilityGroupingStore.defaultsKey) }
+            else { defaults.removeObject(forKey: CapabilityGroupingStore.defaultsKey) }
+        }
+
+        let model = TestMemoryPreferences.makeModel()
+        XCTAssertEqual(model.capabilityGroupingPreferencesState, .missing)
+        XCTAssertEqual(model.capabilityGroupingStore.preferencesState(), .missing)
+    }
+
+    func testCorruptGroupingPreferencesAreReportedAndNeverOverwritten() throws {
+        let corrupt = Data("not-a-grouping-document".utf8)
+        var data: Data? = corrupt
+        let store = CapabilityGroupingStore(
+            readData: { data },
+            writeData: { data = $0; return true },
+            removeData: { data = nil }
+        )
+        let model = DirectorAppModel(previewMode: true, capabilityGroupingStore: store)
+
+        XCTAssertEqual(model.capabilityGroupingPreferencesState, .corrupted)
+        model.retryCapabilityGroupingPreferences()
+        XCTAssertEqual(model.capabilityGroupingPreferencesState, .corrupted)
+        XCTAssertThrowsError(try model.createCapabilityGroup(named: "Private Work")) { error in
+            XCTAssertEqual(error as? CapabilityGroupingStoreError, .corruptedPreferences)
+        }
+        XCTAssertEqual(data, corrupt, "a failed write must preserve unreadable preference bytes")
+        XCTAssertEqual(model.capabilityGroupingError, "capabilityGroups.corrupted")
+
+        model.clearCorruptedCapabilityGroupingPreferences()
+        XCTAssertEqual(model.capabilityGroupingPreferencesState, .missing)
+        XCTAssertNil(data)
+    }
+
     func testBootstrapFailureDoesNotCreateSyntheticPreviewData() {
         let model = TestMemoryPreferences.makeModel(
             previewMode: false,

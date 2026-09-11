@@ -6,6 +6,8 @@ The project follows semantic versioning for public releases.
 
 ## Unreleased
 
+- Added Capability Groups: deterministic local grouping for eligible Agents and Skills, eight built-in categories including Uncategorized, and user-defined categories with manual overrides.
+
 - Add a guided local-safe restore flow for trusted manifest v1 capability packages. It verifies the isolated package, requires manual project mappings, creates missing files only, reports conflicts, and supports an in-session undo without persisting target paths.
 - Prepare Codex Director for a privacy-reviewed open-source release.
 - Add public release auditing and open-source governance documents.
@@ -13,6 +15,12 @@ The project follows semantic versioning for public releases.
 - Add stripped app, package, checksum, dependency, provenance metadata, and archive round-trip verification.
 - Add reproducible synthetic startup gates and database/cache failure coverage for the public release baseline.
 - Reduce quota-history query sorting while preserving seven-day, source, predecessor, and deterministic tie semantics.
+
+## 1.3.0
+
+- Added a Capability Groups destination with fixed bilingual built-in categories, local search and Agent/Skill filters.
+- Added custom category create, rename, delete-to-Uncategorized, manual assignment, and restore-automatic actions. Category preferences contain only stable IDs and names; no paths or capability content.
+- Kept automatic classification deterministic and offline, and excluded system capabilities, plugin packages, instructions, MCP/tools, and stale plugin caches.
 
 ## 1.2.0
 

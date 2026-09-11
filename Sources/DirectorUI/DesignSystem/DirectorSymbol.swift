@@ -51,6 +51,7 @@ public enum DirectorSymbol {
 
     public static let capabilities = "square.grid.2x2"
     public static let home = "house"
+    public static let capabilityGroups = "square.grid.3x3"
     public static let tasks = "clock.arrow.circlepath"
     public static let review = "checkmark.seal"
     public static let usage = "chart.bar"
@@ -67,7 +68,7 @@ public enum DirectorSymbol {
     /// Every symbol the design system requires, for the contract test.
     public static let requiredSymbols: [String] = {
         var names: [String] = [
-            home, capabilities, tasks, review, usage, dataStatus, settings,
+            home, capabilityGroups, capabilities, tasks, review, usage, dataStatus, settings,
             closeInspector,
             usageEvidence, search, filter, back,
             menuBarUsage,

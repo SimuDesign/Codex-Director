@@ -49,6 +49,15 @@ enum TestMemoryPreferences {
         )
     }
 
+    static func makeGroupingStore() -> CapabilityGroupingStore {
+        let grouping = DataBox()
+        return CapabilityGroupingStore(
+            readData: { grouping.value },
+            writeData: { grouping.value = $0; return true },
+            removeData: { grouping.value = nil }
+        )
+    }
+
     @MainActor
     static func makeModel(
         previewMode: Bool = true,
@@ -59,7 +68,8 @@ enum TestMemoryPreferences {
             classificationOverrides: stores.0,
             evaluationStore: stores.1,
             previewMode: previewMode,
-            bootstrapError: bootstrapError
+            bootstrapError: bootstrapError,
+            capabilityGroupingStore: makeGroupingStore()
         )
     }
 }

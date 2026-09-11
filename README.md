@@ -2,7 +2,7 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.2.0`. Requires macOS 26 or later.
+> Current development version: `1.3.0`. Requires macOS 26 or later.
 
 [简体中文](README.zh-CN.md)
 
@@ -16,8 +16,15 @@ Codex Director is a native macOS application for understanding and moving your p
 - Supports Simplified Chinese and English, Light and Dark themes, and shared background refresh.
 - Shows a privacy-safe allowance summary in the macOS menu bar by default; when the Codex account reports both windows, it shows the five-hour and weekly percentages, otherwise it shows the one available percentage. Users can turn it off in Settings. The popover includes each available reset time, reset-card count, data refresh, and a shortcut to the main window. While enabled, account-only refresh adapts between bounded five- and thirty-minute intervals and pauses while the Mac is locked, asleep, or in Low Power Mode.
 - Keeps Home's current five-hour and weekly rings synchronized with the same sanitized live account reading while retaining indexed, same-source observations as the sole evidence for the seven-day weekly chart.
+- Groups eligible Agents and Skills into local, deterministic categories. Automatic suggestions never use AI or the network; manual assignments remain local and take precedence.
 
 Codex Director keeps source capabilities read-only. It does not upload capability content, sessions, credentials, cookies, Director databases, or plugin files. See [Privacy](PRIVACY.md) for the exact boundary.
+
+## Capability Groups
+
+The Capability Groups page organizes indexed Agents and Skills into eight fixed local categories: Video Production, UI Design, Software Development, Content Creation, Research & Data, Automation & Productivity, General Tools, and Uncategorized. Automatic classification uses deterministic name and declared-purpose rules only; it never calls AI or the network. Users can create, rename, and delete custom categories, assign a capability manually, and restore its automatic classification.
+
+Only custom category names, stable capability IDs, and manual overrides are stored. Paths, capability content, and session data are not persisted by this feature. System capabilities, plugin packages, MCP, tools, instructions, and stale plugin caches are excluded.
 
 ## Product screenshots
 

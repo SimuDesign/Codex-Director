@@ -39,7 +39,7 @@ private final class AppLaunchState: ObservableObject {
         }
 
         // This model is deliberately service-less but not synthetic. It lets
-        // the main window and all six destinations render immediately while
+        // the main window and all seven destinations render immediately while
         // the real container is opened off the main actor.
         if useMemoryPreferences {
             let preferences = LaunchMemoryPreferences()
@@ -56,7 +56,12 @@ private final class AppLaunchState: ObservableObject {
                 ),
                 previewMode: false,
                 bootstrapPending: true,
-                menuBarPreferences: resolvedMenuBarPreferences
+                menuBarPreferences: resolvedMenuBarPreferences,
+                capabilityGroupingStore: CapabilityGroupingStore(
+                    readData: { preferences.data(for: CapabilityGroupingStore.defaultsKey) },
+                    writeData: { data in preferences.set(data, for: CapabilityGroupingStore.defaultsKey); return true },
+                    removeData: { preferences.remove(CapabilityGroupingStore.defaultsKey) }
+                )
             )
         } else {
             model = DirectorAppModel(

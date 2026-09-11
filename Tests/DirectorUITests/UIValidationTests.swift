@@ -14,6 +14,12 @@ final class UIValidationTests: XCTestCase {
         XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 5)
     }
 
+    func testValidationSessionUsesAnIsolatedGroupingPreferenceBoundary() throws {
+        let session = try UIValidationSession(dataset: .empty)
+        XCTAssertEqual(session.model.capabilityGroupingPreferencesState, .missing)
+        XCTAssertEqual(session.model.capabilityGroupingStore.preferencesState(), .missing)
+    }
+
     func testValidationHostExposesBilingualAppearanceAndWindowMatrix() throws {
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -34,7 +40,7 @@ final class UIValidationTests: XCTestCase {
         XCTAssertTrue(host.contains("1280 × 800"))
         XCTAssertTrue(host.contains("1600 × 1000"))
         XCTAssertEqual(destinations.components(separatedBy: "public static var approvedNavigation").count - 1, 1)
-        XCTAssertTrue(destinations.contains("[.home, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]"))
+        XCTAssertTrue(destinations.contains("[.home, .capabilityGroups, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]"))
     }
 
     func testCaptureLayoutKeepsControlsOutsideTheRequestedProductViewport() {

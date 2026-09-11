@@ -68,6 +68,74 @@ final class DirectorSchemeATests: XCTestCase {
         }
     }
 
+    func testCapabilityGroupsUsesTheApprovedSingleListAndGroupingControls() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let groups = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityGroupsView.swift"), encoding: .utf8)
+        let english = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/en.lproj/Localizable.strings"), encoding: .utf8)
+        let chinese = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
+
+        XCTAssertTrue(groups.contains("List(selection: $selectedResourceID)"))
+        XCTAssertTrue(groups.contains("DirectorEditorialFrame"))
+        XCTAssertTrue(groups.contains("DirectorMetricSequence"))
+        XCTAssertTrue(groups.contains("DirectorFilterRibbon"))
+        XCTAssertTrue(groups.contains("setCapabilityGroup(resourceID:"))
+        XCTAssertTrue(groups.contains("restoreAutomaticCapabilityGroup(resourceID:"))
+        XCTAssertTrue(groups.contains("DirectorSideSheet("))
+        XCTAssertTrue(groups.contains("showsCreateSheet"))
+        XCTAssertTrue(groups.contains("showsDeleteConfirmation"))
+        XCTAssertTrue(groups.contains("showsCorruptClearConfirmation"))
+        XCTAssertTrue(groups.contains("showsAllUncategorizedHint"))
+        XCTAssertTrue(groups.contains("customGroupEmptyState"))
+        XCTAssertTrue(groups.contains("capabilityGroupingPreferencesState == .corrupted"))
+        XCTAssertTrue(groups.contains("retryCapabilityGroupingPreferences()"))
+        XCTAssertTrue(groups.contains("clearCorruptedCapabilityGroupingPreferences()"))
+
+        for key in [
+            "nav.capabilityGroups",
+            "capabilityGroups.group.video-production",
+            "capabilityGroups.group.ui-design",
+            "capabilityGroups.group.software-development",
+            "capabilityGroups.group.content-creation",
+            "capabilityGroups.group.research-data",
+            "capabilityGroups.group.automation-productivity",
+            "capabilityGroups.group.general-tools",
+            "capabilityGroups.group.uncategorized",
+            "capabilityGroups.restoreAutomatic",
+            "capabilityGroups.corrupted",
+            "capabilityGroups.corrupted.title",
+            "capabilityGroups.retry",
+            "capabilityGroups.clearCorrupted",
+            "capabilityGroups.empty.allUncategorized.title",
+            "capabilityGroups.empty.allUncategorized.body",
+            "capabilityGroups.empty.custom",
+            "capabilityGroups.saveFailed"
+        ] {
+            XCTAssertTrue(english.contains("\"\(key)\""), "English localization missing \(key)")
+            XCTAssertTrue(chinese.contains("\"\(key)\""), "Chinese localization missing \(key)")
+        }
+    }
+
+    func testCapabilityGroupDetailsDeduplicateProjectsAndForwardClassificationActions() throws {
+        let first = CapabilityProject(id: "project:shared", name: "Shared project", lastSeenAt: Date(timeIntervalSince1970: 10))
+        let duplicate = CapabilityProject(id: "project:shared", name: "Stale duplicate", lastSeenAt: Date(timeIntervalSince1970: 20))
+        let other = CapabilityProject(id: "project:other", name: "Other project", lastSeenAt: Date(timeIntervalSince1970: 20))
+        let projects = DirectorRootView.stableUniqueProjects(from: [first, duplicate, other])
+        XCTAssertEqual(projects.map(\.id), ["project:other", "project:shared"])
+        XCTAssertEqual(projects.last?.name, "Shared project")
+
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let root = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/AppShell/DirectorRootView.swift"), encoding: .utf8)
+        XCTAssertTrue(root.contains("Self.stableUniqueProjects(from: model.libraryModels.flatMap(\\.projects))"))
+        XCTAssertTrue(root.contains("onClassify: { id, ownership in self.model.classify(resourceID: id, ownership: ownership) }"))
+        XCTAssertTrue(root.contains("onResetClassification: { id in self.model.resetClassification(resourceID: id) }"))
+    }
+
     func testCapabilitySelectionUsesDismissibleSideSheet() throws {
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -138,8 +206,8 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(settings.contains("settings.about.title"))
         XCTAssertTrue(settings.contains("settings.author"))
         XCTAssertTrue(settings.contains("七木 Simu"))
-        XCTAssertTrue(settings.contains("return version ?? \"1.2.0\""))
-        XCTAssertFalse(settings.contains("1.2.0 (24)"))
+        XCTAssertTrue(settings.contains("return version ?? \"1.3.0\""))
+        XCTAssertFalse(settings.contains("1.3.0 (25)"))
         XCTAssertTrue(settings.contains("eyebrow: nil"))
         XCTAssertTrue(settings.contains("DirectorPageContentFrame(workspaceWidth: viewport.size.width)"))
         XCTAssertTrue(settings.contains("DirectorSecondaryActionButtonStyle(size: .settings, destructive: true)"))
@@ -202,10 +270,10 @@ final class DirectorSchemeATests: XCTestCase {
         let buildScript = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/build-local-app.sh"), encoding: .utf8)
         let appVerifier = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/verify-app-bundle.sh"), encoding: .utf8)
         let harness = try String(contentsOf: sourceRoot.appendingPathComponent("Tests/StartupPerformanceHarness/project.yml"), encoding: .utf8)
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.2.0"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 24"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.2.0").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 24").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.0"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 25"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.0").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 25").count - 1, 2)
         XCTAssertTrue(buildScript.contains("verify-app-bundle.sh"))
         XCTAssertTrue(appVerifier.contains("read-project-version.sh"))
         XCTAssertTrue(appVerifier.contains("short_version\" == \"$expected_marketing_version\""))
@@ -227,19 +295,19 @@ final class DirectorSchemeATests: XCTestCase {
         let readme = try String(contentsOf: sourceRoot.appendingPathComponent("README.md"), encoding: .utf8)
         let readmeChinese = try String(contentsOf: sourceRoot.appendingPathComponent("README.zh-CN.md"), encoding: .utf8)
 
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.2.0"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 24"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.2.0").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 24").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.0"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 25"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.0").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 25").count - 1, 2)
         XCTAssertTrue(readClient.contains("requestPayload(version: \"1.2.0\")"))
         XCTAssertTrue(validation.contains("CapabilityPackageProducer(version: \"1.2.0\", build: \"24\")"))
         XCTAssertTrue(changelog.contains("## 1.1.1"))
         XCTAssertTrue(changelog.contains("## 1.1.0"))
         XCTAssertTrue(changelog.contains("## 1.0.0"))
-        XCTAssertTrue(readme.contains("1.2.0"))
-        XCTAssertTrue(readmeChinese.contains("1.2.0"))
-        XCTAssertFalse(readme.contains("1.2.0 (24)"))
-        XCTAssertFalse(readmeChinese.contains("1.2.0 (24)"))
+        XCTAssertTrue(readme.contains("1.3.0"))
+        XCTAssertTrue(readmeChinese.contains("1.3.0"))
+        XCTAssertFalse(readme.contains("1.3.0 (25)"))
+        XCTAssertFalse(readmeChinese.contains("1.3.0 (25)"))
 
         for relativePath in [
             "Sources/DirectorUI/Resources/en.lproj/Localizable.strings",

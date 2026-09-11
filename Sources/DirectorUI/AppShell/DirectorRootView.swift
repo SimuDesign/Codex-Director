@@ -95,6 +95,10 @@ public struct DirectorRootView: View {
                 model.selection = sidebarItem(for: category)
                 if let library = model.libraryModels.first(where: { $0.category == category }) { library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending); library.selectedID = id }
             })
+        case .capabilityGroups:
+            CapabilityGroupsView(model: model) { resource in
+                capabilityDetailModel(for: resource)
+            }
         case .customAgents:
             filteredCapabilities(category: .myAgents, model: model.libraryModels[0], titleKey: "nav.customAgents", fallback: "Custom Agents")
         case .customSkills:
@@ -146,6 +150,47 @@ public struct DirectorRootView: View {
 
     private func sidebarItem(for category: CapabilityCategory) -> DirectorSidebarItem {
         switch category { case .customAgents: return .customAgents; case .customSkills: return .customSkills; case .installedSkills: return .installedSkills; case .installedPlugins: return .installedPlugins }
+    }
+
+    private func capabilityDetailModel(for resource: CapabilityResource) -> CapabilityDetailViewModel {
+        let catalog = CapabilityCatalog(resources: model.capabilities.allRows.map(\.resource), relations: model.capabilities.relations).entries
+        let entry = catalog.first(where: { $0.resource.id == resource.id }) ?? CapabilityCatalogEntry(resource: resource, category: nil, parentPluginID: nil)
+        let recent = model.recentCapabilityStats.first(where: { $0.resourceID == resource.id })
+        let row = CapabilityLibraryRow(
+            entry: entry,
+            recent7Count: recent?.callCount,
+            inferredCount: recent?.inferredCount ?? 0,
+            lastUsedAt: recent?.lastUsedAt,
+            sourceModifiedAt: resource.sourceModifiedAt,
+            coverage: recent?.coverage ?? .unknown,
+            statisticsReady: model.hasComputedStatistics,
+            recent30Count: nil
+        )
+        let projects = Self.stableUniqueProjects(from: model.libraryModels.flatMap(\.projects))
+        return CapabilityDetailViewModel(
+            row: row,
+            store: model.readStore,
+            projects: projects,
+            usageProjectIDs: [],
+            evaluationStore: model.evaluationStore,
+            findings: [],
+            now: model.presentationNow,
+            onClassify: { id, ownership in self.model.classify(resourceID: id, ownership: ownership) },
+            onResetClassification: { id in self.model.resetClassification(resourceID: id) }
+        )
+    }
+
+    /// Library projections can expose the same project from multiple
+    /// capability categories. Preserve the first deterministic descriptor
+    /// and sort by stable ID so details never trap on duplicate keys.
+    static func stableUniqueProjects(from projects: [CapabilityProject]) -> [CapabilityProject] {
+        var unique: [String: CapabilityProject] = [:]
+        for project in projects where unique[project.id] == nil {
+            unique[project.id] = project
+        }
+        return unique.values.sorted { lhs, rhs in
+            lhs.id == rhs.id ? lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending : lhs.id < rhs.id
+        }
     }
 
     @ViewBuilder
