@@ -31,7 +31,7 @@ The `v<marketing-version>` tag must match `MARKETING_VERSION`. `CURRENT_PROJECT_
 The public application currently targets `1.3.0` (build `25`). The planned
 sequence remains historical release context; create a new tag only after the
 project version and build number are updated together and all release gates
-pass. The `1.3.0` release includes local-safe restore and Capability Groups
+pass. The `1.3.0` release includes local-safe restore and Capability Folders
 while retaining manifest v1 compatibility.
 
 ## Workflow security

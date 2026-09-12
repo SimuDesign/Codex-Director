@@ -380,7 +380,14 @@ final class HomeRankingUpgradeIntegrationTests: XCTestCase {
                                 durationMs: nil, confidence: .exact, errorCategory: nil)
             }, tokenSnapshots: [], quotaSnapshots: [], findings: []
         ))
-        try await writer.markSuccessfulSourceIndex(at: now.addingTimeInterval(-60))
+        // This fixture exercises Home ranking upgrade behavior, not the one-time
+        // companion relationship migration. Mark the derived relationship index
+        // current so the AppModel startup task cannot add an unrelated source
+        // refresh to the operation counters asserted by these tests.
+        try await writer.markSuccessfulSourceIndex(
+            at: now.addingTimeInterval(-60),
+            relationshipIndexVersion: CapabilityCompanionIndex.currentVersion
+        )
         let identity = try await writer.presentationIdentity()
         let window = CapabilityQueryWindow.recent7(now: now, calendar: Calendar(identifier: .gregorian))
         let rows = (0..<capacity).map { index in

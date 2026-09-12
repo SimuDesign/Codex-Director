@@ -437,6 +437,40 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(unregistered.classificationConfidence, .inferred)
     }
 
+    func testCoordinatorIndexesSchemaV3PackageCompanionDeclarations() async throws {
+        let store = try makeStore()
+        let project = try tempDirectory("schema-v3-project")
+        let active = try tempDirectory("schema-v3-active")
+        defer {
+            try? FileManager.default.removeItem(at: project)
+            try? FileManager.default.removeItem(at: active)
+        }
+        try FileManager.default.createDirectory(at: project.appendingPathComponent(".codex/agents"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project.appendingPathComponent(".agents/skills/video-tool"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("agents"), withIntermediateDirectories: true)
+        try "name = \"Build Agent\"\n"
+            .write(to: project.appendingPathComponent(".codex/agents/build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\ndescription: Video utility\n---\n"
+            .write(to: project.appendingPathComponent(".agents/skills/video-tool/SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"schemaVersion":3,"packages":{"video-tool":{"type":"skill","invokedBy":["Build Agent"]},"Build Agent":{"type":"agent","usesSkills":["video-tool"]}}}"#
+        try registry.write(to: project.appendingPathComponent("agents/registry.json"), atomically: true, encoding: .utf8)
+
+        _ = try await makeCoordinator(store: store).run(configuration: IndexingCoordinator.Configuration(
+            scanRoots: [ScanRoot(id: "project", url: project, scope: .project, kind: .projects)],
+            activeSessionRoots: [active],
+            archivedSessionRoot: nil
+        ))
+        let resources = try await store.fetchAllResources()
+        let relations = try await store.fetchAllRelations()
+        let agent = try XCTUnwrap(resources.first { $0.kind == .agent && $0.name == "Build Agent" })
+        let skill = try XCTUnwrap(resources.first { $0.kind == .skill && $0.name == "video-tool" })
+        XCTAssertTrue(relations.contains {
+            $0.sourceResourceID == agent.id && $0.targetResourceID == skill.id
+                && $0.relationKind == CapabilityCompanionRelationKind.companionSkill.rawValue
+                && $0.evidenceSummary == CapabilityCompanionDeclarationSource.projectRegistry.rawValue
+        })
+    }
+
     func testCoordinatorPersistsProductionSkillInvocation() async throws {
         let store = try makeStore()
         let active = try tempDirectory("active")

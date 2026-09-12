@@ -237,6 +237,12 @@ public struct CapabilityLibraryView: View {
     @ObservedObject public var model: CapabilityLibraryViewModel
     public let title: String; public let subtitle: String; public var onScopeChanged: ((CapabilityBrowseScope) -> Void)?
     public var detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)?
+    /// Optional folder organization hooks supplied by the app model. Keeping
+    /// these as closures lets the library remain usable by isolated hosts
+    /// without constructing a second folder store.
+    public var folderDefinitions: [CapabilityFolderDefinition]
+    public var folderMembership: ((String, String) -> Bool)?
+    public var onToggleFolderMembership: ((String, String, Bool) -> Void)?
     public let presentationState: DirectorPresentationState
     public let queryStatus: DirectorLibraryQueryStatus?
     public let resultContext: DirectorLibraryResultContext?
@@ -245,7 +251,7 @@ public struct CapabilityLibraryView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var cachedDetail: CapabilityDetailViewModel?
     @State private var cachedDetailKey = ""
-    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext }
+    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership }
     public var body: some View {
         DirectorEditorialFrame {
             GeometryReader { proxy in
@@ -594,6 +600,7 @@ public struct CapabilityLibraryView: View {
                     .fixedSize()
             }
             .frame(minWidth: 72, alignment: .trailing)
+            folderMembershipMenu(for: row.entry.resource)
             Image(systemName: "arrow.up.right")
                 .font(DirectorTypography.label.weight(.semibold))
                 .foregroundStyle(DirectorColor.textTertiary)
@@ -683,7 +690,10 @@ public struct CapabilityLibraryView: View {
         let key = detailKey(row)
         return Group {
             if let detail = cachedDetail, cachedDetailKey == key {
-                CapabilityDetailView(model: detail, onBack: { model.selectedID = nil }, showsBackButton: showsBackButton)
+                VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+                    folderMembershipMenu(for: row.entry.resource)
+                    CapabilityDetailView(model: detail, onBack: { model.selectedID = nil }, showsBackButton: showsBackButton)
+                }
                     .task(id: detailMetadataKey(row)) {
                         refreshDetailIfNeeded(row: row, detail: detail)
                     }
@@ -698,6 +708,33 @@ public struct CapabilityLibraryView: View {
             let fresh = detailContext(row)
             cachedDetail = fresh
             cachedDetailKey = key
+        }
+    }
+
+    @ViewBuilder
+    private func folderMembershipMenu(for resource: CapabilityResource) -> some View {
+        if (resource.kind == .agent || resource.kind == .skill),
+           let folderMembership, let onToggleFolderMembership {
+            Menu {
+                ForEach(folderDefinitions.filter(\.isCustom)) { folder in
+                    let included = folderMembership(resource.id, folder.id)
+                    Button {
+                        onToggleFolderMembership(resource.id, folder.id, !included)
+                    } label: {
+                        HStack {
+                            Text(folder.displayName(language: languageStore.language == .simplifiedChinese ? .simplifiedChinese : .english))
+                            if included { Image(systemName: "checkmark").accessibilityHidden(true) }
+                        }
+                    }
+                    .accessibilityAddTraits(included ? .isSelected : [])
+                }
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .foregroundStyle(DirectorColor.textSecondary)
+            }
+            .menuIndicator(.hidden)
+            .accessibilityLabel(copy("capabilityFolders.addToFolder", "Add to folder"))
+            .disabled(folderDefinitions.filter(\.isCustom).isEmpty)
         }
     }
     private func detailKey(_ row: CapabilityLibraryRow) -> String {

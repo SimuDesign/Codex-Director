@@ -431,16 +431,27 @@ public actor DatabaseStore {
     /// Atomically records a successful source check and completed index.
     /// This deliberately does not advance data generation: no projection rows
     /// changed, only the completion metadata did.
-    public func markSuccessfulSourceIndex(at date: Date) throws {
+    /// The optional relationship version is written in the same transaction so
+    /// a cancelled/failed source run cannot claim that its derived relation
+    /// projection completed.
+    public func markSuccessfulSourceIndex(at date: Date, relationshipIndexVersion: String? = nil) throws {
         try inTransaction { database in
             try database.writePresentationMetadata("last_source_check_at", value: date.timeIntervalSince1970)
             try database.writePresentationMetadata("last_index_completed_at", value: date.timeIntervalSince1970)
+            if let relationshipIndexVersion {
+                try database.writePresentationMetadata("capability_relationship_index_version", stringValue: relationshipIndexVersion)
+            }
         }
     }
 
     private func writePresentationMetadata(_ key: String, value: Double) throws {
         let statement = try connection.prepare("INSERT OR REPLACE INTO presentation_metadata(key,value) VALUES (?,?)")
         statement.bind(key, at: 1); statement.bind(String(value), at: 2); _ = try statement.step()
+    }
+
+    private func writePresentationMetadata(_ key: String, stringValue: String) throws {
+        let statement = try connection.prepare("INSERT OR REPLACE INTO presentation_metadata(key,value) VALUES (?,?)")
+        statement.bind(key, at: 1); statement.bind(stringValue, at: 2); _ = try statement.step()
     }
 
     public func deleteAllData() throws {
@@ -456,7 +467,7 @@ public actor DatabaseStore {
             let newEpoch = UUID().uuidString
             guard connection.exec("INSERT OR REPLACE INTO presentation_metadata(key,value) VALUES ('database_epoch','\(newEpoch)')"),
                   connection.exec("INSERT OR REPLACE INTO presentation_metadata(key,value) VALUES ('data_generation','0')"),
-                  connection.exec("DELETE FROM presentation_metadata WHERE key IN ('last_source_check_at','last_index_completed_at')") else {
+                  connection.exec("DELETE FROM presentation_metadata WHERE key IN ('last_source_check_at','last_index_completed_at','capability_relationship_index_version')") else {
                 throw SQLiteError.statementFailed(connection.lastErrorMessage())
             }
             try connection.commitOrThrow()
@@ -798,6 +809,144 @@ public actor DatabaseStore {
         return results
     }
 
+    /// Fetches invocation evidence for all sessions in one read. A bounded
+    /// window can be supplied for projections such as companion co-observation
+    /// so callers never need to perform an SQLite query per row or per pair.
+    /// The returned dictionary is keyed by the persisted session ID and keeps
+    /// the same deterministic ordinal ordering as `fetchCalls(sessionID:)`.
+    public func fetchInvocationsBySession(window: CapabilityQueryWindow? = nil) throws -> [String: [InvocationEvent]] {
+        queryObserver?(.allInvocations)
+        return try connection.performReadSnapshot {
+            let statement = try connection.prepare(
+                """
+                SELECT id, session_id, parent_call_id, ordinal, timestamp, actor_name,
+                       resource_id, call_kind, status, duration_ms, confidence, error_category
+                FROM calls
+                WHERE (? IS NULL OR timestamp >= ?) AND (? IS NULL OR timestamp <= ?)
+                ORDER BY session_id, ordinal
+                """
+            )
+            let start = window?.start.timeIntervalSince1970
+            let end = window?.end.timeIntervalSince1970
+            statement.bind(start, at: 1)
+            statement.bind(start, at: 2)
+            statement.bind(end, at: 3)
+            statement.bind(end, at: 4)
+            var result: [String: [InvocationEvent]] = [:]
+            while try statement.step() == .row {
+                let sessionID = statement.columnText(1) ?? ""
+                let event = InvocationEvent(
+                    id: statement.columnText(0) ?? "",
+                    sessionID: sessionID,
+                    parentCallID: statement.columnText(2),
+                    ordinal: statement.columnInt(3),
+                    timestamp: statement.columnIsNull(4) ? nil : Date(timeIntervalSince1970: statement.columnDouble(4)),
+                    actorName: statement.columnText(5),
+                    resourceID: statement.columnText(6),
+                    kind: InvocationKind(rawValue: statement.columnText(7) ?? "") ?? .unknown,
+                    status: InvocationStatus(rawValue: statement.columnText(8) ?? "") ?? .unknown,
+                    durationMs: statement.columnIsNull(9) ? nil : statement.columnInt(9),
+                    confidence: EvidenceConfidence(rawValue: statement.columnText(10) ?? "") ?? .unknown,
+                    errorCategory: statement.columnText(11)
+                )
+                result[sessionID, default: []].append(event)
+            }
+            return result
+        }
+    }
+
+    /// Fetches exactly the recent session/call evidence needed for companion
+    /// co-observation in one bounded database snapshot. Sessions are selected
+    /// by overlap with the window (or a call in the window); calls are then
+    /// restricted to the same window. No per-row or per-pair query is used.
+    public func fetchCompanionEvidence(window: CapabilityQueryWindow) throws -> CapabilityCompanionEvidenceSnapshot {
+        queryObserver?(.companionEvidence)
+        return try connection.performReadSnapshot {
+            let start = window.start.timeIntervalSince1970
+            let end = window.end.timeIntervalSince1970
+            // Keep session selection and call loading in one bounded SQL
+            // statement.  An earlier two-step implementation interpolated an
+            // `IN` list for the selected session IDs; at real history sizes
+            // that could exceed SQLite's variable limit and it made the
+            // bounded query look like a per-row expansion.  The CTE keeps the
+            // selection explicit while the join limits calls to this window.
+            let statement = try connection.prepare(
+                """
+                WITH relevant_sessions AS (
+                    SELECT s.id, s.project_id, s.started_at, s.ended_at, s.status,
+                           s.coverage, s.parser_version, s.source_file_id
+                    FROM sessions s
+                    WHERE (s.started_at IS NOT NULL AND s.started_at <= ?
+                           AND (s.ended_at IS NULL OR s.ended_at >= ?))
+                       OR EXISTS (
+                           SELECT 1 FROM calls c2
+                           WHERE c2.session_id = s.id
+                             AND c2.timestamp IS NOT NULL
+                             AND c2.timestamp >= ? AND c2.timestamp <= ?
+                       )
+                )
+                SELECT rs.id, rs.project_id, rs.started_at, rs.ended_at,
+                       rs.status, rs.coverage, rs.parser_version, rs.source_file_id,
+                       c.id, c.session_id, c.parent_call_id, c.ordinal, c.timestamp,
+                       c.actor_name, c.resource_id, c.call_kind, c.status,
+                       c.duration_ms, c.confidence, c.error_category
+                FROM relevant_sessions rs
+                LEFT JOIN calls c
+                  ON c.session_id = rs.id
+                 AND c.timestamp IS NOT NULL
+                 AND c.timestamp >= ? AND c.timestamp <= ?
+                ORDER BY rs.started_at DESC, rs.id, c.ordinal
+                """
+            )
+            statement.bind(end, at: 1)
+            statement.bind(start, at: 2)
+            statement.bind(start, at: 3)
+            statement.bind(end, at: 4)
+            statement.bind(start, at: 5)
+            statement.bind(end, at: 6)
+            var sessions: [TaskSummary] = []
+            var sessionIDs = Set<String>()
+            var invocations: [String: [InvocationEvent]] = [:]
+            while try statement.step() == .row {
+                let id = statement.columnText(0) ?? ""
+                guard !id.isEmpty else { continue }
+                if sessionIDs.insert(id).inserted {
+                    sessions.append(TaskSummary(
+                        id: id,
+                        projectID: statement.columnText(1),
+                        startedAt: statement.columnIsNull(2) ? nil : Date(timeIntervalSince1970: statement.columnDouble(2)),
+                        endedAt: statement.columnIsNull(3) ? nil : Date(timeIntervalSince1970: statement.columnDouble(3)),
+                        status: TaskStatus(rawValue: statement.columnText(4) ?? "") ?? .unknown,
+                        coverage: CoverageState(rawValue: statement.columnText(5) ?? "") ?? .unknown,
+                        parserVersion: statement.columnText(6) ?? "",
+                        sourceFileID: statement.columnText(7) ?? "",
+                        title: nil
+                    ))
+                }
+                // The LEFT JOIN emits NULL columns for an in-window session
+                // with no calls.  Do not manufacture an empty InvocationEvent
+                // for that row.
+                guard statement.columnText(8) != nil,
+                      let sessionID = statement.columnText(9), !sessionID.isEmpty else { continue }
+                invocations[sessionID, default: []].append(InvocationEvent(
+                    id: statement.columnText(8) ?? "",
+                    sessionID: sessionID,
+                    parentCallID: statement.columnText(10),
+                    ordinal: statement.columnInt(11),
+                    timestamp: statement.columnIsNull(12) ? nil : Date(timeIntervalSince1970: statement.columnDouble(12)),
+                    actorName: statement.columnText(13),
+                    resourceID: statement.columnText(14),
+                    kind: InvocationKind(rawValue: statement.columnText(15) ?? "") ?? .unknown,
+                    status: InvocationStatus(rawValue: statement.columnText(16) ?? "") ?? .unknown,
+                    durationMs: statement.columnIsNull(17) ? nil : statement.columnInt(17),
+                    confidence: EvidenceConfidence(rawValue: statement.columnText(18) ?? "") ?? .unknown,
+                    errorCategory: statement.columnText(19)
+                ))
+            }
+            return CapabilityCompanionEvidenceSnapshot(sessions: sessions, invocationsBySession: invocations)
+        }
+    }
+
     public func fetchTokenSnapshots(sessionID: String) throws -> [TokenUsageSnapshot] {
         let statement = try connection.prepare(
             "SELECT id, session_id, captured_at, input_tokens, cached_input_tokens, cache_write_input_tokens, output_tokens, reasoning_output_tokens, total_tokens, coverage, model_id, model_name, model_confidence FROM token_usage_snapshots WHERE session_id = ? ORDER BY captured_at"
@@ -860,6 +1009,16 @@ public actor DatabaseStore {
             return PresentationIdentity(databaseEpoch: epoch, dataGeneration: number)
         }
         throw StoreError.presentationIdentityUnavailable }
+    }
+
+    /// Returns the derived relationship-index marker without exposing any
+    /// relationship rows or source document content.
+    public func relationshipIndexVersion() throws -> String? {
+        try connection.performReadSnapshot {
+            let statement = try connection.prepare("SELECT value FROM presentation_metadata WHERE key = 'capability_relationship_index_version'")
+            guard try statement.step() == .row else { return nil }
+            return statement.columnText(0)
+        }
     }
 
     private static func ensurePresentationIdentity(on connection: SQLiteConnection) throws {

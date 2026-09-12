@@ -57,17 +57,14 @@ private final class AppLaunchState: ObservableObject {
                 previewMode: false,
                 bootstrapPending: true,
                 menuBarPreferences: resolvedMenuBarPreferences,
-                capabilityGroupingStore: CapabilityGroupingStore(
-                    readData: { preferences.data(for: CapabilityGroupingStore.defaultsKey) },
-                    writeData: { data in preferences.set(data, for: CapabilityGroupingStore.defaultsKey); return true },
-                    removeData: { preferences.remove(CapabilityGroupingStore.defaultsKey) }
-                )
+                capabilityFolderStore: CapabilityFolderStore.makeMemory()
             )
         } else {
             model = DirectorAppModel(
                 previewMode: false,
                 bootstrapPending: true,
-                menuBarPreferences: resolvedMenuBarPreferences
+                menuBarPreferences: resolvedMenuBarPreferences,
+                capabilityFolderStore: CapabilityFolderStore(defaults: .standard)
             )
         }
         startupController = DirectorStartupController(

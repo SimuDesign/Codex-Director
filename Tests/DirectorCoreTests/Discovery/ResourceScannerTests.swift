@@ -183,6 +183,138 @@ final class ResourceScannerTests: XCTestCase {
         XCTAssertNotNil(output.resources.first?.sourceModifiedAt)
     }
 
+    func testGlobalAgentTomlAndMatchingBriefAreOneLogicalResource() throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("director-agent-pair-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp.appendingPathComponent("video-director"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try "name = \"Video Director\"\ndescription = \"Callable video role.\"\ndeveloper_instructions = \"Use $video-tool.\"\n"
+            .write(to: temp.appendingPathComponent("video-director.toml"), atomically: true, encoding: .utf8)
+        try "# Video Director\n\nBrief declaration: Use $video-tool for delivery."
+            .write(to: temp.appendingPathComponent("video-director/agent.md"), atomically: true, encoding: .utf8)
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "global-agents", url: temp, scope: .global, kind: .agents)
+        ]).scan()
+        XCTAssertEqual(output.resources.filter { $0.kind == .agent }.count, 1)
+        XCTAssertEqual(output.resources.first?.name, "Video Director")
+        XCTAssertEqual(output.resources.first?.relativeSourcePath, "video-director/agent.md")
+    }
+
+    func testRealGlobalAgentRootShapePairsAllTopLevelTomlsWithSiblingBriefs() throws {
+        // The production global library keeps callable TOMLs at the root and
+        // reusable Briefs in sibling <slug>/agent.md directories. Keep this
+        // synthetic fixture representative without reading a developer's
+        // actual home directory in the public test suite.
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-real-agent-root-shape-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+
+        let names = [
+            "Brand Designer", "Creative Producer", "Figma Editor", "Frontend Developer",
+            "Icon Designer", "Material Judge", "Platform Adapter", "Product Architect",
+            "Product Designer", "Quality Engineer", "Reference Finder", "Remotion Engineer",
+            "Review Analyst", "Skill Architect", "Software Engineer", "UI Designer",
+            "Video Director", "Video Editor", "Voice Editor"
+        ]
+        for name in names {
+            let slug = name.lowercased().replacingOccurrences(of: " ", with: "-")
+            try FileManager.default.createDirectory(
+                at: temp.appendingPathComponent(slug),
+                withIntermediateDirectories: true
+            )
+            try "name = \"\(name)\"\ndescription = \"Synthetic callable role.\"\n"
+                .write(to: temp.appendingPathComponent("\(slug).toml"), atomically: true, encoding: .utf8)
+            try "# \(name)\n\nSynthetic reusable brief."
+                .write(to: temp.appendingPathComponent("\(slug)/agent.md"), atomically: true, encoding: .utf8)
+        }
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "global-agents", url: temp, scope: .global, kind: .agents)
+        ]).scan()
+        let agents = output.resources.filter { $0.kind == .agent }
+        XCTAssertEqual(agents.count, names.count)
+        XCTAssertEqual(output.agentPairings.count, names.count)
+        XCTAssertTrue(agents.allSatisfy { $0.relativeSourcePath?.hasSuffix("/agent.md") == true })
+        XCTAssertTrue(agents.allSatisfy { agent in
+            output.agentPairings.contains { pairing in
+                pairing.agentRelativePath == agent.relativeSourcePath
+            }
+        })
+    }
+
+    func testPairedGlobalAgentScansDeclarationsFromTomlAndBriefOnce() throws {
+        let temp = FileManager.default.temporaryDirectory.appendingPathComponent("director-agent-pair-relations-\(UUID().uuidString)", isDirectory: true)
+        let skillRoot = temp.appendingPathComponent("skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: temp.appendingPathComponent("video-director"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: skillRoot.appendingPathComponent("video-tool"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: skillRoot.appendingPathComponent("audio-tool"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: temp) }
+        try "name = \"Video Director\"\ndeveloper_instructions = \"Use $video-tool.\"\n"
+            .write(to: temp.appendingPathComponent("video-director.toml"), atomically: true, encoding: .utf8)
+        try "# Video Director\n\nUse $audio-tool for narration."
+            .write(to: temp.appendingPathComponent("video-director/agent.md"), atomically: true, encoding: .utf8)
+        for (name, text) in [("video-tool", "Video"), ("audio-tool", "Audio")] {
+            try "---\nname: \(name)\ndescription: \(text) utility\n---\n"
+                .write(to: skillRoot.appendingPathComponent(name).appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        }
+        let agentRoot = ScanRoot(id: "agents", url: temp, scope: .global, kind: .agents)
+        let skills = ScanRoot(id: "skills", url: skillRoot, scope: .global, kind: .skills)
+        let output = ResourceScanner(roots: [agentRoot, skills]).scan()
+        let agent = try XCTUnwrap(output.resources.first { $0.kind == .agent })
+        let relations = CapabilityCompanionResolver(resources: output.resources, roots: [agentRoot, skills]).resolve()
+        XCTAssertEqual(relations.filter { $0.agentID == agent.id }.count, 2)
+        XCTAssertEqual(Set(relations.map(\.skillID)).count, 2)
+        let videoID = try XCTUnwrap(output.resources.first { $0.name == "video-tool" }?.id)
+        let audioID = try XCTUnwrap(output.resources.first { $0.name == "audio-tool" }?.id)
+        XCTAssertTrue(relations.contains { $0.skillID == videoID && $0.declarationSource == .agentConfiguration })
+        XCTAssertTrue(relations.contains { $0.skillID == audioID && $0.declarationSource == .agentBrief })
+    }
+
+    func testPairedAgentWithDifferentSlugUsesEphemeralPairingMetadata() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("director-agent-pair-different-slug-\(UUID().uuidString)", isDirectory: true)
+        let skillsRoot = root.appendingPathComponent("skills", isDirectory: true)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("video-director"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: skillsRoot.appendingPathComponent("video-tool"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "# Video Director\n\nUse $video-tool for delivery."
+            .write(to: root.appendingPathComponent("video-director/agent.md"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\ndescription: Video utility\n---\n"
+            .write(to: skillsRoot.appendingPathComponent("video-tool/SKILL.md"), atomically: true, encoding: .utf8)
+
+        let agentRoot = ScanRoot(id: "agents", url: root, scope: .global, kind: .agents)
+        let skillRoot = ScanRoot(id: "skills", url: skillsRoot, scope: .global, kind: .skills)
+        let historicalBriefID = try XCTUnwrap(ResourceScanner(roots: [agentRoot]).scan().resources.first?.id)
+
+        let tomlOnlyRootURL = FileManager.default.temporaryDirectory.appendingPathComponent("director-agent-toml-only-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tomlOnlyRootURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tomlOnlyRootURL) }
+        try "name = \"Video Director\"\ndeveloper_instructions = \"Use $video-tool for production.\"\n"
+            .write(to: tomlOnlyRootURL.appendingPathComponent("video.toml"), atomically: true, encoding: .utf8)
+        let tomlOnlyID = try XCTUnwrap(ResourceScanner(roots: [ScanRoot(id: "agents", url: tomlOnlyRootURL, scope: .global, kind: .agents)]).scan().resources.first?.id)
+
+        try "name = \"Video Director\"\ndeveloper_instructions = \"Use $video-tool for production.\"\n"
+            .write(to: root.appendingPathComponent("video.toml"), atomically: true, encoding: .utf8)
+        let output = ResourceScanner(roots: [agentRoot, skillRoot]).scan()
+        let agent = try XCTUnwrap(output.resources.first { $0.kind == .agent })
+        let skill = try XCTUnwrap(output.resources.first { $0.kind == .skill })
+        XCTAssertEqual(agent.id, historicalBriefID)
+        XCTAssertNotEqual(agent.id, tomlOnlyID)
+        let pairing = try XCTUnwrap(output.agentPairings.first)
+        XCTAssertEqual(pairing.agentRelativePath, "video-director/agent.md")
+        XCTAssertEqual(pairing.briefRelativePath, "video-director/agent.md")
+        XCTAssertEqual(pairing.configurationRelativePath, "video.toml")
+
+        let relations = CapabilityCompanionResolver(
+            resources: output.resources,
+            roots: [agentRoot, skillRoot],
+            agentPairings: output.agentPairings
+        ).resolve()
+        let pairedRelations = relations.filter { $0.agentID == agent.id && $0.skillID == skill.id }
+        XCTAssertEqual(pairedRelations.count, 2)
+        XCTAssertEqual(Set(pairedRelations.map(\.declarationSource)), [.agentConfiguration, .agentBrief])
+    }
+
     func testAgentPurposeIsBoundedAndUnsafePurposeFailsClosed() throws {
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("director-agent-purpose-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: temp.appendingPathComponent("safe"), withIntermediateDirectories: true)

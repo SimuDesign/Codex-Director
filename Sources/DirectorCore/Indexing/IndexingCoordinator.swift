@@ -139,6 +139,7 @@ public actor IndexingCoordinator {
         var combinedProvenance = discovery.provenance
         let combinedProjects = discovery.projects
         var combinedRelations = discovery.relations
+        var companionIssueCount = 0
         var transientRoots: [String: URL] = [:]
         var runtimeIssues: [DiscoveryIssue] = []
         var runtimeCoverage: CoverageState = .unknown
@@ -198,6 +199,18 @@ public actor IndexingCoordinator {
                 combinedRelations.append(contentsOf: try await store.fetchAllRelations().filter { previousIDs.contains($0.sourceResourceID) || previousIDs.contains($0.targetResourceID) })
             }
         }
+        // Companion declarations are a derived, privacy-safe projection of
+        // local Agent/Skill documents. Resolve them after runtime canonical
+        // mapping so project-local Skills win and global/plugin matches can be
+        // represented as previews by the folder UI. No source is modified.
+        let companionReport = CapabilityCompanionResolver(
+            resources: combinedResources,
+            roots: configuration.scanRoots,
+            transientRoots: transientRoots,
+            agentPairings: discovery.agentPairings
+        ).resolveWithIssues()
+        combinedRelations.append(contentsOf: companionReport.relations.map(\.resourceRelation))
+        companionIssueCount = companionReport.issues.count
         // Resource inventory is a replaceable snapshot. A completed scan
         // prunes deleted/moved records; runtime failures are represented by
         // the last successful snapshot already present in the store because
@@ -303,7 +316,7 @@ public actor IndexingCoordinator {
             cancelled: cancelled,
             runtimeCoverage: runtimeCoverage,
             runtimeIssueCount: runtimeIssues.count,
-            discoveryIssueCount: registry.issues.count + discovery.issues.count
+            discoveryIssueCount: registry.issues.count + discovery.issues.count + companionIssueCount
         )
     }
 

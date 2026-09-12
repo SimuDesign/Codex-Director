@@ -41,11 +41,7 @@ private final class StartupPerformanceLaunchState: ObservableObject {
             ),
             previewMode: false,
             bootstrapPending: true,
-            capabilityGroupingStore: CapabilityGroupingStore(
-                readData: { preferences.data(forKey: CapabilityGroupingStore.defaultsKey) },
-                writeData: { preferences.set($0, forKey: CapabilityGroupingStore.defaultsKey); return true },
-                removeData: { preferences.remove(CapabilityGroupingStore.defaultsKey) }
-            )
+            capabilityFolderStore: CapabilityFolderStore.makeMemory()
         )
 
         // Capture only immutable, test-owned values in the @Sendable factories.

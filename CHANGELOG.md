@@ -6,7 +6,8 @@ The project follows semantic versioning for public releases.
 
 ## Unreleased
 
-- Added Capability Groups: deterministic local grouping for eligible Agents and Skills, eight built-in categories including Uncategorized, and user-defined categories with manual overrides.
+- Replaced the unpublished Capability Groups experiment with Capability Folders: a local, user-controlled browser with Global/Project projections, an empty Self Training folder, atomic existing-capability import, multi-membership, ordering, search, and three folder-internal Agent/Skill tabs. Explicit Agent/companion-Skill declarations are separated from co-observation evidence; folder preferences store only stable IDs and never modify source files.
+- Companion evidence now comes from one indexed batch projection, while paired global Agent TOML/Brief files remain one logical Agent and both declaration sources are inspected. Explicit negative directives and ambiguous matches fail closed.
 
 - Add a guided local-safe restore flow for trusted manifest v1 capability packages. It verifies the isolated package, requires manual project mappings, creates missing files only, reports conflicts, and supports an in-session undo without persisting target paths.
 - Prepare Codex Director for a privacy-reviewed open-source release.
@@ -18,9 +19,9 @@ The project follows semantic versioning for public releases.
 
 ## 1.3.0
 
-- Added a Capability Groups destination with fixed bilingual built-in categories, local search and Agent/Skill filters.
-- Added custom category create, rename, delete-to-Uncategorized, manual assignment, and restore-automatic actions. Category preferences contain only stable IDs and names; no paths or capability content.
-- Kept automatic classification deterministic and offline, and excluded system capabilities, plugin packages, instructions, MCP/tools, and stale plugin caches.
+- Added a Capability Folders destination with Global and Project folders, plus an empty Self Training folder that preserves user-selected memberships across refreshes and upgrades.
+- Added custom folder create, rename, delete, reorder, multi-membership, atomic existing-capability import, global search, folder search, project Agent/Skill tabs, and recent/name sorting. Folder preferences contain only stable IDs and names; no paths or capability content.
+- Removed the unpublished automatic category classifier and eight preset categories. Plugin-provided Skills are visible in Global; system capabilities, plugin packages, instructions, MCP/tools, and stale plugin caches remain excluded.
 
 ## 1.2.0
 

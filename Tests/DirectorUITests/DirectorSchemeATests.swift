@@ -68,117 +68,7 @@ final class DirectorSchemeATests: XCTestCase {
         }
     }
 
-    func testCapabilityGroupsUsesTheApprovedSingleListAndGroupingControls() throws {
-        let sourceRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let groups = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityGroupsView.swift"), encoding: .utf8)
-        let english = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/en.lproj/Localizable.strings"), encoding: .utf8)
-        let chinese = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
-
-        XCTAssertTrue(groups.contains("List(selection: $selectedResourceID)"))
-        XCTAssertTrue(groups.contains("DirectorEditorialFrame"))
-        XCTAssertTrue(groups.contains("DirectorMetricSequence"))
-        XCTAssertTrue(groups.contains("DirectorFilterRibbon"))
-        XCTAssertTrue(groups.contains("setCapabilityGroup(resourceID:"))
-        XCTAssertTrue(groups.contains("restoreAutomaticCapabilityGroup(resourceID:"))
-        XCTAssertTrue(groups.contains("DirectorSideSheet("))
-        XCTAssertTrue(groups.contains("showsCreateSheet"))
-        XCTAssertTrue(groups.contains("showsDeleteConfirmation"))
-        XCTAssertTrue(groups.contains("showsCorruptClearConfirmation"))
-        XCTAssertTrue(groups.contains("showsAllUncategorizedHint"))
-        XCTAssertTrue(groups.contains("customGroupEmptyState"))
-        XCTAssertTrue(groups.contains("capabilityGroupingPreferencesState == .corrupted"))
-        XCTAssertTrue(groups.contains("retryCapabilityGroupingPreferences()"))
-        XCTAssertTrue(groups.contains("clearCorruptedCapabilityGroupingPreferences()"))
-        XCTAssertTrue(groups.contains("filters.toggle(filter)"))
-        XCTAssertTrue(groups.contains("selected: filters.selects(filter)"))
-
-        for key in [
-            "nav.capabilityGroups",
-            "capabilityGroups.group.video-production",
-            "capabilityGroups.group.ui-design",
-            "capabilityGroups.group.software-development",
-            "capabilityGroups.group.content-creation",
-            "capabilityGroups.group.research-data",
-            "capabilityGroups.group.automation-productivity",
-            "capabilityGroups.group.general-tools",
-            "capabilityGroups.group.uncategorized",
-            "capabilityGroups.restoreAutomatic",
-            "capabilityGroups.corrupted",
-            "capabilityGroups.corrupted.title",
-            "capabilityGroups.retry",
-            "capabilityGroups.clearCorrupted",
-            "capabilityGroups.empty.allUncategorized.title",
-            "capabilityGroups.empty.allUncategorized.body",
-            "capabilityGroups.empty.custom",
-            "capabilityGroups.saveFailed"
-        ] {
-            XCTAssertTrue(english.contains("\"\(key)\""), "English localization missing \(key)")
-            XCTAssertTrue(chinese.contains("\"\(key)\""), "Chinese localization missing \(key)")
-        }
-    }
-
-    func testCapabilityGroupMetricCardsDriveComposableFilters() {
-        let softwareGroup = CapabilityGroupDefinition(
-            id: BuiltInCapabilityGroup.softwareDevelopment.id,
-            builtIn: .softwareDevelopment,
-            name: "Software Development"
-        )
-        let uncategorizedGroup = CapabilityGroupDefinition(
-            id: BuiltInCapabilityGroup.uncategorized.id,
-            builtIn: .uncategorized,
-            name: "Uncategorized"
-        )
-        let agent = CapabilityGroupingMember(
-            resource: CapabilityResource(
-                id: "agent", name: "Agent", kind: .agent, status: .idle,
-                scope: .global, projectID: nil, confidence: .exact, summary: nil,
-                sourceRootID: "synthetic", relativeSourcePath: nil,
-                sourcePathHash: nil, lastSeenAt: Date(timeIntervalSince1970: 1)
-            ),
-            group: softwareGroup,
-            source: .automatic
-        )
-        let skill = CapabilityGroupingMember(
-            resource: CapabilityResource(
-                id: "skill", name: "Skill", kind: .skill, status: .idle,
-                scope: .global, projectID: nil, confidence: .exact, summary: nil,
-                sourceRootID: "synthetic", relativeSourcePath: nil,
-                sourcePathHash: nil, lastSeenAt: Date(timeIntervalSince1970: 1)
-            ),
-            group: uncategorizedGroup,
-            source: .automatic
-        )
-
-        var filters = CapabilityGroupingFilterState()
-        XCTAssertTrue(filters.matches(agent))
-        XCTAssertTrue(filters.matches(skill))
-
-        filters.toggle(.agent)
-        XCTAssertTrue(filters.selects(.agent))
-        XCTAssertTrue(filters.matches(agent))
-        XCTAssertFalse(filters.matches(skill))
-
-        filters.toggle(.categorized)
-        XCTAssertTrue(filters.selects(.agent))
-        XCTAssertTrue(filters.selects(.categorized))
-        XCTAssertTrue(filters.matches(agent))
-        XCTAssertFalse(filters.matches(skill))
-
-        filters.toggle(.agent)
-        filters.toggle(.uncategorized)
-        XCTAssertFalse(filters.selects(.categorized))
-        XCTAssertTrue(filters.selects(.uncategorized))
-        XCTAssertFalse(filters.matches(agent))
-        XCTAssertTrue(filters.matches(skill))
-
-        filters.toggle(.uncategorized)
-        XCTAssertFalse(filters.isActive)
-    }
-
-    func testCapabilityGroupDetailsDeduplicateProjectsAndForwardClassificationActions() throws {
+    func testCapabilityFolderDetailsDeduplicateProjectsAndForwardClassificationActions() throws {
         let first = CapabilityProject(id: "project:shared", name: "Shared project", lastSeenAt: Date(timeIntervalSince1970: 10))
         let duplicate = CapabilityProject(id: "project:shared", name: "Stale duplicate", lastSeenAt: Date(timeIntervalSince1970: 20))
         let other = CapabilityProject(id: "project:other", name: "Other project", lastSeenAt: Date(timeIntervalSince1970: 20))
@@ -194,6 +84,131 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(root.contains("Self.stableUniqueProjects(from: model.libraryModels.flatMap(\\.projects))"))
         XCTAssertTrue(root.contains("onClassify: { id, ownership in self.model.classify(resourceID: id, ownership: ownership) }"))
         XCTAssertTrue(root.contains("onResetClassification: { id in self.model.resetClassification(resourceID: id) }"))
+    }
+
+    func testCapabilityFoldersUseResponsiveCardsAndPerFolderSessionState() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let folders = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        XCTAssertTrue(folders.contains("LazyVGrid"))
+        XCTAssertTrue(folders.contains("DirectorAdaptiveGrid.items(for:"))
+        XCTAssertTrue(folders.contains("folderSearchByKey"))
+        XCTAssertTrue(folders.contains("folderTabByID"))
+        XCTAssertTrue(folders.contains("folderSortByKey"))
+        XCTAssertTrue(folders.contains("folderScrollPositionByKey"))
+        XCTAssertTrue(folders.contains("selectedResourceIDByKey"))
+        XCTAssertTrue(folders.contains("CapabilityFolderSessionKey"))
+        XCTAssertTrue(folders.contains("capabilityCompanionUsageByRelationID"))
+        XCTAssertTrue(folders.contains(".task(id: model.capabilityCompanionUsageGeneration)"), "companion evidence reload must follow projection generations")
+        XCTAssertTrue(folders.contains("relatedSkillsSection"))
+        XCTAssertTrue(folders.contains("relatedAgentsSection"))
+        XCTAssertTrue(folders.contains("relationshipDeclarationText"))
+        XCTAssertTrue(folders.contains("relation.kind == .requiresAgent"))
+        XCTAssertTrue(folders.contains("relation.declarationSource"))
+        XCTAssertTrue(folders.contains("stats.lastObservedAt"))
+        XCTAssertTrue(folders.contains("stats.coverage"))
+        XCTAssertTrue(folders.contains("Historical co-observation evidence"))
+        XCTAssertTrue(folders.contains("Co-observation does not prove invocation."))
+        XCTAssertTrue(folders.contains("entryScrollPosition"))
+        XCTAssertTrue(folders.contains(".scrollPosition(id: activeScrollPosition)"))
+        XCTAssertTrue(folders.contains("guard model.directoryLoaded else { return \"—\" }"))
+        XCTAssertTrue(folders.contains("capabilityFolders.empty.matches"))
+        XCTAssertTrue(folders.contains("capabilityFolders.recentUsage"))
+        XCTAssertTrue(folders.contains("CapabilityFolderImportSheet"))
+        XCTAssertTrue(folders.contains("addCapabilitiesToFolder(resourceIDs:"))
+        XCTAssertTrue(folders.contains("folder.isDefault"))
+        XCTAssertTrue(folders.contains("folderTabs(for:"))
+        XCTAssertFalse(folders.contains("projectTypeTabs(for:"))
+        XCTAssertFalse(folders.contains("folderTypeFilterByID"))
+        XCTAssertTrue(folders.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(folders.contains("CapabilityFolderDropDelegate"))
+        XCTAssertTrue(folders.contains("if folder.isCustom"))
+        XCTAssertTrue(folders.contains("Global and Project are immutable derived views"))
+        XCTAssertTrue(folders.contains("\\(scopeText(for: member.resource))"))
+        XCTAssertTrue(folders.contains("\\(sourceText(for: member.resource))"))
+        XCTAssertFalse(folders.contains("Text(\"(scopeText(for: member.resource))"))
+
+        let english = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/en.lproj/Localizable.strings"), encoding: .utf8)
+        let chinese = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
+        for key in [
+            "capabilityFolders.empty.matches",
+            "capabilityFolders.recentUsage",
+            "capabilityFolders.import",
+            "capabilityFolders.import.confirm",
+            "capabilityFolders.tabs.label",
+            "capabilityFolders.tabs.companions",
+            "capabilityFolders.tabs.agents",
+            "capabilityFolders.tabs.skills",
+            "capabilityFolders.companions.companion",
+            "capabilityFolders.companions.requiresAgent",
+            "capabilityFolders.companions.source.registry",
+            "capabilityFolders.companions.source.configuration",
+            "capabilityFolders.companions.source.brief",
+            "capabilityFolders.companions.source.description",
+            "capabilityFolders.companions.historyGroup",
+            "capabilityFolders.companions.coObservedShort",
+            "capabilityFolders.companions.lastObserved",
+            "capabilityFolders.companions.coverage.complete",
+            "capabilityFolders.companions.coverage.partial",
+            "capabilityFolders.companions.coverage.unknown",
+            "capabilityFolders.companions.previewGlobal",
+            "capabilityFolders.companions.previewOutside",
+            "capabilityFolders.companions.noCausalClaim",
+        ] {
+            XCTAssertTrue(english.contains("\"\(key)\""), "missing English folder state key \(key)")
+            XCTAssertTrue(chinese.contains("\"\(key)\""), "missing Chinese folder state key \(key)")
+        }
+    }
+
+    func testCapabilityFolderReorderGuardsDerivedFoldersAndInvalidIndexes() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let view = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        let model = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/AppShell/DirectorAppModel.swift"), encoding: .utf8)
+        XCTAssertTrue(view.contains("if folder.isCustom"))
+        XCTAssertTrue(view.contains("folders.filter(\\.isCustom).map(\\.id)"))
+        XCTAssertTrue(model.contains("offsets.allSatisfy({ $0 >= 0 && $0 < folders.count })"))
+        XCTAssertTrue(model.contains("destination <= folders.count"))
+        XCTAssertTrue(model.contains("$0.id == id && $0.isCustom"))
+    }
+
+    func testCapabilityMembershipMenuIsConnectedToAllAgentAndSkillLibraries() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let library = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift"), encoding: .utf8)
+        let root = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/AppShell/DirectorRootView.swift"), encoding: .utf8)
+        XCTAssertTrue(library.contains("resource.kind == .agent || resource.kind == .skill"))
+        XCTAssertTrue(library.contains("folderMembershipMenu(for: row.entry.resource)"))
+        XCTAssertTrue(library.contains("folderDefinitions.filter(\\.isCustom)"))
+        XCTAssertTrue(root.contains("folderDefinitions: self.model.capabilityFolders.folders"))
+        XCTAssertTrue(root.contains("onToggleFolderMembership:"))
+    }
+
+    func testFolderNavigationUsesNewPublicKeyAndLegacyDeepLinkOnlyMaps() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let destination = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/AppShell/DirectorDestination.swift"), encoding: .utf8)
+        XCTAssertTrue(destination.contains("case capabilityFolders"))
+        XCTAssertTrue(destination.contains("if rawValue == \"capabilityGroups\""))
+        XCTAssertFalse(destination.contains("case capabilityGroups"))
+    }
+
+    func testUnpublishedGroupingImplementationIsNotBuilt() {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent("Sources/DirectorCore/Grouping/CapabilityGrouping.swift").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityGroupsView.swift").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sourceRoot.appendingPathComponent("Tests/DirectorCoreTests/Grouping/CapabilityGroupingTests.swift").path))
     }
 
     func testCapabilitySelectionUsesDismissibleSideSheet() throws {

@@ -77,7 +77,7 @@ final class AnnotatedUIPolishTests: XCTestCase {
         XCTAssertTrue(scheme.contains("size == .toolbar ? 0"))
     }
 
-    func testCapabilityGroupsHaveSpacingAndProminentProjectHeaders() throws {
+    func testCapabilityProjectGroupsHaveSpacingAndProminentProjectHeaders() throws {
         let library = try source("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift")
         let shared = try source("Sources/DirectorUI/DesignSystem/DirectorSharedComponents.swift")
 

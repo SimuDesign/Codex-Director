@@ -14,10 +14,10 @@ final class UIValidationTests: XCTestCase {
         XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 5)
     }
 
-    func testValidationSessionUsesAnIsolatedGroupingPreferenceBoundary() throws {
+    func testValidationSessionUsesAnIsolatedFolderPreferenceBoundary() throws {
         let session = try UIValidationSession(dataset: .empty)
-        XCTAssertEqual(session.model.capabilityGroupingPreferencesState, .missing)
-        XCTAssertEqual(session.model.capabilityGroupingStore.preferencesState(), .missing)
+        XCTAssertEqual(session.model.capabilityFolderPreferencesState, .valid)
+        XCTAssertEqual(session.model.capabilityFolderStore.preferencesState(), .valid)
     }
 
     func testValidationHostExposesBilingualAppearanceAndWindowMatrix() throws {
@@ -40,7 +40,7 @@ final class UIValidationTests: XCTestCase {
         XCTAssertTrue(host.contains("1280 × 800"))
         XCTAssertTrue(host.contains("1600 × 1000"))
         XCTAssertEqual(destinations.components(separatedBy: "public static var approvedNavigation").count - 1, 1)
-        XCTAssertTrue(destinations.contains("[.home, .capabilityGroups, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]"))
+        XCTAssertTrue(destinations.contains("[.home, .capabilityFolders, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]"))
     }
 
     func testCaptureLayoutKeepsControlsOutsideTheRequestedProductViewport() {
@@ -156,7 +156,17 @@ final class UIValidationTests: XCTestCase {
         XCTAssertNil(session.model.configuration)
         XCTAssertEqual(session.model.capabilities.allRows.count, 14)
         XCTAssertEqual(session.model.tasks.rows.count, 4)
-        XCTAssertTrue(session.model.tasks.invocationsBySession.isEmpty, "Invocation evidence is intentionally lazy")
+        // The representative fixture is a fully materialized validation
+        // dataset.  Keep the indexed invocation map available so companion
+        // evidence can be projected from the same authoritative source as the
+        // Tasks view; production startup still remains lazy until Tasks or
+        // companion evidence is requested.
+        XCTAssertEqual(session.model.tasks.invocationsBySession.count, 4)
+        XCTAssertEqual(
+            session.model.tasks.invocationsBySession.values.reduce(0) { $0 + $1.count },
+            17,
+            "Tasks and companion evidence intentionally use the recent seven-day window; the three synthetic calls outside that window stay in the seeded database but are not loaded into the bounded presentation snapshot."
+        )
         XCTAssertGreaterThan(session.model.capabilities.allRows.filter { $0.callCount > 0 }.count, 0)
         XCTAssertGreaterThan(session.model.review.allFindings.count, 0)
         XCTAssertGreaterThan(session.model.usage.taskBreakdown.count, 0)

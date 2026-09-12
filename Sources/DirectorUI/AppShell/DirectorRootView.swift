@@ -95,8 +95,8 @@ public struct DirectorRootView: View {
                 model.selection = sidebarItem(for: category)
                 if let library = model.libraryModels.first(where: { $0.category == category }) { library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending); library.selectedID = id }
             })
-        case .capabilityGroups:
-            CapabilityGroupsView(model: model) { resource in
+        case .capabilityFolders:
+            CapabilityFoldersView(model: model) { resource in
                 capabilityDetailModel(for: resource)
             }
         case .customAgents:
@@ -212,6 +212,15 @@ public struct DirectorRootView: View {
                     findings: [], now: self.model.presentationNow,
                     onClassify: { id, ownership in self.model.classify(resourceID: id, ownership: ownership) },
                     onResetClassification: { id in self.model.resetClassification(resourceID: id) })
+            },
+            folderDefinitions: self.model.capabilityFolders.folders,
+            folderMembership: { resourceID, folderID in
+                self.model.capabilityFolderStore.preferences().memberships.contains {
+                    $0.resourceID == resourceID && $0.folderID == folderID
+                }
+            },
+            onToggleFolderMembership: { resourceID, folderID, included in
+                self.model.setCapabilityFolderMembership(resourceID: resourceID, folderID: folderID, included: included)
             })
         .navigationTitle(languageStore.localizer.text(titleKey, fallback: fallback))
     }
