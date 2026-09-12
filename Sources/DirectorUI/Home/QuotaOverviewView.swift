@@ -246,7 +246,7 @@ public struct QuotaOverviewView: View {
                             .annotation(position: .top, alignment: .center, spacing: 4) {
                                 Text(percentLabel(used))
                                     .font(DirectorTypography.label.monospacedDigit())
-                                    .foregroundStyle(DirectorColor.accentIce)
+                                    .foregroundStyle(DirectorColor.dataText)
                             }
                         } else {
                             PointMark(

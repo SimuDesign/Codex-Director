@@ -10,6 +10,8 @@ public struct DirectorRootView: View {
     @State private var confirmDelete = false
     @State private var showEmptyProjects = false
     @State private var windowPresenceID = UUID()
+    @State private var sidebarSelectionEmphasized = false
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(model: DirectorAppModel = DirectorAppModel()) {
         _model = StateObject(wrappedValue: model)
@@ -57,12 +59,14 @@ public struct DirectorRootView: View {
 
     private func sidebarDestination(_ item: DirectorSidebarItem) -> some View {
         let isSelected = model.selection == item
+        let foreground = isSelected ? DirectorColor.navigationSelectedForeground : DirectorColor.textPrimary
         return HStack(spacing: DirectorSpacing.space2) {
             Image(systemName: item.symbol)
-                .foregroundStyle(isSelected ? DirectorColor.sidebarSelectedSymbol : DirectorColor.textPrimary)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(foreground)
                 .accessibilityHidden(true)
             Text(languageStore.localizer.text("nav.\(item.rawValue)", fallback: item.title))
-                .foregroundStyle(isSelected ? DirectorColor.primaryActionForeground : DirectorColor.textPrimary)
+                .foregroundStyle(foreground)
         }
         .padding(.horizontal, DirectorSpacing.space2)
         .padding(.vertical, DirectorSpacing.space2)
@@ -70,14 +74,26 @@ public struct DirectorRootView: View {
         .background {
             if isSelected {
                 RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
-                    .fill(DirectorGradient.primaryButton)
+                    .fill(DirectorGradient.navigationSelected)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .stroke(
+                        sidebarSelectionEmphasized ? DirectorColor.focus : DirectorColor.primaryActionBoundary.opacity(0.76),
+                        lineWidth: sidebarSelectionEmphasized || contrast == .increased ? 2 : 1
+                    )
+                    .accessibilityHidden(true)
+                DirectorListSelectionBridge(isEmphasized: $sidebarSelectionEmphasized)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .tag(item)
         .listRowBackground(Color.clear)
-        .background(NativeListSelectionVisualSuppressor().allowsHitTesting(false).accessibilityHidden(true))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -269,41 +285,4 @@ public struct DirectorRootView: View {
         Task { await model.startIndexing() }
     }
 
-}
-
-/// Keeps the native List selection model and keyboard behavior while preventing
-/// AppKit from painting a second system-blue selection layer behind our row.
-private struct NativeListSelectionVisualSuppressor: NSViewRepresentable {
-    func makeNSView(context: Context) -> SelectionHighlightSuppressingView {
-        SelectionHighlightSuppressingView()
-    }
-
-    func updateNSView(_ nsView: SelectionHighlightSuppressingView, context: Context) {
-        nsView.suppressSelectionHighlight()
-    }
-}
-
-private final class SelectionHighlightSuppressingView: NSView {
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        suppressSelectionHighlight()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        suppressSelectionHighlight()
-    }
-
-    func suppressSelectionHighlight() {
-        DispatchQueue.main.async { [weak self] in
-            var ancestor = self?.superview
-            while let view = ancestor {
-                if let tableView = view as? NSTableView {
-                    tableView.selectionHighlightStyle = .none
-                    return
-                }
-                ancestor = view.superview
-            }
-        }
-    }
 }

@@ -302,7 +302,7 @@ Under Reduce Motion:
 
 - Use a stable SF Symbol, label, selection state, and optional evidence-backed badge.
 - Do not use resource-type colors as full-row backgrounds.
-- The active destination uses the shared blue → ice → mint brand gradient with a black label and a named high-contrast deep-gray symbol. Suppress the native blue visual tint so it cannot appear behind the custom gradient; the native List remains the selection and keyboard source of truth.
+- The active destination uses the shared blue → ice → mint brand gradient with the same black foreground for its monochrome symbol and label. Suppress the native blue visual tint so it cannot appear behind the custom gradient; the native List remains the selection and keyboard source of truth.
 - Keep the seven approved destinations in the specified order. Capability Folders is immediately after Home; configuration scope and usage project live inside the relevant page, not as additional navigation destinations.
 
 ### 11.2 Toolbar
@@ -356,7 +356,7 @@ The [Home refresh contract](../../docs/plans/2026-08-28-home-visual-refresh.md) 
 
 Use dynamic Light/Dark bindings, existing label colors and stronger boundaries/muted text under Increase Contrast. The app owns a persisted Light/Dark preference, defaults to Dark when missing or invalid, applies it to every app window and SwiftUI sheet, and never changes the macOS global appearance preference. Settings exposes the two choices as a permanently visible segmented control; there is no “Follow System” option. Home and capability pages are opaque and static under Reduce Transparency/Motion. No content glass or ornamental shadows.
 
-All gradient primary actions use pure black foreground content. The blue → ice → mint endpoints provide at least `4.5:1` contrast against black in both supported themes; the lowest approved endpoint is light blue `#0879D9` at approximately `4.75:1`. `DirectorPrimaryActionButtonStyle` provides standard, 28pt toolbar and equal-width Settings action sizes while preserving native focus, hover, pressed, disabled and Increase Contrast behavior.
+Gradient actions use a purpose-specific dynamic rail. Light uses `#0065B3` → `#00738B` → `#087765` with white content; Dark retains the brighter blue → ice → mint rail with black content. Hover and pressed rails are opaque state-specific colors. Disabled actions use an opaque neutral rail with the same theme foreground instead of compositing a faded active gradient. Every sampled point of every state must meet `4.5:1`. Brand titles/charts, navigation selection and action fills are separate roles. `DirectorPrimaryActionButtonStyle` provides standard, 28pt toolbar and equal-width Settings action sizes while preserving native focus, hover, pressed, disabled and Increase Contrast behavior.
 
 Home uses Card Atlas's three unnumbered `.title2` modules, 32pt inter-module spacing, a tighter 16pt hero-to-first-module gap, 40/16pt page gutters and a 1440pt maximum content width. The compact hero reads “Welcome to Codex Director”, has no decorative illustration or inline refresh action, and leaves refresh to the global toolbar. The quota stage stacks below 760pt; the metric strip is four columns at 760pt and above, two columns from 420–759pt and one below 420pt; rankings use three top-aligned columns at 1000pt and above and stack below. Draw each day's observed weekly-quota use above gradient bars, retain seven dates and evidence gaps, scale the percentage axis to the largest available daily value, and remove per-day reset text, vertical grid lines, the visible daily table and duplicate remaining value. The quota ring uses a 20pt stroke and one Reduce Motion-aware entrance reveal. Inventory SF Symbols match navigation and are decorative AX-hidden. Home numeric roles (`homeMetric`, `homePercentage`, `homeTimestamp`, `homeRank`, `homeRankCount`) use Avenir Next with tabular digits only for numeric values; interface labels and prose retain the system font. All capability pages use `DirectorEditorialFrame`, `DirectorEditorialHero`, `DirectorMetricSequence`, `DirectorMetricCard`, `DirectorFilterRibbon`, project-group outline boundaries and a transient `DirectorSideSheet`; page content is capped at 1440pt with 40/16pt outer padding. Capability metrics remain four columns at 760pt and above, two columns from 420–759pt, and one below 420pt; their final outer heights are 96pt desktop and 88pt compact, with visible hover and selected treatments but no decorative selected underline. The entire capability page is one native `List(selection:)` scroll container, so the header, metrics, filter rail, status and ledger move together. The filter rail owns the single flexible search field plus narrower visible scope, sort and plugin-status controls where applicable; it does not repeat a result count. Capability Folders uses folder-entry cards, immutable Global/Project projections, folder-scoped Agent/Skill filters, and multi-membership actions that remain available to keyboard and VoiceOver users. Menus place one disclosure chevron on the right. Global and Project folders are presented as privacy-safe derived views, followed by custom folder cards with 16pt internal row padding and a separator between every item. Capability row titles use the named 16pt semibold and 14pt regular summary roles; call counts use named 16pt/13pt roles. Category symbols are `person.crop.circle`, `sparkles`, `shippingbox` and `puzzlepiece.extension`; metric symbols are `globe`, `folder`, `clock.arrow.circlepath`, `calendar.badge.exclamationmark`, `checkmark.circle` and `tray.full`. Symbols are decorative and AX-hidden when adjacent text carries the meaning.
 
@@ -541,7 +541,7 @@ Shared `DirectorCanvas`, `DirectorPanel`, `DirectorEditorialFrame`,
 `DirectorAdaptiveGrid` are the
 implementation contract. The grid is four columns at 760 pt and above, two
 columns from 420 through 759 pt, and one column below 420 pt. The filled
-primary action uses the blue → ice → mint gradient with pure black content and keeps native Button
+primary action uses the theme-specific action rail and foreground described in §11.3c and keeps native Button
 focus, disabled and keyboard semantics; secondary and destructive actions
 remain native controls.
 
@@ -561,8 +561,8 @@ limited to navigation and control layers.
 
 The 0.3.1 refinement centralizes refresh presentation in
 `DirectorRefreshButton`, adds the compact toolbar size to the shared primary
-action style, and changes `primaryActionForeground` to black for every gradient
-action consumer. Settings section 01 is “Language & appearance” and owns the
+action style. Its original black-for-every-theme action foreground contract is
+superseded by the 2026-09-12 Light UI optimization in §19. Settings section 01 is “Language & appearance” and owns the
 visible Light/Dark segmented control. `AppThemeStore` persists only the app's
 theme under its dedicated preference key and shares changes across windows and
 sheets. These changes are presentation-only: refresh scheduling, SQLite,
@@ -584,7 +584,7 @@ uses balanced section padding with equal compact index actions.
 
 The screenshot-correction pass removes competing system chrome from those
 approved custom treatments: sidebar selection visually exposes only the brand
-gradient, the selected sidebar symbol uses the shared deep-gray token, the
+gradient, the selected sidebar symbol and label use the shared black foreground, the
 toolbar refresh item has no shared glass background or toolbar shadow, and the
 quota source switch uses a brand-gradient outline rather than a system-blue
 fill. The quota heading aligns to its column, the ring uses the named 216pt
@@ -688,6 +688,17 @@ active restore/undo and mandatory cleanup finish. The
 UI and accessibility tree must not expose package instructions as commands,
 and no restore path installs plugins/dependencies, edits Codex configuration,
 uses the network, or executes package content.
+## 22. Light UI optimization — 2026-09-12
+
+The approved [Light UI optimization plan](../../docs/plans/2026-09-12-light-ui-optimization.md) refines presentation only:
+
+- Selected capability rows keep native `List(selection:)`, keyboard and AX semantics while drawing one contained opaque-canvas wash and explicit readable text. A public row-scoped adapter suppresses only `NSTableRowView`'s native selection paint and restores it on removal; it must never mutate `NSTableView.selectionHighlightStyle`, discover tables window-wide, use private API or swizzle AppKit. Structural List rows are selection-disabled so keyboard navigation lands only on capabilities.
+- The sidebar uses one navigation gradient. Its monochrome SF Symbol and label share `navigationSelectedForeground`; focus remains a separate two-point focus-colored boundary while the row is emphasized.
+- Task-relevant metadata uses `textSupporting`; chart annotations, ranking ordinals and other small numeric/evidence text use `dataText`. These roles must meet `4.5:1` on the actual canvas and panel surfaces.
+- The refresh symbol and native progress ring share a 14pt slot. Idle, loading and disabled states keep the same outer geometry. Evidence show/hide actions also share one full-width geometry.
+- Filter layout measures the inner ribbon width once, after ribbon padding. When search and all selectors do not fit, search owns one full row and selectors use a row, two columns or one column according to that same available width. Every closed menu keeps its current value visible in zh-Hans and English.
+
+This section supersedes earlier action-color and selection-paint wording where they conflict. P3 compact-density exploration remains outside this refinement.
 
 ### Native recomposition delivery record — 2026-08-31
 

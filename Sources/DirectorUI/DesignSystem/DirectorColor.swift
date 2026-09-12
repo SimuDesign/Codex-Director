@@ -15,6 +15,13 @@ public enum DirectorColor {
     public static let textPrimary = Color(nsColor: .labelColor)
     public static let textSecondary = Color(nsColor: .secondaryLabelColor)
     public static let textTertiary = Color(nsColor: .tertiaryLabelColor)
+    /// Supporting metadata remains subordinate to primary content while
+    /// retaining enough contrast for source, state, time and unit labels.
+    /// Tertiary text is reserved for optional decoration.
+    public static let textSupporting = dynamic(
+        light: NSColor(red: 0x45 / 255, green: 0x56 / 255, blue: 0x61 / 255, alpha: 1),
+        dark: NSColor(red: 0xB7 / 255, green: 0xC8 / 255, blue: 0xCF / 255, alpha: 1)
+    )
     public static let separator = Color(nsColor: .separatorColor)
     public static let focus = Color(nsColor: .keyboardFocusIndicatorColor)
     public static let accent = Color.accentColor
@@ -47,19 +54,77 @@ public enum DirectorColor {
     public static let accentIce = dynamic(light: NSColor(red: 0x11 / 255, green: 0x8E / 255, blue: 0xAE / 255, alpha: 1), dark: NSColor(red: 0x49 / 255, green: 0xCA / 255, blue: 0xFF / 255, alpha: 1))
     public static let accentMint = dynamic(light: NSColor(red: 0x14 / 255, green: 0x8F / 255, blue: 0x7E / 255, alpha: 1), dark: NSColor(red: 0x79 / 255, green: 0xEA / 255, blue: 0xD8 / 255, alpha: 1))
     public static let accentTeal = dynamic(light: NSColor(red: 0x00 / 255, green: 0x6B / 255, blue: 0x83 / 255, alpha: 1), dark: NSColor(red: 0x5F / 255, green: 0xD7 / 255, blue: 0xEE / 255, alpha: 1))
+    /// Small data labels use a dedicated readable text role instead of a
+    /// visualization fill endpoint. The endpoint remains an accent for bars,
+    /// rings and other non-text marks.
+    public static let dataText = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x6B / 255, blue: 0x83 / 255, alpha: 1),
+        dark: NSColor(red: 0x5F / 255, green: 0xD7 / 255, blue: 0xEE / 255, alpha: 1)
+    )
     public static let emphasisText = accentBlue
     public static let environmentLight = accentTeal.opacity(0.14)
-    /// The blue → ice → mint action rail remains bright in both appearances;
-    /// pure black keeps every approved stop at or above 4.5:1 contrast.
-    public static let primaryActionForeground = Color.black
-    /// Selected sidebar symbols sit on the bright brand gradient in both
-    /// appearances. A stable deep gray distinguishes them from the black label
-    /// while avoiding the inherited system-blue tint.
-    public static let sidebarSelectedSymbol = Color(
-        nsColor: NSColor(srgbRed: 0.12, green: 0.14, blue: 0.15, alpha: 1)
+
+    // Action controls intentionally have their own stops. Light mode uses a
+    // deeper opaque rail so a white label and SF Symbol remain readable. Dark
+    // mode keeps the existing bright rail with black content.
+    public static let actionBlue = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x65 / 255, blue: 0xB3 / 255, alpha: 1),
+        dark: NSColor(red: 0x15 / 255, green: 0x9D / 255, blue: 0xFF / 255, alpha: 1)
     )
-    public static let primaryActionBoundary = accentIce
-    public static let primaryActionShadow = accentTeal
+    public static let actionIce = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x73 / 255, blue: 0x8B / 255, alpha: 1),
+        dark: NSColor(red: 0x49 / 255, green: 0xCA / 255, blue: 0xFF / 255, alpha: 1)
+    )
+    public static let actionMint = dynamic(
+        light: NSColor(red: 0x08 / 255, green: 0x77 / 255, blue: 0x65 / 255, alpha: 1),
+        dark: NSColor(red: 0x79 / 255, green: 0xEA / 255, blue: 0xD8 / 255, alpha: 1)
+    )
+    public static let actionHoverBlue = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x58 / 255, blue: 0x9D / 255, alpha: 1),
+        dark: NSColor(red: 0x1F / 255, green: 0xA6 / 255, blue: 0xFF / 255, alpha: 1)
+    )
+    public static let actionHoverIce = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x66 / 255, blue: 0x7B / 255, alpha: 1),
+        dark: NSColor(red: 0x56 / 255, green: 0xD1 / 255, blue: 0xFF / 255, alpha: 1)
+    )
+    public static let actionHoverMint = dynamic(
+        light: NSColor(red: 0x06 / 255, green: 0x69 / 255, blue: 0x56 / 255, alpha: 1),
+        dark: NSColor(red: 0x86 / 255, green: 0xF0 / 255, blue: 0xDF / 255, alpha: 1)
+    )
+    public static let actionPressedBlue = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x4F / 255, blue: 0x8E / 255, alpha: 1),
+        dark: NSColor(red: 0x0C / 255, green: 0x89 / 255, blue: 0xE0 / 255, alpha: 1)
+    )
+    public static let actionPressedIce = dynamic(
+        light: NSColor(red: 0x00 / 255, green: 0x5B / 255, blue: 0x6E / 255, alpha: 1),
+        dark: NSColor(red: 0x3D / 255, green: 0xB8 / 255, blue: 0xEC / 255, alpha: 1)
+    )
+    public static let actionPressedMint = dynamic(
+        light: NSColor(red: 0x05 / 255, green: 0x5B / 255, blue: 0x4A / 255, alpha: 1),
+        dark: NSColor(red: 0x6C / 255, green: 0xD7 / 255, blue: 0xC7 / 255, alpha: 1)
+    )
+    /// Disabled actions use a fully opaque neutral rail. Their foreground
+    /// stays solid white in Light and black in Dark, preserving text contrast
+    /// while the loss of chroma communicates that the action is unavailable.
+    public static let actionDisabledBlue = dynamic(
+        light: NSColor(red: 0x52 / 255, green: 0x63 / 255, blue: 0x6C / 255, alpha: 1),
+        dark: NSColor(red: 0x8A / 255, green: 0x95 / 255, blue: 0x9C / 255, alpha: 1)
+    )
+    public static let actionDisabledIce = dynamic(
+        light: NSColor(red: 0x59 / 255, green: 0x68 / 255, blue: 0x6B / 255, alpha: 1),
+        dark: NSColor(red: 0x98 / 255, green: 0xA2 / 255, blue: 0xA6 / 255, alpha: 1)
+    )
+    public static let actionDisabledMint = dynamic(
+        light: NSColor(red: 0x5A / 255, green: 0x69 / 255, blue: 0x65 / 255, alpha: 1),
+        dark: NSColor(red: 0xA5 / 255, green: 0xAC / 255, blue: 0xA8 / 255, alpha: 1)
+    )
+    public static let primaryActionForeground = dynamic(light: .white, dark: .black)
+    public static let primaryActionBoundary = actionIce
+    public static let primaryActionShadow = actionMint
+    /// Navigation retains the original brand rail in both themes, so its
+    /// selected label and symbol keep a stable black foreground independent
+    /// of the filled action control contract.
+    public static let navigationSelectedForeground = Color.black
 
     public static func accent(_ tone: DirectorAccentTone) -> Color {
         switch tone {

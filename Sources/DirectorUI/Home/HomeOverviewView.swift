@@ -229,7 +229,7 @@ public struct HomeOverviewView: View {
         return HStack(alignment: .top, spacing: DirectorSpacing.space3) {
             Text(String(format: "%02d", position))
                 .font(HomeNumericTypography.rankIndex)
-                .foregroundStyle(DirectorColor.accent(tone))
+                .foregroundStyle(DirectorColor.dataText)
                 .frame(width: 24, alignment: .leading)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: DirectorSpacing.space2) {

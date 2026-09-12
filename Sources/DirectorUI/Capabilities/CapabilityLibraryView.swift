@@ -37,6 +37,42 @@ public struct CapabilityLibraryGroup: Identifiable, Equatable, Sendable {
     public init(id: String, title: String, rows: [CapabilityLibraryRow]) { self.id = id; self.title = title; self.rows = rows }
 }
 
+/// Geometry contract for the library filter ribbon. Search gets a complete
+/// row whenever it cannot share a line with the visible selectors. The same
+/// measured content width then controls selector wrapping.
+public enum DirectorFilterLayout {
+    public enum SelectorArrangement: Equatable, Sendable {
+        case row
+        case twoColumns
+        case singleColumn
+    }
+
+    public static let searchMinimumWidth: CGFloat = 220
+    public static let controlGap: CGFloat = DirectorSpacing.space3
+    public static let viewMinimumWidth: CGFloat = 152
+    public static let sortMinimumWidth: CGFloat = 132
+    public static let pluginStatusMinimumWidth: CGFloat = 128
+
+    public static func controlsMinimumWidth(for category: CapabilityCategory) -> CGFloat {
+        let isPlugin = category == .installedPlugins
+        let count = isPlugin ? 3 : 2
+        let widths = viewMinimumWidth + sortMinimumWidth + (isPlugin ? pluginStatusMinimumWidth : 0)
+        return widths + CGFloat(count - 1) * controlGap
+    }
+
+    public static func searchAndControlsFit(width: CGFloat, category: CapabilityCategory) -> Bool {
+        width >= searchMinimumWidth + controlGap + controlsMinimumWidth(for: category)
+    }
+
+    public static func selectorArrangement(width: CGFloat, category: CapabilityCategory) -> SelectorArrangement {
+        // This width is the selector column after search has moved above it.
+        // Keep the selectors on one line whenever their own minimum widths fit;
+        // only then collapse to a two-column or single-column stack.
+        guard width < controlsMinimumWidth(for: category) else { return .row }
+        return width >= viewMinimumWidth * 2 + controlGap ? .twoColumns : .singleColumn
+    }
+}
+
 @MainActor public final class CapabilityLibraryViewModel: ObservableObject {
     @Published public var context = CapabilityBrowseContext()
     @Published public var selectedID: String?
@@ -249,8 +285,10 @@ public struct CapabilityLibraryView: View {
     public let queryTrigger: String?
     @EnvironmentObject private var languageStore: AppLanguageStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     @State private var cachedDetail: CapabilityDetailViewModel?
     @State private var cachedDetailKey = ""
+    @State private var selectedRowEmphasized = false
     public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership }
     public var body: some View {
         DirectorEditorialFrame {
@@ -303,42 +341,37 @@ public struct CapabilityLibraryView: View {
         let compactComposition = width < DirectorPageLayout.compactBreakpoint
         return List(selection: $model.selectedID) {
             capabilityHeader(compact: compactComposition)
+                .selectionDisabled()
                 .listRowBackground(Color.clear)
                 .listRowInsets(headerRowInsets)
                 .listRowSeparator(.hidden)
 
             summary(width: contentWidth, compact: compactComposition)
+                .selectionDisabled()
                 .padding(.bottom, DirectorSpacing.space6)
                 .listRowBackground(Color.clear)
                 .listRowInsets(rowInsets)
                 .listRowSeparator(.hidden)
 
             DirectorFilterRibbon(compact: compactComposition) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .bottom, spacing: DirectorSpacing.space3) {
-                        filterSearchField
-                            .frame(minWidth: 220, maxWidth: .infinity)
-                        controls
-                    }
-                    VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
-                        filterSearchField
-                            .frame(maxWidth: .infinity)
-                        controls
-                    }
-                }
+                let ribbonInset = compactComposition ? DirectorSpacing.space2 * 2 : DirectorSpacing.space4 * 2
+                filterRibbonContent(width: max(0, contentWidth - ribbonInset))
             }
+            .selectionDisabled()
             .padding(.bottom, DirectorSpacing.ribbonGap)
             .listRowBackground(Color.clear)
             .listRowInsets(rowInsets)
             .listRowSeparator(.hidden)
 
             resultContextNotice
+                .selectionDisabled()
                 .listRowBackground(Color.clear)
                 .listRowInsets(rowInsets)
                 .listRowSeparator(.hidden)
 
             if model.isLoading {
                 ProgressView(copy("library.loading", "Loading…"))
+                    .selectionDisabled()
                     .controlSize(.small)
                     .padding(.vertical, DirectorSpacing.space3)
                     .listRowBackground(Color.clear)
@@ -347,6 +380,7 @@ public struct CapabilityLibraryView: View {
             }
             if model.loadError != nil {
                 Text(copy("library.error", "Unable to load capability usage; showing the last available result."))
+                    .selectionDisabled()
                     .foregroundStyle(DirectorColor.status(.failure))
                     .padding(.vertical, DirectorSpacing.space3)
                     .listRowBackground(Color.clear)
@@ -355,6 +389,7 @@ public struct CapabilityLibraryView: View {
             }
             if displayedRows.isEmpty {
                 Text(emptyMessage)
+                    .selectionDisabled()
                     .font(DirectorTypography.body)
                     .foregroundStyle(DirectorColor.textSecondary)
                     .padding(.vertical, DirectorSpacing.space4)
@@ -364,6 +399,7 @@ public struct CapabilityLibraryView: View {
             } else {
                 ForEach(model.groupedRows(for: effectiveScope)) { group in
                     groupHeader(group, rowInsets: rowInsets)
+                        .selectionDisabled()
                     ForEach(Array(group.rows.enumerated()), id: \.element.id) { rowIndex, row in
                         libraryRow(row, boundary: groupBoundary(for: rowIndex, count: group.rows.count), rowInsets: rowInsets)
                     }
@@ -421,6 +457,23 @@ public struct CapabilityLibraryView: View {
     }
 
     private var capabilityTitleText: Text { Text(title) }
+
+    @ViewBuilder
+    private func filterRibbonContent(width: CGFloat) -> some View {
+        if DirectorFilterLayout.searchAndControlsFit(width: width, category: model.category) {
+            HStack(alignment: .bottom, spacing: DirectorFilterLayout.controlGap) {
+                filterSearchField
+                    .frame(minWidth: DirectorFilterLayout.searchMinimumWidth, maxWidth: .infinity)
+                controls(width: width)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+                filterSearchField
+                    .frame(maxWidth: .infinity)
+                controls(width: width)
+            }
+        }
+    }
 
     private var filterSearchField: some View {
         DirectorControlField {
@@ -562,13 +615,14 @@ public struct CapabilityLibraryView: View {
                     }
                     Text(row.entry.resource.name)
                         .font(DirectorTypography.capabilityRowTitle)
+                        .foregroundStyle(DirectorColor.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(row.entry.resource.name)
                     if row.inferredCount > 0 {
                         Text(copy("library.inferred", "Inferred"))
                             .font(DirectorTypography.label.weight(.semibold))
-                            .foregroundStyle(DirectorColor.accent(pageTone))
+                            .foregroundStyle(DirectorColor.dataText)
                             .padding(.horizontal, DirectorSpacing.space2)
                             .padding(.vertical, DirectorSpacing.space1)
                             .background(DirectorColor.accent(pageTone).opacity(0.12), in: Capsule())
@@ -582,7 +636,7 @@ public struct CapabilityLibraryView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Text(metadata(row))
                     .font(DirectorTypography.label)
-                    .foregroundStyle(DirectorColor.textTertiary)
+                    .foregroundStyle(DirectorColor.textSupporting)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
@@ -596,14 +650,14 @@ public struct CapabilityLibraryView: View {
                     .fixedSize()
                 Text(countLabel(row))
                     .font(DirectorTypography.capabilityRowCountLabel)
-                    .foregroundStyle(DirectorColor.textTertiary)
+                    .foregroundStyle(DirectorColor.textSupporting)
                     .fixedSize()
             }
             .frame(minWidth: 72, alignment: .trailing)
             folderMembershipMenu(for: row.entry.resource)
             Image(systemName: "arrow.up.right")
                 .font(DirectorTypography.label.weight(.semibold))
-                .foregroundStyle(DirectorColor.textTertiary)
+                .foregroundStyle(DirectorColor.textSupporting)
                 .frame(width: 16, alignment: .trailing)
                 .padding(.top, 4)
                 .accessibilityHidden(true)
@@ -611,13 +665,21 @@ public struct CapabilityLibraryView: View {
         .padding(.horizontal, DirectorSpacing.space4)
         .padding(.vertical, DirectorSpacing.space4)
         .frame(minHeight: 96, alignment: .leading)
-        // AppKit's native List draws its selection tint over the row
-        // background. Reassert the page canvas here so selection remains
-        // discoverable through the boundary and left rule without becoming a
-        // filled blue card; the `tag` below keeps native keyboard/AX selection.
+        // The opaque canvas base keeps the native List selection treatment from
+        // bleeding through the row's gutter; the translucent wash adds the
+        // page tone without changing the native selection model or AX state.
         .background {
-            CapabilityGroupRowBackground(boundary: boundary)
-                .fill(DirectorColor.canvas)
+            if row.id == model.selectedID {
+                ZStack {
+                    CapabilityGroupRowBackground(boundary: boundary)
+                        .fill(DirectorColor.canvas)
+                    CapabilityGroupRowBackground(boundary: boundary)
+                        .fill(DirectorGradient.selectionWash(pageTone))
+                }
+            } else {
+                CapabilityGroupRowBackground(boundary: boundary)
+                    .fill(DirectorColor.canvas)
+            }
         }
         .clipShape(CapabilityGroupRowBackground(boundary: boundary))
         .tag(row.id)
@@ -625,9 +687,16 @@ public struct CapabilityLibraryView: View {
         .listRowSeparator(.hidden)
         .overlay {
             CapabilityGroupRowBorder(boundary: boundary)
-                .stroke(row.id == model.selectedID ? DirectorColor.accent(pageTone) : DirectorColor.boundary,
-                        lineWidth: row.id == model.selectedID ? 1.5 : 1)
+                .stroke(
+                    row.id == model.selectedID && selectedRowEmphasized ? DirectorColor.focus : (row.id == model.selectedID ? DirectorColor.accent(pageTone) : DirectorColor.boundary),
+                    lineWidth: row.id == model.selectedID && (selectedRowEmphasized || contrast == .increased) ? 2 : (row.id == model.selectedID ? 1.5 : 1)
+                )
                 .accessibilityHidden(true)
+            if row.id == model.selectedID {
+                DirectorListSelectionBridge(isEmphasized: $selectedRowEmphasized)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
         .overlay(alignment: .leading) {
             if row.id == model.selectedID {
@@ -759,10 +828,34 @@ public struct CapabilityLibraryView: View {
         if usageChanged && detail.evidenceRequested { detail.reload() }
     }
 
-    private var controls: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: DirectorSpacing.space3) { viewPicker; sortPicker; if model.category == .installedPlugins { pluginStatusPicker } }
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: DirectorSpacing.space2) { viewPicker; sortPicker; if model.category == .installedPlugins { pluginStatusPicker } }
+    @ViewBuilder
+    private func controls(width: CGFloat) -> some View {
+        switch DirectorFilterLayout.selectorArrangement(width: width, category: model.category) {
+        case .row:
+            HStack(alignment: .center, spacing: DirectorSpacing.space3) {
+                viewPicker
+                sortPicker
+                if model.category == .installedPlugins { pluginStatusPicker }
+            }
+        case .twoColumns:
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(minimum: DirectorFilterLayout.viewMinimumWidth), spacing: DirectorSpacing.space3),
+                    GridItem(.flexible(minimum: DirectorFilterLayout.viewMinimumWidth), spacing: DirectorSpacing.space3)
+                ],
+                alignment: .leading,
+                spacing: DirectorSpacing.space2
+            ) {
+                viewPicker
+                sortPicker
+                if model.category == .installedPlugins { pluginStatusPicker }
+            }
+        case .singleColumn:
+            VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
+                viewPicker
+                sortPicker
+                if model.category == .installedPlugins { pluginStatusPicker }
+            }
         }
     }
     private var viewPicker: some View {

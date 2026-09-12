@@ -300,29 +300,61 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(source.contains("0x49 / 255"))
         XCTAssertTrue(source.contains("0x79 / 255"))
         XCTAssertTrue(source.contains("0x0B / 255"))
-        XCTAssertTrue(source.contains("primaryActionForeground = Color.black"))
+        XCTAssertTrue(source.contains("actionBlue = dynamic"))
+        XCTAssertTrue(source.contains("actionIce = dynamic"))
+        XCTAssertTrue(source.contains("actionMint = dynamic"))
+        XCTAssertTrue(source.contains("primaryActionForeground = dynamic(light: .white, dark: .black)"))
         XCTAssertFalse(source.contains("TODO"))
     }
 
-    func testBlackPrimaryActionTextMeetsContrastForEveryGradientStop() {
-        let stops: [(Double, Double, Double)] = [
-            (0x08, 0x79, 0xD9), (0x11, 0x8E, 0xAE), (0x14, 0x8F, 0x7E),
-            (0x15, 0x9D, 0xFF), (0x49, 0xCA, 0xFF), (0x79, 0xEA, 0xD8),
+    func testResolvedPrimaryActionTextMeetsContrastAcrossEveryGradientState() throws {
+        let rails: [[Color]] = [
+            [DirectorColor.actionBlue, DirectorColor.actionIce, DirectorColor.actionMint],
+            [DirectorColor.actionHoverBlue, DirectorColor.actionHoverIce, DirectorColor.actionHoverMint],
+            [DirectorColor.actionPressedBlue, DirectorColor.actionPressedIce, DirectorColor.actionPressedMint],
+            [DirectorColor.actionDisabledBlue, DirectorColor.actionDisabledIce, DirectorColor.actionDisabledMint],
         ]
 
-        for stop in stops {
-            let luminance = relativeLuminance(red: stop.0 / 255, green: stop.1 / 255, blue: stop.2 / 255)
-            XCTAssertGreaterThanOrEqual((luminance + 0.05) / 0.05, 4.5)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            let foreground = try resolvedRGB(DirectorColor.primaryActionForeground, appearance: appearance)
+            for rail in rails {
+                let stops = try rail.map { try resolvedRGB($0, appearance: appearance) }
+                for pair in zip(stops, stops.dropFirst()) {
+                    for sample in 0...100 {
+                        let amount = Double(sample) / 100
+                        let background = (
+                            pair.0.0 + (pair.1.0 - pair.0.0) * amount,
+                            pair.0.1 + (pair.1.1 - pair.0.1) * amount,
+                            pair.0.2 + (pair.1.2 - pair.0.2) * amount
+                        )
+                        XCTAssertGreaterThanOrEqual(contrastRatio(foreground, background), 4.5)
+                    }
+                }
+            }
         }
     }
 
-    func testEveryGradientActionConsumerUsesTheBlackForegroundToken() throws {
+    func testResolvedSupportingAndSmallDataTextMeetContrastOnRealSurfaces() throws {
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            for foreground in [DirectorColor.textSupporting, DirectorColor.dataText] {
+                let resolvedForeground = try resolvedRGB(foreground, appearance: appearance)
+                for background in [DirectorColor.canvas, DirectorColor.panel] {
+                    let resolvedBackground = try resolvedRGB(background, appearance: appearance)
+                    XCTAssertGreaterThanOrEqual(contrastRatio(resolvedForeground, resolvedBackground), 4.5)
+                }
+            }
+        }
+    }
+
+    func testEveryGradientActionConsumerUsesTheSharedForegroundToken() throws {
         let sourceRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let scheme = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift"), encoding: .utf8)
         XCTAssertTrue(scheme.contains(".foregroundStyle(DirectorColor.primaryActionForeground)"))
+        XCTAssertTrue(scheme.contains("DirectorGradient.primaryAction(state: actionState)"))
+        XCTAssertFalse(scheme.contains(".opacity(visuallyActive ?"))
 
         for relativePath in [
             "Sources/DirectorUI/Capabilities/CapabilityDetailView.swift",
@@ -432,5 +464,21 @@ final class DirectorSchemeATests: XCTestCase {
             component <= 0.04045 ? component / 12.92 : pow((component + 0.055) / 1.055, 2.4)
         }
         return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+
+    private func resolvedRGB(_ color: Color, appearance: NSAppearance.Name) throws -> (Double, Double, Double) {
+        let appearance = try XCTUnwrap(NSAppearance(named: appearance))
+        var result: (Double, Double, Double)?
+        appearance.performAsCurrentDrawingAppearance {
+            guard let converted = NSColor(color).usingColorSpace(.sRGB) else { return }
+            result = (Double(converted.redComponent), Double(converted.greenComponent), Double(converted.blueComponent))
+        }
+        return try XCTUnwrap(result)
+    }
+
+    private func contrastRatio(_ first: (Double, Double, Double), _ second: (Double, Double, Double)) -> Double {
+        let firstLuminance = relativeLuminance(red: first.0, green: first.1, blue: first.2)
+        let secondLuminance = relativeLuminance(red: second.0, green: second.1, blue: second.2)
+        return (max(firstLuminance, secondLuminance) + 0.05) / (min(firstLuminance, secondLuminance) + 0.05)
     }
 }

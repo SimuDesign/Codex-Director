@@ -129,7 +129,7 @@ struct HomeQuotaProgressRing: View {
                 Circle()
                     .trim(from: 0, to: remainingEnd)
                     .stroke(
-                        DirectorGradient.primaryButton,
+                        DirectorGradient.brand,
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
@@ -273,7 +273,7 @@ public struct HomeHeroHeader: View {
 
         let prefix = String(title[..<range.lowerBound])
         let suffix = String(title[range.upperBound...])
-        return Text("\(Text(prefix))\(Text(titleAccent).foregroundStyle(DirectorGradient.primaryButton))\(Text(suffix))")
+        return Text("\(Text(prefix))\(Text(titleAccent).foregroundStyle(DirectorGradient.brand))\(Text(suffix))")
     }
 }
 

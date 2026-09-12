@@ -1,0 +1,62 @@
+Window: "自定义 Agent", App: Codex Director Validation.
+0 standard window 自定义 Agent, Secondary Actions: Raise, ID: SwiftUI.ModifiedContent<SwiftUI.Group<SwiftUI._ConditionalContent<DirectorUI.UIValidationHost, SwiftUI.ModifiedContent<DirectorUI.DirectorRootView, SwiftUI._PreferenceWritingModifier<SwiftUI.PreferredColorSchemeKey>>>>, SwiftUI._TaskModifier2>-1-AppWindow-1
+	1 container
+		2 unknown Description: Actual product viewport size, Details: Product 1280 × 800
+		3 split group SwiftUI.ModifiedContent<SwiftUI.Group<SwiftUI._ConditionalContent<DirectorUI.UIValidationHost, SwiftUI.ModifiedContent<DirectorUI.DirectorRootView, SwiftUI._PreferenceWritingModifier<SwiftUI.PreferredColorSchemeKey>>>>, SwiftUI._TaskModifier2>-1-AppWindow-1, SidebarNavigationSplitView
+			4 scroll area
+				5 list 边栏
+					6 row (selectable)
+					7 row (selectable) 首页
+					8 row (selected) 自定义 Agent
+					9 row (selectable) 自定义 Skill
+					10 row (selectable) 安装 Skill
+					11 row (selectable) 安装插件
+					12 row (selectable) 设置
+			13 splitter (disabled, settable, float) 228
+			14 scroll area Secondary Actions: Scroll Up, Scroll Down
+				15 list
+					16 row (selectable) Description: 自定义 Agent, Value: 浏览已索引能力及其近期证据。
+					17 row (selectable) 全局, 1
+项目, 2
+近 7 天使用过, 3
+30 天未使用, 0
+					18 row (selectable)
+						19 cell
+							20 container
+								21 text field (settable) 搜索能力
+								22 menu button Description: 查看, Value: 全部能力
+								23 menu button Description: 排序, Value: 近 7 天调用 ↓
+					24 row (selectable) 全局
+1 项能力
+					25 row (selectable) validation-global-agent, 4 次调用
+					26 row (selectable) Synthetic Project A
+1 项能力
+					27 row (selectable) validation-project-agent-a, 2 次调用
+					28 row (selectable) Synthetic Project B
+1 项能力
+					29 row (selectable) validation-project-agent-b, 1 次调用
+				30 scroll bar (settable, float) 0
+					31 value indicator (settable, float) 0
+					32 increment arrow button
+					33 decrement arrow button
+					34 increment page button
+					35 decrement page button
+	36 toolbar
+		37 button Description: 隐藏边栏, Secondary Actions: Increment, Decrement, Delete, Cancel
+		38 button (disabled) Description: 刷新数据, Secondary Actions: Increment, Decrement, Delete, Cancel, Move previous, Remove from toolbar
+	39 close button
+	40 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	41 minimize button
+	42 text 自定义 Agent
+43 menu bar
+	44 Codex Director
+	45 File
+	46 Edit
+	47 View
+	48 Window
+	49 Help
+
+Selected:
+	8 row (selected)
+
+Note: Pay special attention to the content selected by the user. If the user asks a question or refers to the content they are looking at on-screen, they might be referring to the selected content (but they might be referring to something else that's visible, too).

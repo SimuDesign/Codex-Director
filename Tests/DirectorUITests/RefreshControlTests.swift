@@ -48,10 +48,15 @@ final class RefreshControlTests: XCTestCase {
         XCTAssertTrue(control.contains("Label(label, systemImage: \"arrow.clockwise\")"))
         XCTAssertTrue(control.contains(".labelStyle(.titleAndIcon)"))
         XCTAssertTrue(control.contains("ProgressView()"))
+        XCTAssertTrue(control.contains(".controlSize(.small)"))
+        XCTAssertTrue(control.contains("frame(width: DirectorSpacing.refreshIndicatorSize, height: DirectorSpacing.refreshIndicatorSize)"))
         XCTAssertTrue(control.contains("ZStack"))
         XCTAssertTrue(control.contains(".disabled(isRefreshing || !isAvailable)"))
         XCTAssertTrue(control.contains("isProcessing: isRefreshing"))
         XCTAssertFalse(control.contains(".accessibilityElement(children: .ignore)"))
+
+        let spacing = try source("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift")
+        XCTAssertTrue(spacing.contains("refreshIndicatorSize: CGFloat = 14"))
     }
 
     private func source(_ relativePath: String) throws -> String {

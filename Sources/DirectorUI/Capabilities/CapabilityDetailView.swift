@@ -83,7 +83,8 @@ public struct CapabilityDetailView: View {
             Button {
                 showEvidence = false
             } label: { Text(copy("detail.hideUsageEvidence", "Hide usage evidence")).frame(maxWidth: .infinity) }
-            .buttonStyle(.bordered)
+            .buttonStyle(DirectorSecondaryActionButtonStyle())
+            .frame(maxWidth: .infinity)
             .accessibilityHint(copy("detail.hideUsageEvidenceHint", "Hides the loaded usage evidence without clearing it."))
         } else {
             Button {
@@ -91,6 +92,7 @@ public struct CapabilityDetailView: View {
                 model.requestEvidence()
             } label: { Text(copy("detail.usageEvidence", "View usage evidence")).frame(maxWidth: .infinity) }
             .buttonStyle(DirectorPrimaryActionButtonStyle())
+            .frame(maxWidth: .infinity)
             .accessibilityHint(copy("detail.usageEvidenceHint", "Loads usage evidence the first time it is requested."))
         }
     }

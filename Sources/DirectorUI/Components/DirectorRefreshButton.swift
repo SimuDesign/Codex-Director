@@ -35,13 +35,16 @@ public struct DirectorRefreshButton: View {
             ZStack {
                 Label(label, systemImage: "arrow.clockwise")
                     .labelStyle(.titleAndIcon)
+                    .imageScale(.small)
+                    .frame(height: DirectorSpacing.refreshIndicatorSize)
                     .opacity(isRefreshing ? 0 : 1)
                     .accessibilityHidden(isRefreshing)
 
                 HStack(spacing: DirectorSpacing.space2) {
                     ProgressView()
                         .progressViewStyle(.circular)
-                        .controlSize(size == .toolbar ? .small : .regular)
+                        .controlSize(.small)
+                        .frame(width: DirectorSpacing.refreshIndicatorSize, height: DirectorSpacing.refreshIndicatorSize)
                         .tint(DirectorColor.primaryActionForeground)
                         .accessibilityHidden(true)
                     Text(runningLabel)

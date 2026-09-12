@@ -22,6 +22,9 @@ public enum DirectorSpacing {
     public static let ribbonGap: CGFloat = 12
     public static let controlMinHeight: CGFloat = 32
     public static let toolbarControlMinHeight: CGFloat = 28
+    /// Shared visual slot for the refresh glyph and indeterminate progress
+    /// indicator. Keeping both states in one slot prevents vertical drift.
+    public static let refreshIndicatorSize: CGFloat = 14
     /// Shared content width for the three Settings actions. The value covers
     /// the longest localized label while the styles add their common insets.
     public static let settingsActionLabelWidth: CGFloat = 176
