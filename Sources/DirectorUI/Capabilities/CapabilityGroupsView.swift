@@ -1,6 +1,68 @@
 import SwiftUI
 import DirectorCore
 
+enum CapabilityGroupScopeFilter: Equatable, Sendable {
+    case all
+    case categorized
+    case group(String)
+
+    func matches(_ group: CapabilityGroupDefinition) -> Bool {
+        switch self {
+        case .all:
+            return true
+        case .categorized:
+            return !group.isUncategorized
+        case .group(let groupID):
+            return group.id == groupID
+        }
+    }
+}
+
+enum CapabilityGroupingMetricFilter: Equatable, Sendable {
+    case agent
+    case skill
+    case categorized
+    case uncategorized
+}
+
+struct CapabilityGroupingFilterState: Equatable, Sendable {
+    var group: CapabilityGroupScopeFilter = .all
+    var kind: ResourceKind?
+
+    var isActive: Bool { group != .all || kind != nil }
+
+    func matches(_ member: CapabilityGroupingMember) -> Bool {
+        group.matches(member.group) && (kind == nil || member.resource.kind == kind)
+    }
+
+    func selects(_ metric: CapabilityGroupingMetricFilter) -> Bool {
+        switch metric {
+        case .agent:
+            return kind == .agent
+        case .skill:
+            return kind == .skill
+        case .categorized:
+            return group == .categorized
+        case .uncategorized:
+            return group == .group(BuiltInCapabilityGroup.uncategorized.id)
+        }
+    }
+
+    mutating func toggle(_ metric: CapabilityGroupingMetricFilter) {
+        switch metric {
+        case .agent:
+            kind = kind == .agent ? nil : .agent
+        case .skill:
+            kind = kind == .skill ? nil : .skill
+        case .categorized:
+            group = group == .categorized ? .all : .categorized
+        case .uncategorized:
+            let uncategorized = CapabilityGroupScopeFilter.group(BuiltInCapabilityGroup.uncategorized.id)
+            group = group == uncategorized ? .all : uncategorized
+        }
+    }
+}
+
 /// Browsing surface for the local, one-primary-group projection. The page is
 /// intentionally one native List so search, keyboard navigation and the
 /// existing detail side sheet retain the same behavior as capability pages.
@@ -10,8 +72,7 @@ public struct CapabilityGroupsView: View {
     @EnvironmentObject private var languageStore: AppLanguageStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var searchText = ""
-    @State private var selectedGroupID: String?
-    @State private var selectedKind: ResourceKind?
+    @State private var filters = CapabilityGroupingFilterState()
     @State private var selectedResourceID: String?
     @State private var showsCreateSheet = false
     @State private var createName = ""
@@ -149,9 +210,9 @@ public struct CapabilityGroupsView: View {
             Text(t(model.capabilityGroupingError ?? "capabilityGroups.saveFailed", "Please try again."))
         }
         .onChange(of: model.capabilityGroupingProjection) { _, _ in
-            if let selectedGroupID,
+            if case .group(let selectedGroupID) = filters.group,
                !model.capabilityGroupingProjection.groups.contains(where: { $0.id == selectedGroupID }) {
-                self.selectedGroupID = nil
+                filters.group = .all
             }
             if let selectedResourceID, !visibleMembers.contains(where: { $0.id == selectedResourceID }) {
                 self.selectedResourceID = nil
@@ -172,16 +233,26 @@ public struct CapabilityGroupsView: View {
 
     private func metrics(width: CGFloat) -> some View {
         DirectorMetricSequence(contentWidth: DirectorPageLayout.contentWidth(for: width)) {
-            metric(t("capabilityGroups.metric.agents", "Agents"), value: model.capabilityGroupingProjection.agentCount, symbol: "person.crop.circle", tone: .blue)
-            metric(t("capabilityGroups.metric.skills", "Skills"), value: model.capabilityGroupingProjection.skillCount, symbol: "sparkles", tone: .ice)
-            metric(t("capabilityGroups.metric.categorized", "Categorized"), value: model.capabilityGroupingProjection.categorizedCount, symbol: "checkmark.circle", tone: .mint)
-            metric(t("capabilityGroups.metric.uncategorized", "Uncategorized"), value: model.capabilityGroupingProjection.uncategorizedCount, symbol: "questionmark.circle", tone: .teal)
+            metric(.agent, t("capabilityGroups.metric.agents", "Agents"), value: model.capabilityGroupingProjection.agentCount, symbol: "person.crop.circle", tone: .blue)
+            metric(.skill, t("capabilityGroups.metric.skills", "Skills"), value: model.capabilityGroupingProjection.skillCount, symbol: "sparkles", tone: .ice)
+            metric(.categorized, t("capabilityGroups.metric.categorized", "Categorized"), value: model.capabilityGroupingProjection.categorizedCount, symbol: "checkmark.circle", tone: .mint)
+            metric(.uncategorized, t("capabilityGroups.metric.uncategorized", "Uncategorized"), value: model.capabilityGroupingProjection.uncategorizedCount, symbol: "questionmark.circle", tone: .teal)
         }
         .padding(.bottom, DirectorSpacing.space5)
     }
 
-    private func metric(_ label: String, value: Int, symbol: String, tone: DirectorAccentTone) -> some View {
-        DirectorMetricCard(symbolName: symbol, label: label, value: "\(value)", valueFont: DirectorTypography.metric, tone: tone, minimumHeight: DirectorSpacing.capabilityMetricHeight) {}
+    private func metric(_ filter: CapabilityGroupingMetricFilter, _ label: String, value: Int, symbol: String, tone: DirectorAccentTone) -> some View {
+        DirectorMetricCard(
+            symbolName: symbol,
+            label: label,
+            value: "\(value)",
+            valueFont: DirectorTypography.metric,
+            selected: filters.selects(filter),
+            tone: tone,
+            minimumHeight: DirectorSpacing.capabilityMetricHeight
+        ) {
+            filters.toggle(filter)
+        }
     }
 
     private func filters(width: CGFloat) -> some View {
@@ -212,12 +283,13 @@ public struct CapabilityGroupsView: View {
 
     private var groupFilter: some View {
         Menu {
-            Button(t("capabilityGroups.filter.all", "All categories")) { selectedGroupID = nil }
+            Button(t("capabilityGroups.filter.all", "All categories")) { filters.group = .all }
+            Button(t("capabilityGroups.metric.categorized", "Categorized")) { filters.group = .categorized }
             ForEach(model.capabilityGroupingProjection.groups) { group in
-                Button(groupTitle(group)) { selectedGroupID = group.id }
+                Button(groupTitle(group)) { filters.group = .group(group.id) }
             }
         } label: {
-            Label(selectedGroupID.flatMap { id in model.capabilityGroupingProjection.groups.first(where: { $0.id == id }).map(groupTitle) } ?? t("capabilityGroups.filter.all", "All categories"), systemImage: "folder")
+            Label(groupFilterTitle, systemImage: "folder")
         }
         .menuIndicator(.visible)
         .accessibilityLabel(t("capabilityGroups.filter.category", "Category filter"))
@@ -225,11 +297,11 @@ public struct CapabilityGroupsView: View {
 
     private var kindFilter: some View {
         Menu {
-            Button(t("capabilityGroups.filter.allTypes", "All types")) { selectedKind = nil }
-            Button(t("capabilityGroups.filter.agents", "Agents")) { selectedKind = .agent }
-            Button(t("capabilityGroups.filter.skills", "Skills")) { selectedKind = .skill }
+            Button(t("capabilityGroups.filter.allTypes", "All types")) { filters.kind = nil }
+            Button(t("capabilityGroups.filter.agents", "Agents")) { filters.kind = .agent }
+            Button(t("capabilityGroups.filter.skills", "Skills")) { filters.kind = .skill }
         } label: {
-            Label(selectedKind == .agent ? t("capabilityGroups.filter.agents", "Agents") : selectedKind == .skill ? t("capabilityGroups.filter.skills", "Skills") : t("capabilityGroups.filter.allTypes", "All types"), systemImage: "line.3.horizontal.decrease.circle")
+            Label(filters.kind == .agent ? t("capabilityGroups.filter.agents", "Agents") : filters.kind == .skill ? t("capabilityGroups.filter.skills", "Skills") : t("capabilityGroups.filter.allTypes", "All types"), systemImage: "line.3.horizontal.decrease.circle")
         }
         .menuIndicator(.visible)
         .accessibilityLabel(t("capabilityGroups.filter.type", "Type filter"))
@@ -368,8 +440,7 @@ public struct CapabilityGroupsView: View {
     private var visibleMembers: [CapabilityGroupingMember] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.capabilityGroupingProjection.members.filter { member in
-            guard selectedGroupID == nil || member.group.id == selectedGroupID else { return false }
-            guard selectedKind == nil || member.resource.kind == selectedKind else { return false }
+            guard filters.matches(member) else { return false }
             guard !query.isEmpty else { return true }
             let summary = CapabilityPurposeLocalization.localizedSummary(for: member.resource, language: languageStore.language) ?? ""
             return member.resource.name.localizedCaseInsensitiveContains(query) || summary.localizedCaseInsensitiveContains(query)
@@ -378,8 +449,7 @@ public struct CapabilityGroupsView: View {
 
     private var visibleGroups: [CapabilityGroupDefinition] {
         let hasActiveFilter = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || selectedGroupID != nil
-            || selectedKind != nil
+            || filters.isActive
         if !hasActiveFilter { return model.capabilityGroupingProjection.groups }
         return model.capabilityGroupingProjection.groups.filter { !groupMembers($0).isEmpty }
     }
@@ -401,8 +471,7 @@ public struct CapabilityGroupsView: View {
     private var showsAllUncategorizedHint: Bool {
         model.capabilityGroupingProjection.members.allSatisfy { $0.group.isUncategorized }
             && searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && selectedGroupID == nil
-            && selectedKind == nil
+            && !filters.isActive
     }
 
     private var allUncategorizedState: some View {
@@ -456,8 +525,20 @@ public struct CapabilityGroupsView: View {
 
     private var emptyTitle: String {
         if model.capabilityGroupingProjection.members.isEmpty { return t("capabilityGroups.empty.none", "No Agents or Skills found") }
-        if visibleMembers.isEmpty && (!searchText.isEmpty || selectedGroupID != nil || selectedKind != nil) { return t("capabilityGroups.empty.search", "No capabilities match these filters") }
+        if visibleMembers.isEmpty && (!searchText.isEmpty || filters.isActive) { return t("capabilityGroups.empty.search", "No capabilities match these filters") }
         return t("capabilityGroups.empty.none", "No Agents or Skills found")
+    }
+
+    private var groupFilterTitle: String {
+        switch filters.group {
+        case .all:
+            return t("capabilityGroups.filter.all", "All categories")
+        case .categorized:
+            return t("capabilityGroups.metric.categorized", "Categorized")
+        case .group(let id):
+            return model.capabilityGroupingProjection.groups.first(where: { $0.id == id }).map(groupTitle)
+                ?? t("capabilityGroups.filter.all", "All categories")
+        }
     }
 
     private func metadata(for member: CapabilityGroupingMember) -> String {

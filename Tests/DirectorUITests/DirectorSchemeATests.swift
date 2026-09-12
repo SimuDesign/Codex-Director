@@ -92,6 +92,8 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(groups.contains("capabilityGroupingPreferencesState == .corrupted"))
         XCTAssertTrue(groups.contains("retryCapabilityGroupingPreferences()"))
         XCTAssertTrue(groups.contains("clearCorruptedCapabilityGroupingPreferences()"))
+        XCTAssertTrue(groups.contains("filters.toggle(filter)"))
+        XCTAssertTrue(groups.contains("selected: filters.selects(filter)"))
 
         for key in [
             "nav.capabilityGroups",
@@ -116,6 +118,64 @@ final class DirectorSchemeATests: XCTestCase {
             XCTAssertTrue(english.contains("\"\(key)\""), "English localization missing \(key)")
             XCTAssertTrue(chinese.contains("\"\(key)\""), "Chinese localization missing \(key)")
         }
+    }
+
+    func testCapabilityGroupMetricCardsDriveComposableFilters() {
+        let softwareGroup = CapabilityGroupDefinition(
+            id: BuiltInCapabilityGroup.softwareDevelopment.id,
+            builtIn: .softwareDevelopment,
+            name: "Software Development"
+        )
+        let uncategorizedGroup = CapabilityGroupDefinition(
+            id: BuiltInCapabilityGroup.uncategorized.id,
+            builtIn: .uncategorized,
+            name: "Uncategorized"
+        )
+        let agent = CapabilityGroupingMember(
+            resource: CapabilityResource(
+                id: "agent", name: "Agent", kind: .agent, status: .idle,
+                scope: .global, projectID: nil, confidence: .exact, summary: nil,
+                sourceRootID: "synthetic", relativeSourcePath: nil,
+                sourcePathHash: nil, lastSeenAt: Date(timeIntervalSince1970: 1)
+            ),
+            group: softwareGroup,
+            source: .automatic
+        )
+        let skill = CapabilityGroupingMember(
+            resource: CapabilityResource(
+                id: "skill", name: "Skill", kind: .skill, status: .idle,
+                scope: .global, projectID: nil, confidence: .exact, summary: nil,
+                sourceRootID: "synthetic", relativeSourcePath: nil,
+                sourcePathHash: nil, lastSeenAt: Date(timeIntervalSince1970: 1)
+            ),
+            group: uncategorizedGroup,
+            source: .automatic
+        )
+
+        var filters = CapabilityGroupingFilterState()
+        XCTAssertTrue(filters.matches(agent))
+        XCTAssertTrue(filters.matches(skill))
+
+        filters.toggle(.agent)
+        XCTAssertTrue(filters.selects(.agent))
+        XCTAssertTrue(filters.matches(agent))
+        XCTAssertFalse(filters.matches(skill))
+
+        filters.toggle(.categorized)
+        XCTAssertTrue(filters.selects(.agent))
+        XCTAssertTrue(filters.selects(.categorized))
+        XCTAssertTrue(filters.matches(agent))
+        XCTAssertFalse(filters.matches(skill))
+
+        filters.toggle(.agent)
+        filters.toggle(.uncategorized)
+        XCTAssertFalse(filters.selects(.categorized))
+        XCTAssertTrue(filters.selects(.uncategorized))
+        XCTAssertFalse(filters.matches(agent))
+        XCTAssertTrue(filters.matches(skill))
+
+        filters.toggle(.uncategorized)
+        XCTAssertFalse(filters.isActive)
     }
 
     func testCapabilityGroupDetailsDeduplicateProjectsAndForwardClassificationActions() throws {
