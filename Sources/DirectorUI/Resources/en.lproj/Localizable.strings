@@ -6,7 +6,7 @@
 "nav.capabilityFolders" = "Capability Folders";
 "capabilityFolders.eyebrow" = "07 / Capability Folders";
 "capabilityFolders.title" = "Capability Folders";
-"capabilityFolders.subtitle" = "Browse Agents and Skills through local, user-controlled folders.";
+"capabilityFolders.subtitle" = "From global to project, understand and organize your capabilities.";
 "capabilityFolders.myFolders" = "My Folders";
 "capabilityFolders.defaults" = "Global & Projects";
 "capabilityFolders.add" = "New folder";
@@ -83,6 +83,10 @@
 "capabilityFolders.companions.collapse" = "Hide companion Skills";
 "capabilityFolders.companions.expandHint" = "Expand to review declared relationships and usage evidence.";
 "capabilityFolders.companions.count" = "%d companion Skills";
+"capabilityFolders.companions.previewCount" = "%d related previews";
+"capabilityFolders.companions.sharedAgents" = "Shared by %d Agents";
+"capabilityFolders.companions.agentLinksRecorded" = "Agent links recorded";
+"capabilityFolders.companions.noAgentLinksRecorded" = "No Agent links recorded";
 "capabilityFolders.companions.companion" = "Companion Skill";
 "capabilityFolders.companions.requiresAgent" = "Requires Agent";
 "capabilityFolders.companions.relatedSkills" = "Companion Skills";
@@ -93,6 +97,8 @@
 "capabilityFolders.companions.declarationGroup" = "Explicit declarations";
 "capabilityFolders.companions.historyGroup" = "Historical co-observation evidence";
 "capabilityFolders.companions.noCausalClaim" = "Co-observation does not prove invocation.";
+"capabilityFolders.companions.unrepresentedHint" = "Some Skills are not represented by a declared Agent relationship. View all Skills.";
+"capabilityFolders.companions.unrepresentedHintAX" = "Switches to the complete Skill list.";
 "capabilityFolders.companions.coverage.complete" = "Coverage complete";
 "capabilityFolders.companions.coverage.partial" = "Coverage partial";
 "capabilityFolders.companions.coverage.unavailable" = "Coverage unavailable";
@@ -103,6 +109,11 @@
 "capabilityFolders.source.installed" = "Installed";
 "capabilityFolders.source.custom" = "Custom";
 "capabilityFolders.source.local" = "Local";
+"capabilityFolders.status.updating" = "Updating… Showing the last available data.";
+"capabilityFolders.status.failed" = "Background update failed. Showing the last available data.";
+"capabilityFolders.status.stale" = "Needs update. Showing the last available data.";
+"capabilityFolders.status.retry" = "Retry";
+"capabilityFolders.pending" = "Loading capability directory…";
 "nav.customAgents" = "Custom Agents";
 "nav.customSkills" = "Custom Skills";
 "nav.installedSkills" = "Installed Skills";

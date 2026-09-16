@@ -18,6 +18,19 @@ sorting, and independent empty and no-match states. Folder operations are local
 preference writes only and must not start indexing, account reads, statistics
 queries, network access, or source-file writes.
 
+For the folder-browser visual variant, validate a 1280pt content cap, 40/16pt
+gutter behavior, 128/120/112pt card heights, and 4/3/2/1 folder columns at
+actual content widths of 1440/901/561/560pt. The entry page must have one
+title/purpose block, an inline wide search that stacks below 760pt, aligned
+My Folders and Global & Projects sections without a thick divider, and a
+subtle opaque Global card surface. Folder interiors must keep breadcrumb,
+compact 32/28pt title/counts, the three fixed tabs, visible current sort value,
+single bordered Agent/Skill lists, and continuous bordered Agent companion
+groups. Compare matching-size native screenshots; the web prototype is a
+reference only and is not runtime evidence. Validate pending directory states
+with em-dash counts, refresh banners that preserve existing rows, and safe
+stale/failure banners with a retry action.
+
 Capability Folders is the current 1.3.0 contract: responsive custom-folder
 cards, immutable Global/Project projections, Agent & Companion Skills / Agent /
 Skill tabs, multi-membership menus on every Agent/Skill row and detail,
@@ -530,3 +543,19 @@ Pending evidence:
 - Component previews, appearance matrices, visual regression, VoiceOver, privacy, and performance checks require the Xcode application and components to exist.
 
 This record validates the governance assets and declared macOS API surface. It does not claim that the future application UI has passed implementation-level gates.
+
+### 1.3.0 source-integration regressions
+
+- Search to no results, clear search, and return to folder cards must not re-enter
+  native text-editor/accessibility layout. Repeat while the editor is focused.
+- Enter a Skill search, switch to Agent, and switch back: neither a hang nor
+  cross-tab search leakage is allowed. Only one search editor is instantiated
+  in each responsive layout.
+- Preview-only companions use an explicit preview count; Global/Project and
+  custom-folder member totals remain unchanged.
+- Public module PNGs are synthetic content-area renders, excluding glass
+  sidebar/chrome. Inspect the real native window separately; never use a
+  partial or incorrectly rendered sidebar as public visual evidence.
+- Scope and fresh evidence limits are recorded in
+  `docs/design/2026-09-17-1.3-finalization-quality.md`. Source PR acceptance does
+  not replace the separately approved formal-release accessibility matrix.

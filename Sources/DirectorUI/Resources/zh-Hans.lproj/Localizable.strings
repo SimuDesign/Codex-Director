@@ -6,7 +6,7 @@
 "nav.capabilityFolders" = "能力文件夹";
 "capabilityFolders.eyebrow" = "07 / 能力文件夹";
 "capabilityFolders.title" = "能力文件夹";
-"capabilityFolders.subtitle" = "用本地、由你控制的文件夹浏览 Agent 和 Skill。";
+"capabilityFolders.subtitle" = "从全局到项目，了解并整理你的能力。";
 "capabilityFolders.myFolders" = "我的文件夹";
 "capabilityFolders.defaults" = "全局与项目";
 "capabilityFolders.add" = "新建文件夹";
@@ -83,6 +83,10 @@
 "capabilityFolders.companions.collapse" = "收起配套 Skill";
 "capabilityFolders.companions.expandHint" = "展开查看明确声明的关系和共同使用证据。";
 "capabilityFolders.companions.count" = "%d 个配套 Skill";
+"capabilityFolders.companions.previewCount" = "%d 个关联预览";
+"capabilityFolders.companions.sharedAgents" = "由 %d 个 Agent 共享";
+"capabilityFolders.companions.agentLinksRecorded" = "已记录 Agent 关联";
+"capabilityFolders.companions.noAgentLinksRecorded" = "尚未记录 Agent 关联";
 "capabilityFolders.companions.companion" = "配套 Skill";
 "capabilityFolders.companions.requiresAgent" = "需通过 Agent";
 "capabilityFolders.companions.relatedSkills" = "配套 Skill";
@@ -93,6 +97,8 @@
 "capabilityFolders.companions.declarationGroup" = "明确声明";
 "capabilityFolders.companions.historyGroup" = "历史共同出现证据";
 "capabilityFolders.companions.noCausalClaim" = "共同出现不证明 Agent 调用了 Skill。";
+"capabilityFolders.companions.unrepresentedHint" = "部分 Skill 尚未出现在明确的 Agent 配套关系中。查看全部 Skill。";
+"capabilityFolders.companions.unrepresentedHintAX" = "切换到完整 Skill 清单。";
 "capabilityFolders.companions.coverage.complete" = "覆盖完整";
 "capabilityFolders.companions.coverage.partial" = "覆盖不完整";
 "capabilityFolders.companions.coverage.unavailable" = "覆盖不可用";
@@ -103,6 +109,11 @@
 "capabilityFolders.source.installed" = "已安装";
 "capabilityFolders.source.custom" = "自定义";
 "capabilityFolders.source.local" = "本地";
+"capabilityFolders.status.updating" = "正在更新… 当前显示最近可用数据。";
+"capabilityFolders.status.failed" = "后台更新失败，当前显示最近可用数据。";
+"capabilityFolders.status.stale" = "需要更新，当前显示最近可用数据。";
+"capabilityFolders.status.retry" = "重试";
+"capabilityFolders.pending" = "正在加载能力目录…";
 "nav.customAgents" = "自定义 Agent";
 "nav.customSkills" = "自定义 Skill";
 "nav.installedSkills" = "安装 Skill";

@@ -44,3 +44,24 @@ All retained media below use synthetic or abstract content, contain no user capa
 | `docs/design/evidence/2026-09-12-light-review/settings-loading-light-en.png` | English Light Settings loading review baseline | `10f10faa6222420b2a4e15267bc03b11bc8dc96084ae9518a296c8fc53258f4a` | Original SimuDesign synthetic Debug UIValidationHost capture; no production data, user paths, credentials, author, creator, or download metadata |
 
 A new or changed media file blocks the public repository cutover until its final hash, provenance, privacy review, and metadata result are recorded.
+
+## 1.3.0 Capability Folders evidence
+
+Original SimuDesign synthetic Debug Validation Host module captures, distributed
+under MIT. The measured module content area is 1052×748pt (2104×1496 pixels at
+2×), within a 1280pt-wide product workspace. AppKit view-bitmap rendering cannot
+faithfully flatten the native glass sidebar, so these intentionally exclude
+window chrome, validation controls, and that sidebar; they are not whole-screen
+captures. All four images were visually inspected. PNG properties contain only
+image/color information, including a Generic RGB profile, without author,
+creator, download, source-path, credential, or personal metadata.
+The 108-byte EXIF payload was inspected in each file and contains only TIFF
+X/Y resolution (144 dpi), resolution units, and EXIF pixel width/height.
+No author, timestamp, GPS, or other personal EXIF tags are present.
+
+| Path | Purpose | SHA-256 |
+| --- | --- | --- |
+| `docs/screenshots/folders-zh-dark.png` | Chinese folder entry, Dark | `06c4a5ada85c8315584c25a18315bf3d9c72f2d8688a0ef1423a1204eea50f7d` |
+| `docs/screenshots/folders-en-dark.png` | English folder entry, Dark | `cdd58c5c7f68177a144e043b733cab7efe43002971e0123f6f7d949dfc4ae3e5` |
+| `docs/screenshots/folder-companions-zh-light.png` | Chinese Agent/companion browser, Light | `30b33c41160691f5a78aa96ad086e15d429578a60c812fd04caf4dc04ec23109` |
+| `docs/screenshots/folder-companions-en-light.png` | English Agent/companion browser, Light | `ca8a9e970cabd25e022054d76a4c2753a4c6619a316d258cf6337afedcd99714` |

@@ -8,13 +8,18 @@ public struct CapabilityDetailView: View {
     /// The wide library layout already supplies a native inspector dismissal,
     /// so it must not duplicate that navigation affordance inside the panel.
     public let showsBackButton: Bool
+    /// Optional presentation-only context inserted after identity and before
+    /// usage evidence. Folder browsing uses this slot for explicit companion
+    /// relations and membership controls without changing the shared detail
+    /// model or duplicating the evidence surface.
+    public let contextualContent: AnyView?
     @EnvironmentObject private var languageStore: AppLanguageStore
     @State private var showTechnical = false
     @State private var showClassification = false
     @State private var showFindings = false
     @State private var showEvidence = false
 
-    public init(model: CapabilityDetailViewModel, onBack: @escaping () -> Void = {}, showsBackButton: Bool = true) { self.model = model; self.onBack = onBack; self.showsBackButton = showsBackButton }
+    public init(model: CapabilityDetailViewModel, onBack: @escaping () -> Void = {}, showsBackButton: Bool = true, contextualContent: AnyView? = nil) { self.model = model; self.onBack = onBack; self.showsBackButton = showsBackButton; self.contextualContent = contextualContent }
     public var body: some View {
         ScrollView { VStack(alignment: .leading, spacing: DirectorSpacing.space5) {
             if showsBackButton {
@@ -27,7 +32,9 @@ public struct CapabilityDetailView: View {
             Text(model.row.entry.resource.name)
                 .font(DirectorTypography.sectionTitle.weight(.semibold))
                 .foregroundStyle(DirectorColor.textPrimary)
-            identity; usage; evidenceControl
+            identity
+            if let contextualContent { contextualContent }
+            usage; evidenceControl
             if showEvidence { calls }
             if let error = model.persistenceError { VStack(alignment: .leading, spacing: DirectorSpacing.space1) {
                 Text(copy("detail.persistenceError", "Unable to save local judgment.")).font(DirectorTypography.sectionTitle)

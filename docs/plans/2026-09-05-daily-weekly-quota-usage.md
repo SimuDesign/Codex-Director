@@ -121,3 +121,9 @@ No Git commit, push, PR, or source-data mutation is authorized by this plan.
 - Full regression suite: 657 tests passed, 0 failures, 3 conditional performance skips.
 - Final production refresh at 13:49 observed 66% → 100% before reset and 21% after reset, so 09/05 rendered 55% instead of “No record”.
 - Release `0.3.1 (16)` was installed from the verified build; the immediately replaced bundle remained recoverable in `{{HOME}}/.Trash/` during local validation.
+
+## Stale previous-cycle replay correction — 2026-09-13
+
+- A reset boundary is directional: a materially later reported reset instant starts a new cycle; a later observation that jumps back to an earlier reset instant is stale previous-cycle evidence.
+- Stale previous-cycle observations are ignored without changing the accepted cycle or adding a new daily segment. This covers overlapping active and archived rollout logs around a real reset.
+- Same-cycle reset-time drift within five minutes, unrecovered decreases, missing reset evidence, and source isolation retain their existing conservative behavior.

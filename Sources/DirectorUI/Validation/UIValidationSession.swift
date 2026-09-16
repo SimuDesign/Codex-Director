@@ -569,6 +569,36 @@ private struct Fixture {
         var relations = zip(resources, resources.dropFirst()).prefix(8).map { source, target in
             ResourceRelation(sourceResourceID: source.id, targetResourceID: target.id, relationKind: "uses", confidence: .inferred, evidenceSummary: "Synthetic relation")
         }
+        // The representative folder fixture needs explicit declarations so
+        // the validation host exercises the real companion presentation:
+        // one global Skill is shared by three Agents, including two project
+        // Agents. Project folders therefore show the global Skill as a
+        // relation preview without changing project membership.
+        if resources.contains(where: { $0.id == "skill:validation-custom" }) {
+            relations.append(contentsOf: [
+                ResourceRelation(
+                    sourceResourceID: "agent:validation-global",
+                    targetResourceID: "skill:validation-custom",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.agentBrief.rawValue
+                ),
+                ResourceRelation(
+                    sourceResourceID: "agent:validation-project-a",
+                    targetResourceID: "skill:validation-custom",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.projectRegistry.rawValue
+                ),
+                ResourceRelation(
+                    sourceResourceID: "agent:validation-project-b",
+                    targetResourceID: "skill:validation-custom",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.projectRegistry.rawValue
+                )
+            ])
+        }
         relations.append(ResourceRelation(sourceResourceID: "plugin:validation-enabled", targetResourceID: "skill:validation-plugin-child", relationKind: "contains", confidence: .exact, evidenceSummary: "Synthetic plugin manifest"))
         return Fixture(resources: resources, projects: projects, provenance: provenance, relations: relations, batches: batches, evaluations: evaluations)
     }

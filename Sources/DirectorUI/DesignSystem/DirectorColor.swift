@@ -40,6 +40,13 @@ public enum DirectorColor {
         dark: NSColor(white: 1, alpha: 0.08)
     )
     public static let boundary = dynamic(light: NSColor(red: 0xCA / 255, green: 0xD7 / 255, blue: 0xDF / 255, alpha: 1), dark: NSColor(red: 0x34 / 255, green: 0x46 / 255, blue: 0x50 / 255, alpha: 1))
+    /// Folder-browser controls use a slightly stronger outline than content
+    /// boundaries so search, sort and segmented controls remain identifiable
+    /// without adding an outer glass/ribbon container.
+    public static let controlBoundary = dynamic(light: NSColor(red: 0x7B / 255, green: 0x91 / 255, blue: 0x9E / 255, alpha: 1), dark: NSColor(red: 0x55 / 255, green: 0x71 / 255, blue: 0x7F / 255, alpha: 1))
+    /// The derived Global folder gets a quiet opaque tint. It is a scope cue,
+    /// not a selection or status color.
+    public static let folderGlobalSurface = dynamic(light: NSColor(red: 0xED / 255, green: 0xF7 / 255, blue: 0xFA / 255, alpha: 1), dark: NSColor(red: 0x10 / 255, green: 0x1E / 255, blue: 0x25 / 255, alpha: 1))
     public static let emphasis = dynamic(light: NSColor(red: 0x00 / 255, green: 0x6B / 255, blue: 0x83 / 255, alpha: 1), dark: NSColor(red: 0x5F / 255, green: 0xD7 / 255, blue: 0xEE / 255, alpha: 1))
     /// Ambient-only field colors. They are deliberately quieter than text
     /// accents so the environment can be felt without competing with data.

@@ -59,8 +59,18 @@ public struct CapabilityFoldersView: View {
                 .contentMargins(.horizontal, 0, for: .scrollContent)
                 .contentMargins(.vertical, 0, for: .scrollContent)
                 .background(Color.clear)
+                #if DEBUG
+                .background(UIValidationCaptureMarker().allowsHitTesting(false).accessibilityHidden(true))
+                #endif
                 .scrollPosition(id: activeScrollPosition)
-                .overlay(alignment: .trailing) { detailSheet(width: proxy.size.width) }
+                // Keep the overlay's layout box equal to the list viewport.
+                // A bare ViewBuilder with scrim + sheet siblings sizes the
+                // overlay to the sheet and centers it; the explicit ZStack
+                // lets the sheet remain pinned to the content trailing edge.
+                .overlay(alignment: .trailing) {
+                    detailSheet(width: proxy.size.width)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                }
             }
         }
         .navigationTitle(t("nav.capabilityFolders", "Capability Folders"))
@@ -134,13 +144,13 @@ public struct CapabilityFoldersView: View {
 
     @ViewBuilder
     private func entryPage(width: CGFloat) -> some View {
-        pageHeader(width: width)
-        entrySearchRow(width: width)
+        entryHeaderAndSearch(width: width)
+        folderStatusBanner(width: width)
         if entrySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             Section {
                 folderGrid(model.capabilityFolders.folders.filter(\.isCustom), width: width)
             } header: {
-                sectionHeader(t("capabilityFolders.myFolders", "My Folders"), action: newFolderButton)
+                sectionHeader("\(t("capabilityFolders.myFolders", "My Folders")) \(model.capabilityFolders.folders.filter(\.isCustom).count)", action: newFolderButton)
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(rowInsets(for: width))
@@ -149,23 +159,24 @@ public struct CapabilityFoldersView: View {
             Section {
                 folderGrid(model.capabilityFolders.folders.filter(\.isDefault), width: width)
             } header: {
-                sectionHeader(t("capabilityFolders.defaults", "Global & Projects"))
+                sectionHeader("\(t("capabilityFolders.defaults", "Global & Projects")) \(model.capabilityFolders.folders.filter(\.isDefault).count)")
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
                     .listRowInsets(rowInsets(for: width))
             }
+        } else if !model.directoryLoaded {
+            pendingState(width: width)
         } else {
             Section {
                 if globalSearchResults.isEmpty {
-                    emptyState(t("capabilityFolders.empty.search", "No capabilities match this search."), width: width)
+                    emptyState(
+                        t("capabilityFolders.empty.search", "No capabilities match this search."),
+                        width: width,
+                        actionTitle: t("capabilityFolders.clearSearch", "Clear search"),
+                        action: { entrySearch = "" }
+                    )
                 } else {
-                    ForEach(globalSearchResults) { member in
-                        memberRow(member, folder: nil, width: width)
-                            .id(member.id)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(rowInsets(for: width))
-                    }
+                    memberListPanel(globalSearchResults, folder: nil, width: width)
                 }
             } header: {
                 sectionHeader(t("capabilityFolders.searchResults", "Search results · all capabilities"))
@@ -178,118 +189,215 @@ public struct CapabilityFoldersView: View {
 
     @ViewBuilder
     private func folderPage(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
-        HStack(spacing: DirectorSpacing.space3) {
-            Button {
-                selectedFolderID = nil
-            } label: {
-                Label(t("capabilityFolders.back", "Back to folders"), systemImage: "chevron.left")
-            }
-            .buttonStyle(DirectorSecondaryActionButtonStyle())
-            Spacer()
-            if folder.isCustom {
-                Button {
-                    importTargetFolder = folder
-                } label: {
-                    Label(t("capabilityFolders.import", "Add existing capabilities"), systemImage: "folder.badge.plus")
-                }
-                .buttonStyle(DirectorSecondaryActionButtonStyle())
-                folderActions(folder)
-            }
-        }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
-
-        DirectorPageHeader(
-            eyebrow: t("capabilityFolders.eyebrow", "07 / Capability Folders"),
-            title: folderTitle(folder),
-            titleAccent: nil,
-            subtitle: folder.isDefault
-                ? t("capabilityFolders.defaultSubtitle", "Browse capabilities by configuration ownership.")
-                : t("capabilityFolders.customSubtitle", "A personal, local collection of capabilities."),
-            symbolName: "folder.fill",
-            tone: .blue
-        )
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
+        folderHeader(folder, width: width)
 
         folderTabs(for: folder.id, width: width)
 
-        DirectorFilterRibbon(compact: width < DirectorPageLayout.compactBreakpoint) {
-            HStack(spacing: DirectorSpacing.space3) {
-                DirectorControlField {
-                    HStack(spacing: DirectorSpacing.space2) {
-                        Image(systemName: DirectorSymbol.search).foregroundStyle(DirectorColor.textSecondary).accessibilityHidden(true)
-                        TextField(t("capabilityFolders.searchInside", "Search this folder"), text: folderSearchBinding(for: folder.id))
-                            .textFieldStyle(.plain)
-                            .accessibilityLabel(t("capabilityFolders.searchInside", "Search this folder"))
-                    }
-                }
-                .frame(minWidth: 180, maxWidth: .infinity)
-                sortMenu(for: folder.id)
-            }
-        }
+        folderFilterRow(for: folder.id, width: width)
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
         .listRowInsets(rowInsets(for: width))
 
-        let members = folderMembers(folder)
-        let hasQuery = !(folderSearch(for: folder.id) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty
-        if members.isEmpty {
-            emptyState(
-                hasQuery
-                    ? t("capabilityFolders.empty.matches", "No capabilities match this search.")
-                    : folder.isCustom
-                    ? t("capabilityFolders.empty.custom", "This folder is empty. Add capabilities from a list or detail view.")
-                    : t("capabilityFolders.empty.none", "No Agents or Skills are available here."),
-                width: width
-            )
+        folderStatusBanner(width: width)
+        if !model.directoryLoaded {
+            pendingState(width: width)
         } else {
-            ForEach(members) { member in
+            let allMembers = model.capabilityFolders.members(in: folder.id)
+            let members = folderMembers(folder)
+            let hasQuery = !(folderSearch(for: folder.id) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
+            if members.isEmpty {
+                if !hasQuery,
+                   currentFolderTab(for: folder.id) == .agentCompanions,
+                   allMembers.contains(where: { $0.resource.kind == .skill }) {
+                    // A folder containing only Skills still gets the relationship
+                    // view's route into the complete Skill list instead of a
+                    // misleading empty-directory message.
+                    companionListPanel([], folder: folder, width: width)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(rowInsets(for: width))
+                } else {
+                    emptyState(
+                        hasQuery
+                            ? t("capabilityFolders.empty.matches", "No capabilities match this search.")
+                            : folder.isCustom
+                            ? t("capabilityFolders.empty.custom", "This folder is empty. Add capabilities from a list or detail view.")
+                            : t("capabilityFolders.empty.none", "No Agents or Skills are available here."),
+                        width: width,
+                        actionTitle: hasQuery
+                            ? t("capabilityFolders.clearSearch", "Clear search")
+                            : folder.isCustom
+                            ? t("capabilityFolders.import", "Add existing capabilities")
+                            : nil,
+                        action: hasQuery
+                            ? { folderSearchByKey[sessionKey(for: folder.id)] = "" }
+                            : folder.isCustom
+                            ? { importTargetFolder = folder }
+                            : nil
+                    )
+                }
+            } else {
                 Group {
-                    if currentFolderTab(for: folder.id) == .agentCompanions,
-                       member.resource.kind == .agent {
-                        agentCompanionRow(member, folder: folder, width: width)
-                    } else if currentFolderTab(for: folder.id) == .skills,
-                              member.resource.kind == .skill {
-                        skillRelationshipRow(member, folder: folder, width: width)
+                    if currentFolderTab(for: folder.id) == .agentCompanions {
+                        companionListPanel(members, folder: folder, width: width)
                     } else {
-                        memberRow(member, folder: folder, width: width)
+                        memberListPanel(members, folder: folder, width: width)
                     }
                 }
-                    .id(member.id)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets(for: width))
+                .id("folder-content-\(folder.id)-\(currentFolderTab(for: folder.id).rawValue)")
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(rowInsets(for: width))
             }
         }
     }
 
-    private func pageHeader(width: CGFloat) -> some View {
-        DirectorPageHeader(
-            eyebrow: t("capabilityFolders.eyebrow", "07 / Capability Folders"),
-            title: t("capabilityFolders.title", "Capability Folders"),
-            titleAccent: nil,
-            subtitle: t("capabilityFolders.subtitle", "Browse Agents and Skills through local, user-controlled folders."),
-            symbolName: "folder.fill",
-            tone: .blue
-        )
+    /// Shows a compact, non-blocking status signal while preserving whatever
+    /// folder content is already on screen. These states are intentionally
+    /// derived from the existing AppModel refresh and cache signals; no new
+    /// data or failure channel is introduced for this presentation surface.
+    @ViewBuilder
+    private func folderStatusBanner(width: CGFloat) -> some View {
+        let hasFailure = model.backgroundRefreshError != nil
+            || model.indexingError != nil
+            || hasPresentationFailure
+        let isStale = model.directoryLoaded && !model.sourceDataFresh
+        if model.isRefreshing || hasFailure || isStale {
+            HStack(spacing: DirectorSpacing.space2) {
+                Image(systemName: model.isRefreshing
+                      ? "arrow.triangle.2.circlepath"
+                      : hasFailure
+                      ? "exclamationmark.triangle"
+                      : "clock.arrow.circlepath")
+                    .accessibilityHidden(true)
+                Text(model.isRefreshing
+                     ? t("capabilityFolders.status.updating", "Updating… Showing the last available data.")
+                     : hasFailure
+                     ? t("capabilityFolders.status.failed", "Background update failed. Showing the last available data.")
+                     : t("capabilityFolders.status.stale", "Needs update. Showing the last available data."))
+                    .font(DirectorTypography.label)
+                    .foregroundStyle(DirectorColor.textSecondary)
+                    .lineLimit(2)
+                Spacer(minLength: DirectorSpacing.space2)
+                if !model.isRefreshing {
+                    Button(t("capabilityFolders.status.retry", "Retry")) {
+                        Task { await model.startIndexing() }
+                    }
+                    .buttonStyle(DirectorSecondaryActionButtonStyle(size: .toolbar))
+                }
+            }
+            .padding(.horizontal, DirectorSpacing.space3)
+            .padding(.vertical, DirectorSpacing.space2)
+            .background(DirectorColor.panel)
+            .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .stroke(DirectorColor.controlBoundary, lineWidth: 1)
+                    .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(model.isRefreshing
+                                ? t("capabilityFolders.status.updating", "Updating… Showing the last available data.")
+                                : hasFailure
+                                ? t("capabilityFolders.status.failed", "Background update failed. Showing the last available data.")
+                                : t("capabilityFolders.status.stale", "Needs update. Showing the last available data."))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
+            .listRowInsets(rowInsets(for: width))
+        }
+    }
+
+    private var hasPresentationFailure: Bool {
+        if case .failure = model.presentationState { return true }
+        return false
+    }
+
+    private func pendingState(width: CGFloat) -> some View {
+        VStack(alignment: .center, spacing: DirectorSpacing.space3) {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel(t("capabilityFolders.pending", "Loading capability directory…"))
+            Text(t("capabilityFolders.pending", "Loading capability directory…"))
+                .font(DirectorTypography.supporting)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: DirectorSpacing.space2) {
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .fill(DirectorColor.boundary.opacity(0.42))
+                    .frame(width: 72, height: 8)
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .fill(DirectorColor.boundary.opacity(0.30))
+                    .frame(width: 48, height: 8)
+            }
+            .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 180)
+        .padding(.horizontal, DirectorSpacing.space6)
+        .background(DirectorColor.panel)
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous)
+                .stroke(
+                    DirectorColor.controlBoundary,
+                    style: StrokeStyle(lineWidth: 1, dash: [6, 5])
+                )
+                .accessibilityHidden(true)
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets(for: width))
+    }
+
+    private func entryHeaderAndSearch(width: CGFloat) -> some View {
+        // Instantiate only one native text field. ViewThatFits candidates
+        // sharing this binding can re-enter AppKit's accessibility graph
+        // when a focused search is cleared while List sections change.
+        Group {
+            if width >= DirectorCapabilityFolderLayout.entryInlineBreakpoint {
+                HStack(alignment: .lastTextBaseline, spacing: DirectorSpacing.space6) {
+                    entryTitleBlock(width: width)
+                        .layoutPriority(1)
+                    Spacer(minLength: DirectorSpacing.space4)
+                    entrySearchField
+                        .frame(width: min(360, max(260, DirectorCapabilityFolderLayout.contentWidth(for: width) * 0.32)))
+                }
+            } else {
+                VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+                    entryTitleBlock(width: width)
+                    entrySearchField
+                }
+            }
+        }
+        .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorSpacing.space4 : DirectorSpacing.space6)
+        .padding(.bottom, DirectorSpacing.space4)
         .id("capability-folders-entry-top")
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: DirectorSpacing.space6, leading: DirectorPageLayout.listRowInset(for: width), bottom: DirectorSpacing.space4, trailing: DirectorPageLayout.listRowInset(for: width)))
+        .listRowInsets(rowInsets(for: width))
     }
 
-    private func entrySearchRow(width: CGFloat) -> some View {
-        DirectorFilterRibbon(compact: width < DirectorPageLayout.compactBreakpoint) {
+    private func entryTitleBlock(width: CGFloat) -> some View {
+        return VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
+            Text(t("capabilityFolders.title", "Capability Folders"))
+                .font(.system(size: width < DirectorCapabilityFolderLayout.compactBreakpoint ? 28 : 32, weight: .semibold, design: .default))
+                .foregroundStyle(DirectorColor.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+            Text(t("capabilityFolders.subtitle", "From global to project, understand and organize your capabilities."))
+                .font(DirectorTypography.supporting)
+                .foregroundStyle(DirectorColor.textSecondary)
+        }
+    }
+
+    private var entrySearchField: some View {
+        CapabilityFolderControlField {
             HStack(spacing: DirectorSpacing.space2) {
-                Image(systemName: DirectorSymbol.search).foregroundStyle(DirectorColor.textSecondary).accessibilityHidden(true)
-                TextField(t("capabilityFolders.search", "Search all capabilities"), text: $entrySearch)
+                Image(systemName: DirectorSymbol.search)
+                    .foregroundStyle(DirectorColor.textSecondary)
+                    .accessibilityHidden(true)
+                TextField(t("capabilityFolders.search", "Search all Agents and Skills"), text: $entrySearch)
                     .textFieldStyle(.plain)
-                    .accessibilityLabel(t("capabilityFolders.search", "Search all capabilities"))
+                    .accessibilityLabel(t("capabilityFolders.search", "Search all Agents and Skills"))
                 if !entrySearch.isEmpty {
                     Button { entrySearch = "" } label: { Image(systemName: "xmark.circle.fill") }
                         .buttonStyle(.plain)
@@ -298,9 +406,6 @@ public struct CapabilityFoldersView: View {
                 }
             }
         }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
     }
 
     private func sectionHeader(_ title: String, action: AnyView? = nil) -> some View {
@@ -309,8 +414,8 @@ public struct CapabilityFoldersView: View {
             Spacer()
             if let action { action }
         }
-        .padding(.vertical, DirectorSpacing.space3)
-        .overlay(alignment: .bottom) { Rectangle().fill(DirectorColor.boundary).frame(height: 1) }
+        .padding(.top, DirectorSpacing.space4)
+        .padding(.bottom, DirectorSpacing.space3)
     }
 
     private var newFolderButton: AnyView {
@@ -319,11 +424,123 @@ public struct CapabilityFoldersView: View {
         }.buttonStyle(DirectorSecondaryActionButtonStyle()))
     }
 
+    private func folderHeader(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+            HStack(spacing: DirectorSpacing.space2) {
+                Button {
+                    selectedFolderID = nil
+                } label: {
+                    Label(t("capabilityFolders.back", "Capability Folders"), systemImage: "chevron.left")
+                }
+                .buttonStyle(.plain)
+                .font(DirectorTypography.label)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .accessibilityLabel(t("capabilityFolders.back", "Back to folders"))
+                Spacer()
+                if folder.isCustom {
+                    Button {
+                        importTargetFolder = folder
+                    } label: {
+                        Label(t("capabilityFolders.import", "Add existing capabilities"), systemImage: "folder.badge.plus")
+                    }
+                    .buttonStyle(DirectorSecondaryActionButtonStyle(size: .toolbar))
+                    folderActions(folder)
+                }
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .bottom, spacing: DirectorSpacing.space4) {
+                    folderTitleBlock(folder, width: width)
+                    Spacer(minLength: DirectorSpacing.space4)
+                    folderCountBlock(folder)
+                }
+                VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+                    folderTitleBlock(folder, width: width)
+                    folderCountBlock(folder)
+                }
+            }
+        }
+        .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorSpacing.space3 : DirectorSpacing.space4)
+        .padding(.bottom, DirectorSpacing.space3)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets(for: width))
+    }
+
+    private func folderTitleBlock(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
+            HStack(alignment: .center, spacing: DirectorSpacing.space3) {
+                Image(systemName: folder.isDefault && folder.source == .global ? "globe" : "folder.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(DirectorColor.accent(folder.isDefault ? .ice : .teal))
+                    .accessibilityHidden(true)
+                Text(folderTitle(folder))
+                    .font(.system(size: width < DirectorCapabilityFolderLayout.compactBreakpoint ? 28 : 32, weight: .semibold, design: .default))
+                    .foregroundStyle(DirectorColor.textPrimary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.75)
+            }
+            Text(folder.isDefault
+                 ? t("capabilityFolders.defaultSubtitle", "Browse capabilities by configuration ownership.")
+                 : t("capabilityFolders.customSubtitle", "A personal, local collection of capabilities."))
+                .font(DirectorTypography.supporting)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func folderCountBlock(_ folder: CapabilityFolderDefinition) -> some View {
+        Text(folderCounts(folder))
+            .font(DirectorTypography.label.monospacedDigit())
+            .foregroundStyle(DirectorColor.textSecondary)
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityLabel(folderCounts(folder))
+    }
+
+    private func folderFilterRow(for folderID: String, width: CGFloat) -> some View {
+        // As with the entry search, keep a single native editor per layout.
+        Group {
+            if width >= DirectorCapabilityFolderLayout.compactBreakpoint {
+                HStack(spacing: DirectorSpacing.space3) {
+                    folderSearchField(for: folderID)
+                        .frame(maxWidth: .infinity)
+                    sortMenu(for: folderID)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
+                    folderSearchField(for: folderID)
+                    HStack {
+                        Spacer()
+                        sortMenu(for: folderID)
+                    }
+                }
+            }
+        }
+    }
+
+    private func folderSearchField(for folderID: String) -> some View {
+        CapabilityFolderControlField {
+            HStack(spacing: DirectorSpacing.space2) {
+                Image(systemName: DirectorSymbol.search)
+                    .foregroundStyle(DirectorColor.textSecondary)
+                    .accessibilityHidden(true)
+                TextField(t("capabilityFolders.searchInside", "Search this folder"), text: folderSearchBinding(for: folderID))
+                    .textFieldStyle(.plain)
+                    .accessibilityLabel(t("capabilityFolders.searchInside", "Search this folder"))
+            }
+        }
+    }
+
     private func folderGrid(_ folders: [CapabilityFolderDefinition], width: CGFloat) -> some View {
+        // The local folder grid supersedes DirectorAdaptiveGrid.items(for:
+        // here so its four/three/two/one breakpoints are based on the actual
+        // content viewport instead of the global 4/2/1 contract.
         LazyVGrid(
-            columns: DirectorAdaptiveGrid.items(for: max(0, width - DirectorPageLayout.listRowInset(for: width) * 2)),
+            columns: DirectorCapabilityFolderLayout.gridItems(for: width),
             alignment: .leading,
-            spacing: DirectorSpacing.space4
+            spacing: width < DirectorCapabilityFolderLayout.compactBreakpoint
+                ? DirectorCapabilityFolderLayout.folderGridGapCompact
+                : DirectorCapabilityFolderLayout.folderGridGap
         ) {
             ForEach(folders) { folder in
                 if folder.isCustom {
@@ -360,30 +577,54 @@ public struct CapabilityFoldersView: View {
     }
 
     private func folderCard(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
-        HStack(spacing: DirectorSpacing.space3) {
+        ZStack(alignment: .topTrailing) {
             Button { selectedFolderID = folder.id } label: {
-                HStack(spacing: DirectorSpacing.space3) {
-                Image(systemName: folder.isDefault ? "folder" : "folder.fill")
-                    .foregroundStyle(DirectorColor.accent(folder.isDefault ? .ice : .teal))
-                    .font(.title3)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: DirectorSpacing.space1) {
-                    Text(folderTitle(folder)).font(DirectorTypography.capabilityRowTitle).foregroundStyle(DirectorColor.textPrimary)
-                    Text(folderCounts(folder)).font(DirectorTypography.supporting).foregroundStyle(DirectorColor.textSecondary)
+                VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+                    HStack(spacing: DirectorSpacing.space3) {
+                        Image(systemName: folder.isDefault && folder.source == .global ? "globe" : folder.isDefault ? "folder" : "folder.fill")
+                            .foregroundStyle(DirectorColor.accent(folder.isDefault ? .ice : .teal))
+                            .font(.title3)
+                            .accessibilityHidden(true)
+                        Text(folderTitle(folder))
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(DirectorColor.textPrimary)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                        Spacer(minLength: DirectorSpacing.space8)
+                    }
+                    Spacer(minLength: DirectorSpacing.space1)
+                    HStack {
+                        Text(folderCounts(folder))
+                            .font(DirectorTypography.supporting.monospacedDigit())
+                            .foregroundStyle(DirectorColor.textSecondary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(DirectorColor.textTertiary)
+                            .accessibilityHidden(true)
+                    }
                 }
-                    Spacer()
-                    Image(systemName: "chevron.right").foregroundStyle(DirectorColor.textTertiary).accessibilityHidden(true)
-                }
-                .padding(.vertical, DirectorSpacing.space4)
+                .padding(.horizontal, DirectorSpacing.space4)
+                .padding(.vertical, DirectorSpacing.space3)
+                .frame(maxWidth: .infinity, minHeight: DirectorCapabilityFolderLayout.cardHeight(for: width), alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if folder.isCustom { folderActions(folder) }
+            if folder.isCustom {
+                folderActions(folder)
+                    .padding(.top, DirectorSpacing.space2)
+                    .padding(.trailing, DirectorSpacing.space2)
+            }
         }
-        .padding(.horizontal, DirectorSpacing.space3)
-        .padding(.vertical, DirectorSpacing.space1)
-        .background(RoundedRectangle(cornerRadius: DirectorRadius.metric, style: .continuous).fill(DirectorColor.inset.opacity(0.5)))
-        .overlay(RoundedRectangle(cornerRadius: DirectorRadius.metric, style: .continuous).stroke(DirectorColor.boundary, lineWidth: 1))
+        .background {
+            RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous)
+                .fill(folder.source == .global ? DirectorColor.folderGlobalSurface : DirectorColor.panel)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous)
+                .stroke(DirectorColor.boundary, lineWidth: 1)
+                .accessibilityHidden(true)
+        }
         .accessibilityLabel("\(folderTitle(folder)), \(folderCounts(folder))")
     }
 
@@ -409,6 +650,75 @@ public struct CapabilityFoldersView: View {
         }
         .menuIndicator(.hidden)
         .accessibilityLabel(t("capabilityFolders.actions", "Folder actions"))
+    }
+
+    @ViewBuilder
+    private func memberListPanel(_ members: [CapabilityFolderMember], folder: CapabilityFolderDefinition?, width: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(members.enumerated()), id: \.element.id) { index, member in
+                if index > 0 {
+                    Rectangle()
+                        .fill(DirectorColor.boundary.opacity(0.72))
+                        .frame(height: 1)
+                        .accessibilityHidden(true)
+                }
+                if let folder, currentFolderTab(for: folder.id) == .skills {
+                    skillRelationshipRow(member, folder: folder, width: width)
+                } else {
+                    memberRow(member, folder: folder, width: width)
+                }
+            }
+        }
+        .padding(.horizontal, DirectorSpacing.space4)
+        .padding(.vertical, DirectorSpacing.space2)
+        .background(DirectorColor.panel)
+        .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous)
+                .stroke(DirectorColor.boundary, lineWidth: 1)
+                .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder
+    private func companionListPanel(_ members: [CapabilityFolderMember], folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
+        let agents = members.filter { $0.resource.kind == .agent }
+        let skills = model.capabilityFolders.members(in: folder.id).filter { $0.resource.kind == .skill }
+        let representedSkills = Set(agents.flatMap { agent in
+            model.capabilityFolders.companionSkills(for: agent.id, in: folder.id)
+                .filter { !$0.isPreview }
+                .map { $0.resource.id }
+        })
+        let hasUnrepresentedSkills = skills.contains { !representedSkills.contains($0.id) }
+
+        VStack(alignment: .leading, spacing: width < DirectorCapabilityFolderLayout.compactBreakpoint
+               ? DirectorCapabilityFolderLayout.agentGroupGapCompact
+               : DirectorCapabilityFolderLayout.agentGroupGap) {
+            ForEach(agents) { member in
+                agentCompanionRow(member, folder: folder, width: width)
+            }
+            if hasUnrepresentedSkills {
+                Button {
+                    folderTabByID[folder.id] = .skills
+                } label: {
+                    HStack(spacing: DirectorSpacing.space2) {
+                        Image(systemName: DirectorSymbol.resource(.skill))
+                            .accessibilityHidden(true)
+                        Text(t("capabilityFolders.companions.unrepresentedHint", "Some Skills are not represented by a declared Agent relationship. View all Skills."))
+                            .multilineTextAlignment(.leading)
+                        Image(systemName: "arrow.right")
+                            .accessibilityHidden(true)
+                    }
+                    .font(DirectorTypography.label)
+                    .foregroundStyle(DirectorColor.emphasis)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, DirectorSpacing.space2)
+                .padding(.top, DirectorSpacing.space1)
+                .accessibilityHint(t("capabilityFolders.companions.unrepresentedHintAX", "Switches to the complete Skill list."))
+            }
+        }
     }
 
     private func memberRow(_ member: CapabilityFolderMember, folder: CapabilityFolderDefinition?, width: CGFloat) -> some View {
@@ -438,9 +748,6 @@ public struct CapabilityFoldersView: View {
                             .font(DirectorTypography.label)
                             .foregroundStyle(DirectorColor.textTertiary)
                             .lineLimit(1)
-                        Text(recentUsageText(for: member.resource.id))
-                            .font(DirectorTypography.label)
-                            .foregroundStyle(DirectorColor.textTertiary)
                     }
                     Spacer(minLength: DirectorSpacing.space2)
                 }
@@ -449,25 +756,30 @@ public struct CapabilityFoldersView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("\(member.resource.name), \(member.resource.kind == .agent ? t("capabilityFolders.agent", "Agent") : t("capabilityFolders.skill", "Skill"))")
             folderMembershipMenu(member.resource, currentFolder: folder)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(DirectorColor.textTertiary)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, DirectorSpacing.space3)
-        .overlay(alignment: .bottom) { Rectangle().fill(DirectorColor.boundary.opacity(0.66)).frame(height: 1) }
     }
 
     private func agentCompanionRow(_ member: CapabilityFolderMember, folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
+        let relations = model.capabilityFolders.companionSkills(for: member.id, in: folder.id)
+        let isCollapsed = isCompanionCollapsed(for: member.id, folderID: folder.id)
+        return VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
             memberRow(member, folder: folder, width: width)
-                .overlay(alignment: .bottom) { EmptyView() }
-            let relations = model.capabilityFolders.companionSkills(for: member.id, in: folder.id)
             if relations.isEmpty {
                 Text(t("capabilityFolders.companions.none", "No companion Skill recorded"))
                     .font(DirectorTypography.label)
                     .foregroundStyle(DirectorColor.textTertiary)
-                    .padding(.leading, 38)
+                    .padding(.leading, DirectorCapabilityFolderLayout.skillIndent)
             } else {
-                let isCollapsed = collapsedCompanionAgentIDs(for: folder.id).contains(member.id)
-                VStack(alignment: .leading, spacing: DirectorSpacing.space1) {
+                VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
                     Button {
+                        // Resolve the initial disclosure state only until the
+                        // first interaction. Subsequent toggles must mutate
+                        // the user's current set instead of rebuilding it.
                         var collapsed = collapsedCompanionAgentIDs(for: folder.id)
                         if isCollapsed { collapsed.remove(member.id) }
                         else { collapsed.insert(member.id) }
@@ -479,11 +791,11 @@ public struct CapabilityFoldersView: View {
                                 : t("capabilityFolders.companions.collapse", "Hide companion Skills"),
                             systemImage: isCollapsed ? "chevron.right" : "chevron.down"
                         )
-                        .font(DirectorTypography.label.weight(.semibold))
-                        .foregroundStyle(DirectorColor.textSecondary)
+                            .font(DirectorTypography.label.weight(.semibold))
+                            .foregroundStyle(DirectorColor.textSecondary)
                     }
                     .buttonStyle(.plain)
-                    .padding(.leading, 38)
+                    .padding(.leading, DirectorCapabilityFolderLayout.skillIndent)
                     .accessibilityHint(t("capabilityFolders.companions.expandHint", "Expand to review declared relationships and usage evidence."))
                     if !isCollapsed {
                         VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
@@ -499,19 +811,27 @@ public struct CapabilityFoldersView: View {
                                             Text(item.resource.name)
                                                 .font(DirectorTypography.supporting)
                                                 .foregroundStyle(DirectorColor.textPrimary)
+                                                .lineLimit(2)
                                             Spacer()
                                             Image(systemName: "chevron.right")
                                                 .font(.caption)
                                                 .foregroundStyle(DirectorColor.textTertiary)
                                                 .accessibilityHidden(true)
                                         }
+                                        Text(CapabilityPurposeLocalization.localizedSummary(for: item.resource, language: languageStore.language) ?? t("capabilityFolders.purposeUnavailable", "Purpose unavailable"))
+                                            .font(DirectorTypography.label)
+                                            .foregroundStyle(DirectorColor.textSecondary)
+                                            .lineLimit(2)
                                         Text(relationshipDeclarationText(item.relation))
                                             .font(DirectorTypography.label)
+                                            .foregroundStyle(DirectorColor.textSecondary)
                                         HStack(spacing: DirectorSpacing.space2) {
                                             if item.isPreview {
                                                 Text(companionPreviewLabel(for: item.resource, in: folder))
                                             }
-                                            companionUsageLabel(for: item.relation)
+                                            if let sharedAgents = sharedAgentsLabel(for: item.resource.id) {
+                                                Text(sharedAgents)
+                                            }
                                         }
                                         .font(DirectorTypography.label)
                                         .foregroundStyle(DirectorColor.textTertiary)
@@ -522,54 +842,39 @@ public struct CapabilityFoldersView: View {
                                 .accessibilityLabel("\(item.resource.name), \(t("capabilityFolders.skill", "Skill"))")
                             }
                         }
-                        .padding(.leading, 38)
+                        .padding(.leading, DirectorCapabilityFolderLayout.skillIndent + DirectorCapabilityFolderLayout.skillRuleInset)
+                        .overlay(alignment: .leading) {
+                            Rectangle()
+                                .fill(DirectorColor.boundary)
+                                .frame(width: DirectorCapabilityFolderLayout.skillRuleWidth)
+                                .padding(.leading, DirectorCapabilityFolderLayout.skillIndent)
+                        }
                         .padding(.bottom, DirectorSpacing.space3)
                     }
                 }
             }
         }
+        .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorCapabilityFolderLayout.agentHeaderTopPaddingCompact : DirectorCapabilityFolderLayout.agentHeaderTopPadding)
+        .padding(.horizontal, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorCapabilityFolderLayout.agentHeaderHorizontalPaddingCompact : DirectorCapabilityFolderLayout.agentHeaderHorizontalPadding)
+        .padding(.bottom, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorCapabilityFolderLayout.agentHeaderBottomPaddingCompact : DirectorCapabilityFolderLayout.agentHeaderBottomPadding)
+        .background(DirectorColor.panel)
+        .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous)
+                .stroke(DirectorColor.boundary, lineWidth: 1)
+                .accessibilityHidden(true)
+        }
     }
 
     private func skillRelationshipRow(_ member: CapabilityFolderMember, folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: DirectorSpacing.space1) {
+            // Keep the Skill tab flat. Reverse Agent links remain available
+            // from the detail sheet, alongside a concise row status.
             memberRow(member, folder: folder, width: width)
-            let relations = model.capabilityFolders.relatedAgents(for: member.id, in: folder.id)
-            if relations.isEmpty {
-                Text(t("capabilityFolders.companions.unassociated", "No Agent association recorded"))
-                    .font(DirectorTypography.label)
-                    .foregroundStyle(DirectorColor.textTertiary)
-                    .padding(.leading, 38)
-                    .padding(.bottom, DirectorSpacing.space3)
-            } else {
-                VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
-                    ForEach(Array(relations.enumerated()), id: \.offset) { _, item in
-                        Button { selectResource(item.resource.id) } label: {
-                            VStack(alignment: .leading, spacing: DirectorSpacing.space1) {
-                                HStack(spacing: DirectorSpacing.space2) {
-                                    Image(systemName: DirectorSymbol.resource(.agent))
-                                        .foregroundStyle(DirectorColor.resource(.agent))
-                                        .accessibilityHidden(true)
-                                    Text(item.resource.name).font(DirectorTypography.supporting).foregroundStyle(DirectorColor.textPrimary)
-                                    Spacer()
-                                    Image(systemName: "chevron.right").font(.caption).foregroundStyle(DirectorColor.textTertiary).accessibilityHidden(true)
-                                }
-                                Text(relationshipDeclarationText(item.relation))
-                                    .font(DirectorTypography.label)
-                                HStack(spacing: DirectorSpacing.space2) {
-                                    if item.isPreview { Text(companionPreviewLabel(for: item.resource, in: folder)) }
-                                    companionUsageLabel(for: item.relation)
-                                }
-                                .font(DirectorTypography.label)
-                                .foregroundStyle(DirectorColor.textTertiary)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("\(item.resource.name), \(t("capabilityFolders.agent", "Agent"))")
-                    }
-                }
-                .padding(.leading, 38)
+            Text(skillAgentLinkStatus(for: member.id, folderID: folder.id))
+                .font(DirectorTypography.label)
+                .foregroundStyle(DirectorColor.textTertiary)
                 .padding(.bottom, DirectorSpacing.space3)
-            }
         }
     }
 
@@ -584,14 +889,38 @@ public struct CapabilityFoldersView: View {
     }
 
     private func companionCountText(for agentID: String, folderID: String) -> String {
+        let relations = model.capabilityFolders.companionSkills(for: agentID, in: folderID)
         let count = Set(
-            model.capabilityFolders.companionSkills(for: agentID, in: folderID)
+            relations
                 .filter { !$0.isPreview }
                 .map { $0.resource.id }
         ).count
+        let previewCount = Set(relations.filter(\.isPreview).map { $0.resource.id }).count
+        if previewCount > 0 {
+            let previews = String(format: t("capabilityFolders.companions.previewCount", "%d related previews"), previewCount)
+            return count == 0 ? previews
+                : "\(String(format: t("capabilityFolders.companions.count", "%d companion Skills"), count)) · \(previews)"
+        }
         return count == 0
             ? t("capabilityFolders.companions.none", "No companion Skill recorded")
             : String(format: t("capabilityFolders.companions.count", "%d companion Skills"), count)
+    }
+
+    private func sharedAgentsLabel(for skillID: String) -> String? {
+        let count = Set(
+            model.capabilityFolders.companionRelations
+                .filter { $0.skillID == skillID }
+                .map(\.agentID)
+        ).count
+        guard count > 1 else { return nil }
+        return String(format: t("capabilityFolders.companions.sharedAgents", "Shared by %d Agents"), count)
+    }
+
+    private func skillAgentLinkStatus(for skillID: String, folderID: String) -> String {
+        let hasLinks = !model.capabilityFolders.relatedAgents(for: skillID, in: folderID).isEmpty
+        return hasLinks
+            ? t("capabilityFolders.companions.agentLinksRecorded", "Agent links recorded")
+            : t("capabilityFolders.companions.noAgentLinksRecorded", "No Agent links recorded")
     }
 
     private func relationshipDeclarationText(_ relation: CapabilityCompanionRelation) -> String {
@@ -606,18 +935,6 @@ public struct CapabilityFoldersView: View {
         case .skillDescription: source = t("capabilityFolders.companions.source.description", "Skill description")
         }
         return "\(kind) · \(source)"
-    }
-
-    @ViewBuilder
-    private func companionUsageLabel(for relation: CapabilityCompanionRelation) -> some View {
-        // Consume the AppModel's one-shot batch projection. Rows never query
-        // SQLite or rescan sessions independently.
-        let stats = model.capabilityCompanionUsageByRelationID[relation.id] ?? .unavailable
-        let count = stats.sessionCount.map(String.init) ?? "—"
-        let last = stats.lastObservedAt.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? "—"
-        Text("\(t("capabilityFolders.companions.coObservedShort", "Co-observed")): \(count) · \(t("capabilityFolders.companions.lastObserved", "Last observed")): \(last) · \(coverageText(stats.coverage))")
-            .font(DirectorTypography.label)
-            .foregroundStyle(DirectorColor.textTertiary)
     }
 
     private func folderMembershipMenu(_ resource: CapabilityResource, currentFolder: CapabilityFolderDefinition?) -> some View {
@@ -651,25 +968,42 @@ public struct CapabilityFoldersView: View {
         if let selectedResourceID = currentSelectedResourceID,
            let resource = model.capabilityFolders.resources.first(where: { $0.id == selectedResourceID }),
            let detailContext {
-            Color.black.opacity(0.24).ignoresSafeArea().contentShape(Rectangle()).onTapGesture { clearSelectedResource() }.accessibilityHidden(true)
-            DirectorSideSheet(
-                width: min(DirectorSpacing.sideSheetMaxWidth, max(DirectorSpacing.sideSheetMinWidth, width * 0.34)),
-                onClose: { clearSelectedResource() },
-                closeLabel: t("detail.close", "Close detail")
-            ) {
-                VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
-                    folderMembershipMenu(resource, currentFolder: selectedFolderID.flatMap(model.capabilityFolders.folder(withID:)))
-                    if let folderID = selectedFolderID {
-                        if resource.kind == .agent {
-                            relatedSkillsSection(for: resource, folderID: folderID)
-                        } else if resource.kind == .skill {
-                            relatedAgentsSection(for: resource, folderID: folderID)
-                        }
-                    }
-                    CapabilityDetailView(model: detailContext(resource), showsBackButton: false)
+            ZStack(alignment: .trailing) {
+                Color.black.opacity(0.24)
+                    .ignoresSafeArea()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onTapGesture { clearSelectedResource() }
+                    .accessibilityHidden(true)
+                DirectorSideSheet(
+                    width: width < DirectorCapabilityFolderLayout.narrowBreakpoint
+                        ? max(0, width - DirectorCapabilityFolderLayout.compactPagePadding * 2)
+                        : DirectorCapabilityFolderLayout.detailWidth,
+                    onClose: { clearSelectedResource() },
+                    closeLabel: t("detail.close", "Close detail")
+                ) {
+                    CapabilityDetailView(
+                        model: detailContext(resource),
+                        showsBackButton: false,
+                        contextualContent: AnyView(folderDetailContext(for: resource))
+                    )
                 }
             }
-            .padding(.vertical, DirectorSpacing.space2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+        }
+    }
+
+    @ViewBuilder
+    private func folderDetailContext(for resource: CapabilityResource) -> some View {
+        VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+            if let folderID = selectedFolderID {
+                if resource.kind == .agent {
+                    relatedSkillsSection(for: resource, folderID: folderID)
+                } else if resource.kind == .skill {
+                    relatedAgentsSection(for: resource, folderID: folderID)
+                }
+            }
+            folderMembershipMenu(resource, currentFolder: selectedFolderID.flatMap(model.capabilityFolders.folder(withID:)))
         }
     }
 
@@ -873,14 +1207,44 @@ public struct CapabilityFoldersView: View {
         return String((compact.isEmpty ? value : compact).prefix(8))
     }
 
-    private func emptyState(_ title: String, width: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
-            Text(title).font(DirectorTypography.sectionTitle.weight(.semibold)).foregroundStyle(DirectorColor.textPrimary)
+    private func emptyState(
+        _ title: String,
+        width: CGFloat,
+        actionTitle: String? = nil,
+        action: (() -> Void)? = nil
+    ) -> some View {
+        VStack(alignment: .center, spacing: DirectorSpacing.space3) {
+            Image(systemName: "folder.badge.questionmark")
+                .font(.system(size: 24, weight: .medium))
+                .foregroundStyle(DirectorColor.textSecondary)
+                .accessibilityHidden(true)
+            Text(title)
+                .font(DirectorTypography.sectionTitle.weight(.semibold))
+                .foregroundStyle(DirectorColor.textPrimary)
+                .multilineTextAlignment(.center)
             Text(t("capabilityFolders.empty.hint", "Try another search or refresh the capability directory."))
-                .font(DirectorTypography.supporting).foregroundStyle(DirectorColor.textSecondary)
+                .font(DirectorTypography.supporting)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .multilineTextAlignment(.center)
+            if let actionTitle, let action {
+                Button(actionTitle, action: action)
+                    .buttonStyle(DirectorSecondaryActionButtonStyle(size: .toolbar))
+            }
         }
-        .padding(.vertical, DirectorSpacing.space8)
-        .listRowBackground(Color.clear).listRowSeparator(.hidden).listRowInsets(rowInsets(for: width))
+        .frame(maxWidth: .infinity, minHeight: 180)
+        .padding(.horizontal, DirectorSpacing.space6)
+        .background(DirectorColor.panel)
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.contentPanel, style: .continuous)
+                .stroke(
+                    DirectorColor.controlBoundary,
+                    style: StrokeStyle(lineWidth: 1, dash: [6, 5])
+                )
+                .accessibilityHidden(true)
+        }
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .listRowInsets(rowInsets(for: width))
     }
 
     private func folderTabs(for folderID: String, width: CGFloat) -> some View {
@@ -890,17 +1254,23 @@ public struct CapabilityFoldersView: View {
         ) {
             Text(t("capabilityFolders.tabs.companions", "Agent & Companion Skills"))
                 .tag(CapabilityFolderTab.agentCompanions)
-            Text(t("capabilityFolders.tabs.agents", "Agents"))
+            Text("\(t("capabilityFolders.tabs.agents", "Agents")) \(tabCount(for: folderID, kind: .agent))")
                 .tag(CapabilityFolderTab.agents)
-            Text(t("capabilityFolders.tabs.skills", "Skills"))
+            Text("\(t("capabilityFolders.tabs.skills", "Skills")) \(tabCount(for: folderID, kind: .skill))")
                 .tag(CapabilityFolderTab.skills)
         }
         .pickerStyle(.segmented)
-        .frame(maxWidth: width < DirectorPageLayout.compactBreakpoint ? .infinity : 620)
+        .frame(maxWidth: width < DirectorCapabilityFolderLayout.compactBreakpoint ? .infinity : 620)
+        .frame(minHeight: DirectorCapabilityFolderLayout.segmentHeight)
         .accessibilityLabel(t("capabilityFolders.tabs.label", "Capability view"))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
         .listRowInsets(rowInsets(for: width))
+    }
+
+    private func tabCount(for folderID: String, kind: ResourceKind) -> String {
+        guard model.directoryLoaded else { return "—" }
+        return String(model.capabilityFolders.members(in: folderID).filter { $0.resource.kind == kind }.count)
     }
 
     private func sortMenu(for folderID: String) -> some View {
@@ -911,8 +1281,16 @@ public struct CapabilityFoldersView: View {
             }
         } label: {
             Label(selected.title(languageStore.language), systemImage: "arrow.up.arrow.down")
+                .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
         }
-        .menuIndicator(.visible)
+        .menuStyle(.borderlessButton)
+        .padding(.horizontal, DirectorSpacing.space2)
+        .background(DirectorColor.controlField, in: RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .stroke(DirectorColor.controlBoundary, lineWidth: 1)
+                .accessibilityHidden(true)
+        }
         .accessibilityLabel(t("capabilityFolders.filter.sort", "Sort"))
     }
 
@@ -966,7 +1344,22 @@ public struct CapabilityFoldersView: View {
     }
 
     private func collapsedCompanionAgentIDs(for folderID: String) -> Set<String> {
-        collapsedCompanionAgentIDsByKey[sessionKey(for: folderID)] ?? []
+        collapsedCompanionAgentIDsByKey[sessionKey(for: folderID)] ?? initialCollapsedCompanionAgents(for: folderID)
+    }
+
+    private func initialCollapsedCompanionAgents(for folderID: String) -> Set<String> {
+        let orderedAgents = model.capabilityFolders.members(in: folderID)
+            .filter { $0.resource.kind == .agent }
+        guard let firstRelated = orderedAgents.first(where: {
+            !model.capabilityFolders.companionSkills(for: $0.id, in: folderID).isEmpty
+        })?.id else {
+            return []
+        }
+        return Set(orderedAgents.map(\.id).filter { $0 != firstRelated })
+    }
+
+    private func isCompanionCollapsed(for agentID: String, folderID: String) -> Bool {
+        collapsedCompanionAgentIDs(for: folderID).contains(agentID)
     }
 
     private var currentSelectedResourceID: String? {
@@ -1007,7 +1400,7 @@ public struct CapabilityFoldersView: View {
     }
 
     private func rowInsets(for width: CGFloat) -> EdgeInsets {
-        EdgeInsets(top: 0, leading: DirectorPageLayout.listRowInset(for: width), bottom: 0, trailing: DirectorPageLayout.listRowInset(for: width))
+        EdgeInsets(top: 0, leading: DirectorCapabilityFolderLayout.listRowInset(for: width), bottom: 0, trailing: DirectorCapabilityFolderLayout.listRowInset(for: width))
     }
 
     private func t(_ key: String, _ fallback: String) -> String { languageStore.localizer.text(key, fallback: fallback) }
@@ -1242,5 +1635,39 @@ private struct FolderNameSheet: View {
         }
         .padding(DirectorSpacing.space6)
         .frame(width: 420)
+    }
+}
+
+/// Folder-local control surface. The rest of the app keeps using the shared
+/// ribbon primitive; this variant intentionally removes the outer ribbon
+/// border while giving the page's search and sort controls the stronger
+/// outline specified by the visual contract.
+private struct CapabilityFolderControlField<Content: View>: View {
+    private let content: Content
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, DirectorSpacing.space3)
+            .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .fill(reduceTransparency ? DirectorColor.inset : DirectorColor.controlField)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .stroke(
+                        DirectorColor.controlBoundary,
+                        lineWidth: contrast == .increased ? 1.5 : 1
+                    )
+                    .accessibilityHidden(true)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
     }
 }

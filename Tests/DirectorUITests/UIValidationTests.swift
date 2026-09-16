@@ -138,6 +138,19 @@ final class UIValidationTests: XCTestCase {
         }
     }
 
+    func testSyntheticPNGExportUsesOnlyTheBoundedProductView() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let host = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Validation/UIValidationHost.swift"), encoding: .utf8)
+        XCTAssertTrue(host.hasPrefix("#if DEBUG"))
+        XCTAssertTrue(host.contains("guard session.isReady"))
+        XCTAssertTrue(host.contains("marker.convert(marker.bounds, to: content).intersection(content.bounds)"))
+        XCTAssertTrue(host.contains("content.cacheDisplay(in: rect, to: bitmap)"))
+        XCTAssertTrue(host.contains("panel.allowedContentTypes = [.png]"))
+        XCTAssertFalse(host.contains("CGWindowListCreateImage"))
+        XCTAssertFalse(host.contains("UserDefaults.standard"))
+    }
+
     func testFiveHourOnlyFixtureKeepsWeeklyQuotaUnknown() async throws {
         let session = try UIValidationSession(dataset: .fiveHourOnly)
         try await session.prepare()

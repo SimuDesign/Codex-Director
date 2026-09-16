@@ -316,7 +316,9 @@ Under Reduce Motion:
 ### 11.3 Inspector
 
 Capability Folders supersedes the unpublished automatic-category experiment.
-Use responsive 4/2/1 custom-folder cards, immutable Global/Project projections,
+Use the folder-browser local variant: a 1280pt maximum content measure with
+40/16pt gutters, 128/120/112pt cards, and four/three/two/one columns at the
+actual content viewport thresholds 1440/901/561/560pt. Immutable Global/Project projections,
 multi-membership and folder-scoped search/sort controls; do not render the old
 four-metric classification surface. Self Training is created empty for new
 installs and existing memberships are preserved on upgrade. Every folder uses
@@ -324,7 +326,22 @@ the native Agent & Companion Skills / Agent / Skill segmented selector directly
 below the folder header. The companion tab expands Agent rows with explicitly
 declared Skills and separately labels outside-folder previews; the Agent and
 Skill tabs remain complete lists. Custom folders expose an Add existing
-capabilities sheet with search, checkbox selection and one confirm action.
+capabilities sheet with search, checkbox selection and one confirm action. The
+entry page uses one title and purpose line, an inline wide/stacked narrow
+search field, two aligned folder sections without a thick divider, and opaque
+folder cards. Folder interiors use breadcrumb, compact 32/28pt title, counts,
+three tabs and unboxed search/sort controls. Agent companions share one
+continuous bordered group; list rows omit zero/noisy usage evidence and keep
+that detail in the inspector. This local variant does not replace the shared
+1440pt page measure, 52/36pt editorial titles or global 4/2/1 metric rules.
+While the directory is pending, counts use an em dash and the page shows a
+native loading state; an active refresh or safe stale/failure signal is a
+compact banner that preserves the last available content and offers retry.
+Instantiate one native search editor at a time: the entry header switches at
+900pt, and the folder filter row at 760pt. Do not put two editors sharing a
+binding inside ViewThatFits candidates. Related-preview counts are labelled
+separately from real member counts; a preview-only Agent must not claim that
+no relationship is recorded.
 
 - Present name/purpose/ownership or source; recent-seven-day summary and usage projects; paginated calls with time/project/execution result/evidence and human evaluation.
 - Evaluation supports effective/ineffective/uncertain, edit and clear. A successful execution never preselects “effective”.

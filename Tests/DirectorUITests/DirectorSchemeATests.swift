@@ -93,7 +93,22 @@ final class DirectorSchemeATests: XCTestCase {
             .deletingLastPathComponent()
         let folders = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
         XCTAssertTrue(folders.contains("LazyVGrid"))
-        XCTAssertTrue(folders.contains("DirectorAdaptiveGrid.items(for:"))
+        let entryHeaderStart = try XCTUnwrap(folders.range(of: "private func entryHeaderAndSearch"))
+        let entryHeaderEnd = try XCTUnwrap(folders[entryHeaderStart.upperBound...].range(of: "private func entryTitleBlock")?.lowerBound)
+        let entryHeader = String(folders[entryHeaderStart.lowerBound..<entryHeaderEnd])
+        XCTAssertTrue(entryHeader.contains("if width >= DirectorCapabilityFolderLayout.entryInlineBreakpoint"))
+        XCTAssertFalse(entryHeader.contains("ViewThatFits(in:"), "only one live search field may participate in the native accessibility graph")
+        let folderFilterStart = try XCTUnwrap(folders.range(of: "private func folderFilterRow"))
+        let folderFilterEnd = try XCTUnwrap(folders[folderFilterStart.upperBound...].range(of: "private func folderSearchField")?.lowerBound)
+        let folderFilter = String(folders[folderFilterStart.lowerBound..<folderFilterEnd])
+        XCTAssertFalse(folderFilter.contains("ViewThatFits(in:"), "switching tabs must not update competing native editors")
+        let folderGridStart = try XCTUnwrap(folders.range(of: "private func folderGrid"))
+        let folderGridEnd = folders[folderGridStart.upperBound...].range(of: "private func folderTitle")?.lowerBound ?? folders.endIndex
+        let folderGrid = String(folders[folderGridStart.lowerBound..<folderGridEnd])
+        XCTAssertTrue(
+            folderGrid.contains("columns: DirectorCapabilityFolderLayout.gridItems(for: width)"),
+            "folder grid uses the folder-local responsive layout in executable code"
+        )
         XCTAssertTrue(folders.contains("folderSearchByKey"))
         XCTAssertTrue(folders.contains("folderTabByID"))
         XCTAssertTrue(folders.contains("folderSortByKey"))
@@ -118,6 +133,27 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(folders.contains("capabilityFolders.recentUsage"))
         XCTAssertTrue(folders.contains("CapabilityFolderImportSheet"))
         XCTAssertTrue(folders.contains("addCapabilitiesToFolder(resourceIDs:"))
+        XCTAssertTrue(folders.contains("var collapsed = collapsedCompanionAgentIDs(for: folder.id)"), "disclosure toggles must mutate the current session set")
+        XCTAssertTrue(folders.contains("sharedAgentsLabel(for: item.resource.id)"), "companion Skills expose shared-Agent context")
+        XCTAssertTrue(folders.contains("relations.filter(\\.isPreview)"))
+        XCTAssertTrue(folders.contains("capabilityFolders.companions.previewCount"), "preview-only relationships must not claim no relationship exists")
+        XCTAssertTrue(folders.contains("localizedSummary(for: item.resource"), "companion Skills expose their purpose")
+        XCTAssertFalse(folders.contains("companionUsageLabel(for:"), "co-observation evidence belongs only in detail")
+        XCTAssertTrue(folders.contains("skillAgentLinkStatus(for: member.id, folderID: folder.id)"), "Skill rows expose concise reverse-link status")
+        XCTAssertTrue(folders.contains("folderStatusBanner(width:"))
+        XCTAssertTrue(folders.contains("pendingState(width:"))
+        XCTAssertTrue(folders.contains("StrokeStyle(lineWidth: 1, dash: [6, 5])"))
+        let skillRowStart = try XCTUnwrap(folders.range(of: "private func skillRelationshipRow"))
+        let skillRowEnd = folders[skillRowStart.upperBound...].range(of: "private func companionPreviewLabel")?.lowerBound ?? folders.endIndex
+        let skillRow = String(folders[skillRowStart.lowerBound..<skillRowEnd])
+        XCTAssertFalse(skillRow.contains("ForEach"), "Skill tab remains a flat list")
+        XCTAssertFalse(skillRow.contains("relatedAgents"), "reverse Agent links stay in detail")
+        let memberRowStart = try XCTUnwrap(folders.range(of: "private func memberRow"))
+        let memberRowEnd = folders[memberRowStart.upperBound...].range(of: "private func agentCompanionRow")?.lowerBound ?? folders.endIndex
+        let memberRow = String(folders[memberRowStart.lowerBound..<memberRowEnd])
+        let membershipOffset = try XCTUnwrap(memberRow.range(of: "folderMembershipMenu")?.lowerBound)
+        let detailChevronOffset = try XCTUnwrap(memberRow.range(of: "Image(systemName: \"chevron.right\")")?.lowerBound)
+        XCTAssertLessThan(membershipOffset, detailChevronOffset, "membership action precedes the final detail chevron")
         XCTAssertTrue(folders.contains("folder.isDefault"))
         XCTAssertTrue(folders.contains("folderTabs(for:"))
         XCTAssertFalse(folders.contains("projectTypeTabs(for:"))
@@ -156,9 +192,84 @@ final class DirectorSchemeATests: XCTestCase {
             "capabilityFolders.companions.previewGlobal",
             "capabilityFolders.companions.previewOutside",
             "capabilityFolders.companions.noCausalClaim",
+            "capabilityFolders.companions.sharedAgents",
+            "capabilityFolders.companions.agentLinksRecorded",
+            "capabilityFolders.companions.noAgentLinksRecorded",
+            "capabilityFolders.status.updating",
+            "capabilityFolders.status.failed",
+            "capabilityFolders.status.stale",
+            "capabilityFolders.status.retry",
+            "capabilityFolders.pending",
         ] {
             XCTAssertTrue(english.contains("\"\(key)\""), "missing English folder state key \(key)")
             XCTAssertTrue(chinese.contains("\"\(key)\""), "missing Chinese folder state key \(key)")
+        }
+    }
+
+    func testCapabilityFolderLocalLayoutMatchesApprovedResponsiveContract() {
+        XCTAssertEqual(DirectorCapabilityFolderLayout.maxContentWidth, 1_280)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.horizontalPadding(for: 1_280), 40)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.horizontalPadding(for: 759), 16)
+
+        // Column decisions use the available folder viewport, rather than the
+        // capped content measure. This keeps the four-column desktop state
+        // reachable on wide windows while preserving the 1280pt visual cap.
+        XCTAssertEqual(DirectorCapabilityFolderLayout.columns(for: 1_440), 4)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.columns(for: 901), 3)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.columns(for: 900), 2)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.columns(for: 561), 2)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.columns(for: 560), 1)
+
+        XCTAssertEqual(DirectorCapabilityFolderLayout.cardHeight(for: 1_000), 128)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.cardHeight(for: 759), 120)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.cardHeight(for: 560), 112)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.gridItems(for: 1_520).count, 4)
+    }
+
+    func testCapabilityFolderVisualContractUsesLocalPresentationPrimitives() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        XCTAssertEqual(DirectorSidebarItem.approvedNavigation.map(\.rawValue), [
+            "home", "capabilityFolders", "customAgents", "customSkills",
+            "installedSkills", "installedPlugins", "settings"
+        ])
+        let folders = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        XCTAssertTrue(folders.contains("entryHeaderAndSearch(width:"))
+        XCTAssertTrue(folders.contains("folderFilterRow(for:"))
+        XCTAssertTrue(folders.contains("companionListPanel"))
+        XCTAssertTrue(folders.contains("folderDetailContext(for:"))
+        XCTAssertTrue(folders.contains("contextualContent: AnyView"))
+        XCTAssertTrue(folders.contains("folderGlobalSurface"))
+        XCTAssertTrue(folders.contains("controlBoundary"))
+        XCTAssertTrue(folders.contains("unrepresentedHint"))
+        XCTAssertTrue(folders.contains("folderActions(folder)"))
+        XCTAssertFalse(folders.contains("07 / Capability Folders"))
+
+        // The detail overlay must occupy the full list viewport so its scrim
+        // covers the content while the sheet itself stays pinned to trailing.
+        // A ViewBuilder returning scrim + sheet siblings would size the
+        // overlay to the sheet and center it in a wide window.
+        let detailSheetStart = try XCTUnwrap(folders.range(of: "@ViewBuilder private func detailSheet"))
+        let detailSheetEnd = folders[detailSheetStart.upperBound...].range(of: "private func folderDetailContext")?.lowerBound ?? folders.endIndex
+        let detailSheet = String(folders[detailSheetStart.lowerBound..<detailSheetEnd])
+        XCTAssertTrue(detailSheet.contains("ZStack(alignment: .trailing)"))
+        XCTAssertTrue(detailSheet.contains(".ignoresSafeArea()"))
+        XCTAssertTrue(detailSheet.contains(".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)"))
+        XCTAssertTrue(folders.contains("detailSheet(width: proxy.size.width)"))
+
+        let detail = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityDetailView.swift"), encoding: .utf8)
+        XCTAssertTrue(detail.contains("identity\n            if let contextualContent { contextualContent }\n            usage; evidenceControl"))
+
+        for key in [
+            "capabilityFolders.companions.unrepresentedHint",
+            "capabilityFolders.companions.unrepresentedHintAX"
+        ] {
+            let english = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/en.lproj/Localizable.strings"), encoding: .utf8)
+            let chinese = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
+            XCTAssertTrue(english.contains("\"\(key)\""), "missing English local folder state key \(key)")
+            XCTAssertTrue(chinese.contains("\"\(key)\""), "missing Chinese local folder state key \(key)")
         }
     }
 

@@ -4,24 +4,21 @@ All notable public changes will be documented here.
 
 The project follows semantic versioning for public releases.
 
-## Unreleased
-
-- Replaced the unpublished Capability Groups experiment with Capability Folders: a local, user-controlled browser with Global/Project projections, an empty Self Training folder, atomic existing-capability import, multi-membership, ordering, search, and three folder-internal Agent/Skill tabs. Explicit Agent/companion-Skill declarations are separated from co-observation evidence; folder preferences store only stable IDs and never modify source files.
-- Companion evidence now comes from one indexed batch projection, while paired global Agent TOML/Brief files remain one logical Agent and both declaration sources are inspected. Explicit negative directives and ambiguous matches fail closed.
-
-- Add a guided local-safe restore flow for trusted manifest v1 capability packages. It verifies the isolated package, requires manual project mappings, creates missing files only, reports conflicts, and supports an in-session undo without persisting target paths.
-- Prepare Codex Director for a privacy-reviewed open-source release.
-- Add public release auditing and open-source governance documents.
-- Add read-only CI and a pinned, attested, draft-prerelease workflow for universal unnotarized community builds.
-- Add stripped app, package, checksum, dependency, provenance metadata, and archive round-trip verification.
-- Add reproducible synthetic startup gates and database/cache failure coverage for the public release baseline.
-- Reduce quota-history query sorting while preserving seven-day, source, predecessor, and deterministic tie semantics.
+[简体中文更新说明](CHANGELOG.zh-CN.md)
 
 ## 1.3.0
+
+Source integration only; a version entry does not imply a published Tag or GitHub Release.
 
 - Added a Capability Folders destination with Global and Project folders, plus an empty Self Training folder that preserves user-selected memberships across refreshes and upgrades.
 - Added custom folder create, rename, delete, reorder, multi-membership, atomic existing-capability import, global search, folder search, project Agent/Skill tabs, and recent/name sorting. Folder preferences contain only stable IDs and names; no paths or capability content.
 - Removed the unpublished automatic category classifier and eight preset categories. Plugin-provided Skills are visible in Global; system capabilities, plugin packages, instructions, MCP/tools, and stale plugin caches remain excluded.
+- Added explicit Agent/Skill companion relationships from registry declarations, Agent TOML/Brief instructions, and Skill descriptions. Negative or ambiguous references fail closed; related previews never become members automatically.
+- Separated declarations from batched seven-day shared-session evidence and added bidirectional detail navigation. Shared Skills retain one resource identity.
+- Refined the folder interface with responsive 4/3/2/1 grids, three internal tabs, compact outlined relationship groups, current-value sort menus, and a trailing detail sidebar. Preserved existing Self Training and other folder memberships; fresh installs still start with an empty Self Training folder.
+- Fixed native search layout re-entry during clear-search and tab changes by instantiating only one search editor for each responsive layout.
+- Fixed replayed snapshots from an earlier weekly reset cycle being counted as new consumption. A regression sequence that previously produced 224% now produces 62%; genuine forward reset-cycle consumption is not artificially capped.
+- Updated bilingual product documentation, synthetic Capability Folders screenshots, local UI contracts, and regression tests. Capability package manifest v1 and the rollout parser version are unchanged.
 
 ## 1.2.0
 
