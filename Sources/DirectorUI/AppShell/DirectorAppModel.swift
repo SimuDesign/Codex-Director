@@ -2070,7 +2070,10 @@ public final class DirectorAppModel: ObservableObject {
             }
         }
         let requestedDelay = wakeDate.map { max(0, $0.timeIntervalSince(now)) } ?? pollInterval
-        return min(60, max(0.05, requestedDelay))
+        // A reset/day boundary may shorten the monitor interval, never extend
+        // it. In particular, an already-running source phase must still allow
+        // the presentation clock to tick at the configured polling cadence.
+        return min(60, max(0.05, min(pollInterval, requestedDelay)))
     }
 
     private func nextPresentationWakeDate(after now: Date) -> Date? {

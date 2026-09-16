@@ -17,6 +17,7 @@ Source integration only; a version entry does not imply a published Tag or GitHu
 - Separated declarations from batched seven-day shared-session evidence and added bidirectional detail navigation. Shared Skills retain one resource identity.
 - Refined the folder interface with responsive 4/3/2/1 grids, three internal tabs, compact outlined relationship groups, current-value sort menus, and a trailing detail sidebar. Preserved existing Self Training and other folder memberships; fresh installs still start with an empty Self Training folder.
 - Fixed native search layout re-entry during clear-search and tab changes by instantiating only one search editor for each responsive layout.
+- Fixed the presentation clock monitor ignoring a shorter configured polling interval when a source refresh was already running. Normal automatic refresh cadence is unchanged.
 - Fixed replayed snapshots from an earlier weekly reset cycle being counted as new consumption. A regression sequence that previously produced 224% now produces 62%; genuine forward reset-cycle consumption is not artificially capped.
 - Updated bilingual product documentation, synthetic Capability Folders screenshots, local UI contracts, and regression tests. Capability package manifest v1 and the rollout parser version are unchanged.
 

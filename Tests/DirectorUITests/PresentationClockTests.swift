@@ -80,6 +80,14 @@ final class PresentationClockTests: XCTestCase {
     }
 
     func testSourceMonitorAdvancesClockWhileSourcePhaseIsBlocked() async throws {
+        try await exerciseClockWhileSourcePhaseIsBlocked(sourceAlreadyRunning: false)
+    }
+
+    func testSourceMonitorStartedDuringBlockedSourcePhaseHonorsPollingInterval() async throws {
+        try await exerciseClockWhileSourcePhaseIsBlocked(sourceAlreadyRunning: true)
+    }
+
+    private func exerciseClockWhileSourcePhaseIsBlocked(sourceAlreadyRunning: Bool) async throws {
         let root = try temporaryDirectory("director-clock-source")
         defer { try? FileManager.default.removeItem(at: root) }
 
@@ -122,6 +130,20 @@ final class PresentationClockTests: XCTestCase {
         XCTAssertEqual(sourceCalls.read(), 0)
         projectionCalls.reset()
         refreshCoordinator.setAutomaticSourceEnabled(true)
+        let externallyStartedRefresh: Task<RefreshOutcome, Never>?
+        if sourceAlreadyRunning {
+            externallyStartedRefresh = Task {
+                await refreshCoordinator.requestAutomatic(domains: [.quota, .directory])
+            }
+            guard await waitUntil({ sourceCalls.read() == 1 }) else {
+                await sourceGate.release()
+                _ = await externallyStartedRefresh?.value
+                return
+            }
+            XCTAssertEqual(refreshCoordinator.scheduleState.phase, .source)
+        } else {
+            externallyStartedRefresh = nil
+        }
         let windowID = UUID()
         model.setWindowVisibility(windowID, visible: true)
         model.stopSourceDataMonitor()
@@ -144,6 +166,10 @@ final class PresentationClockTests: XCTestCase {
         XCTAssertEqual(projectionCalls.read(), 0)
 
         await sourceGate.release()
+        if let externallyStartedRefresh {
+            let outcome = await externallyStartedRefresh.value
+            XCTAssertEqual(outcome, .completed)
+        }
         _ = await waitUntil({ projectionCalls.read() == 1 })
         XCTAssertEqual(sourceCalls.read(), 1)
         XCTAssertEqual(projectionCalls.read(), 1)
