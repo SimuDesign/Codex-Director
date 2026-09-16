@@ -1,9 +1,9 @@
 # Codex Director Design System v1
 
-Version: `1.3.0` (visible marketing version; internal build `25`)  
+Version: `1.3.1` (visible marketing version; internal build `26`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-09-08
+Last updated: 2026-09-17
 
 ## 1. Purpose
 
@@ -726,3 +726,50 @@ controls, with additional language, appearance, compact, stress and empty
 states. The Host reports its actual product viewport in AX; screenshots never
 label Host chrome as product content. Core, persistence, indexing, cache,
 startup and source-resource contracts remain outside the visual migration.
+
+## 23. Capability Folder UI self-check — 2026-09-17
+
+The 1.3.1 presentation pass keeps the existing folder behavior and data
+contracts while correcting the native geometry observed in the folder
+browser. A root-approved Product Designer ruling permits only this
+nonselection browser to use one native ScrollView with zero-spacing lazy
+content after repeated native List action-child AX failures. Other libraries
+retain `List(selection:)`. Entry headings share the same full content gutters
+as their grids and search results; native `Section`
+headers are not used for these blocks. Entry, folder-header, tab, filter,
+result and bottom spacing are owned by named `DirectorCapabilityFolderLayout`
+tokens and applied once per block. The approved 1280pt local measure, 40/16pt
+gutter rules and 4/3/2/1 breakpoints remain unchanged.
+
+Folder tabs, import type selection and Settings Light/Dark selection use the
+shared `DirectorOutlinedSegmentedControl`, implemented as one real AppKit
+`NSSegmentedControl` through a public `NSViewRepresentable`. Its scoped system
+13pt text remains readable at compact widths, and local fitting measurements
+give every equal-width painted choice the maximum wrapped-label height.
+Its opaque neutral
+surface removes the system-blue selected fill; selected items use a restrained
+brand-gradient outline, while native focus, keyboard activation, selected
+traits and localized current values remain available. Native segment labels,
+single-choice tracking, target/action selection and AppKit AX children share
+the exact live binding; there is no hidden accessibility replica. Keyboard
+navigation and a separate exterior focus ring stay with the native control.
+Sort menus use an outer painted
+36pt field and a plain native Menu so their hit and painted bounds match search. Folder and
+membership action menus use a neutral outlined 28pt icon target with native
+Menu items underneath; native menu indicators are hidden so there is exactly
+one explicit disclosure chevron on text menus. These controls do not add content glass, new colors,
+navigation, or persistence.
+
+Natural-width segmented labels use the same semibold attributed measurement
+as painting, rounded upward with the existing 4pt tolerance. Settings short
+Light/Dark labels stay on one line when unconstrained; explicit compact
+proposals retain equal-height wrapping.
+
+Use full 40/16pt content gutters rather than old List inset compensation;
+the scroll indicator remains on the full workspace edge. Header, tabs,
+filters and content scroll together, with the detail overlay viewport-pinned.
+Stable targets and existing per-window/folder/tab scroll and browsing state
+remain unchanged. New Folder, Back, Add Existing and empty-state actions
+retain real native controls and their existing Scheme A appearance. No
+hidden duplicate, virtual action or clickable aggregate is allowed. Fresh
+native action and scroll-restoration evidence is required.

@@ -18,6 +18,9 @@ public enum DirectorTypography {
     public static var body: Font { .body }
     public static var supporting: Font { .callout }
     public static var label: Font { .caption }
+    /// Readable compact control text. Unlike the caption role, this remains
+    /// 13pt in the folder tabs, import selector and visible sort value.
+    public static var segmentedControl: Font { .system(size: 13, weight: .regular) }
     /// Monospaced digits for counts, durations, token and timing values.
     public static var data: Font { .system(.body, design: .monospaced) }
     public static var metric: Font { .system(size: 30, weight: .semibold, design: .rounded).monospacedDigit() }

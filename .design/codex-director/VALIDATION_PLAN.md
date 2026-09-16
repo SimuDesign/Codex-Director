@@ -1,8 +1,8 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.3.0`  
+Version: `1.3.1`  
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-09-12
+Last updated: 2026-09-17
 
 The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
@@ -559,3 +559,40 @@ This record validates the governance assets and declared macOS API surface. It d
 - Scope and fresh evidence limits are recorded in
   `docs/design/2026-09-17-1.3-finalization-quality.md`. Source PR acceptance does
   not replace the separately approved formal-release accessibility matrix.
+
+### 1.3.1 folder UI self-check
+
+The 1.3.1 repair validates folder entry and interior layouts against the
+approved local 1280pt measure. Structural headings, grids and result panels
+must share full content gutters in the locally approved nonselection native
+ScrollView/lazy-content browser; do not carry over List's minus-8pt inset
+compensation. The four selectable libraries retain List(selection:).
+Native Section-header offset is a failure. Measure the named entry, section, header-to-tabs, tabs-to-filter,
+filter-to-content and bottom gaps at 720 and 1280 workspace widths. The three
+folder tabs, import type filter and Settings theme selector must use the
+outlined native AppKit segmented control: readable scoped 13pt text, equal painted
+heights when English labels wrap, no system-blue fill, visible current value,
+three individually actionable choices in the actual native AX tree,
+selected accessibility trait, keyboard activation and a separate focus ring.
+Verify native left/right navigation and standard activation while the group is focused, and confirm those
+keys remain ordinary editor/List/menu input after focus leaves the control.
+Sort fields must paint and hit at 36pt; icon-only menus must paint and hit at
+28pt without an extra native bezel. Verify empty, loading, stale/failure,
+search-no-match, companion-expanded and detail states without changing folder
+memberships or source data. Runtime screenshots and AX inspection remain
+required evidence; focused source tests are supporting evidence only.
+
+Unconstrained Settings theme labels must stay on one line in zh/en; compact
+folder choices may wrap without shrinking their 13pt type. Structural New
+Folder, Back, Add Existing and empty-state actions must expose distinct
+genuine native controls whose activation performs the existing action.
+Verify actual input-sheet opening, return, import and clear/retry behavior;
+the presence of children containment in source or an aggregate row label is
+not sufficient. Native Menu keyboard activation and an automation provider's
+unsupported direct menu-item AX invocation are reported separately.
+
+Verify long-content entry/folder/tab scroll restoration with stable targets,
+including expand/collapse, detail dismissal, resizing and updates retaining
+old content. Headers, filters and results scroll together in one container;
+the detail overlay stays viewport-pinned and the indicator stays outside
+content gutters. Fresh native AX discovery of offscreen controls is required.

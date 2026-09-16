@@ -127,7 +127,7 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(folders.contains("Historical co-observation evidence"))
         XCTAssertTrue(folders.contains("Co-observation does not prove invocation."))
         XCTAssertTrue(folders.contains("entryScrollPosition"))
-        XCTAssertTrue(folders.contains(".scrollPosition(id: activeScrollPosition)"))
+        XCTAssertTrue(folders.contains(".scrollPosition(id: activeScrollPosition, anchor: .top)"))
         XCTAssertTrue(folders.contains("guard model.directoryLoaded else { return \"—\" }"))
         XCTAssertTrue(folders.contains("capabilityFolders.empty.matches"))
         XCTAssertTrue(folders.contains("capabilityFolders.recentUsage"))
@@ -158,7 +158,7 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(folders.contains("folderTabs(for:"))
         XCTAssertFalse(folders.contains("projectTypeTabs(for:"))
         XCTAssertFalse(folders.contains("folderTypeFilterByID"))
-        XCTAssertTrue(folders.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(folders.contains("DirectorOutlinedSegmentedControl"))
         XCTAssertTrue(folders.contains("CapabilityFolderDropDelegate"))
         XCTAssertTrue(folders.contains("if folder.isCustom"))
         XCTAssertTrue(folders.contains("Global and Project are immutable derived views"))
@@ -224,6 +224,200 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertEqual(DirectorCapabilityFolderLayout.cardHeight(for: 759), 120)
         XCTAssertEqual(DirectorCapabilityFolderLayout.cardHeight(for: 560), 112)
         XCTAssertEqual(DirectorCapabilityFolderLayout.gridItems(for: 1_520).count, 4)
+    }
+
+    func testCapabilityFolderVisualRepairUsesAlignedStructuralRowsAndNamedRhythm() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let folders = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        let scheme = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift"), encoding: .utf8)
+        let spacing = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift"), encoding: .utf8)
+        let settings = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DataStatus/SettingsView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(folders.contains("structuralRow("), "folder headings must share common scroll-content gutters with their content")
+        XCTAssertFalse(folders.contains("Section {"), "folder headings must not use native Section header geometry")
+        for token in [
+            "entrySectionGap",
+            "sectionContentGap",
+            "sectionGap",
+            "headerTabsGap",
+            "tabsFilterGap",
+            "filterContentGap",
+            "pageBottomPadding",
+        ] {
+            XCTAssertTrue(spacing.contains("public static let \(token)"), "missing named folder rhythm token \(token)")
+        }
+        XCTAssertTrue(folders.contains("DirectorOutlinedSegmentedControl"))
+        XCTAssertTrue(folders.contains("DirectorOutlinedMenuField"))
+        XCTAssertTrue(folders.contains("DirectorOutlinedIconMenu"))
+        XCTAssertFalse(folders.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(settings.contains("DirectorOutlinedSegmentedControl"))
+        XCTAssertFalse(settings.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(scheme.contains("public struct DirectorOutlinedSegmentedControl"))
+        XCTAssertTrue(scheme.contains("public struct DirectorOutlinedIconMenu"))
+        XCTAssertTrue(scheme.contains("public struct DirectorOutlinedMenuField"))
+        XCTAssertFalse(scheme.contains(".accessibilityRepresentation"), "single choice must be a live native control, not a hidden replica")
+        XCTAssertTrue(scheme.contains("DirectorNativeSegmentedControlBridge: NSViewRepresentable"))
+        XCTAssertTrue(scheme.contains("DirectorNativeOutlinedSegmentedControl: NSSegmentedControl"))
+        XCTAssertTrue(scheme.contains("trackingMode = .selectOne"))
+        XCTAssertTrue(scheme.contains("segmentDistribution = .fillEqually"))
+        XCTAssertTrue(scheme.contains("focusRingType = .exterior"))
+        XCTAssertTrue(scheme.contains(".menuStyle(.button)"))
+        XCTAssertTrue(scheme.contains(".buttonStyle(.plain)"))
+        XCTAssertTrue(scheme.contains(".menuIndicator(.hidden)"))
+        XCTAssertTrue(scheme.contains("NSGradient(colors: [NSColor(DirectorColor.accentBlue), NSColor(DirectorColor.accentIce), NSColor(DirectorColor.accentMint)])"))
+    }
+
+    func testOutlinedControlsKeepReadableNativeSizeAndConstruct() {
+        XCTAssertEqual(DirectorTypography.segmentedControl, .system(size: 13, weight: .regular))
+        XCTAssertEqual(DirectorCapabilityFolderLayout.controlHeight, 36)
+        XCTAssertEqual(DirectorCapabilityFolderLayout.iconMenuTarget, 28)
+        _ = DirectorOutlinedSegmentedControl(
+            "Capability view",
+            selection: .constant(0),
+            options: [
+                .init(value: 0, title: "Agent & Companion Skills"),
+                .init(value: 1, title: "Agents —"),
+                .init(value: 2, title: "Skills —"),
+            ]
+        )
+        _ = DirectorOutlinedMenuField("Name A–Z") { Button("Name A–Z") { } }
+        _ = DirectorOutlinedIconMenu(systemImage: "folder.badge.plus") { Button("Synthetic folder") { } }
+    }
+
+    func testNativeOutlinedSegmentsKeepNativeSelectionAndWrappedEqualHeight() {
+        let control = DirectorNativeOutlinedSegmentedControl(frame: .zero)
+        control.segmentCount = 3
+        control.setLabel("Agent & Companion Skills", forSegment: 0)
+        control.setLabel("Agents —", forSegment: 1)
+        control.setLabel("Skills —", forSegment: 2)
+        control.selectedSegment = 0
+        XCTAssertEqual(control.trackingMode, .selectOne)
+        XCTAssertEqual(control.segmentDistribution, .fillEqually)
+        XCTAssertEqual(control.font?.pointSize, 13)
+        XCTAssertTrue(control.isSelected(forSegment: 0))
+        XCTAssertFalse(control.isSelected(forSegment: 1))
+        XCTAssertGreaterThan(control.fittingSize(forWidth: 260).height, control.fittingSize(forWidth: 620).height)
+        let wrappedHeight = control.fittingSize(forWidth: 260).height
+        var activatedIndex: Int?
+        control.selectionChanged = { activatedIndex = $0 }
+        control.selectedSegment = 2
+        XCTAssertEqual(control.fittingSize(forWidth: 260).height, wrappedHeight)
+        XCTAssertTrue(control.sendAction(control.action, to: control.target))
+        XCTAssertEqual(activatedIndex, 2)
+        XCTAssertTrue(control.isSelected(forSegment: 2))
+        XCTAssertFalse(control.isSelected(forSegment: 0))
+    }
+
+    func testNativeOutlinedThemeSegmentsReserveUnconstrainedTextTolerance() {
+        for titles in [["Light", "Dark"], ["浅色", "深色"]] {
+            let control = DirectorNativeOutlinedSegmentedControl(frame: .zero)
+            control.segmentCount = titles.count
+            for (index, title) in titles.enumerated() { control.setLabel(title, forSegment: index) }
+            control.selectedSegment = 0
+            let size = control.fittingSize(forWidth: nil)
+            let padding = DirectorSpacing.space1
+            let textWidth = (size.width - padding * 2 - padding * CGFloat(titles.count - 1)) / CGFloat(titles.count) - DirectorSpacing.space2 * 2
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.alignment = .center
+            paragraph.lineBreakMode = .byWordWrapping
+            for title in titles {
+                let text = NSAttributedString(string: title, attributes: [
+                    .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
+                    .paragraphStyle: paragraph
+                ])
+                let measured = text.boundingRect(
+                    with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                    options: [.usesLineFragmentOrigin, .usesFontLeading]
+                )
+                XCTAssertGreaterThanOrEqual(textWidth, measured.width.rounded(.up) + padding)
+                let allocated = text.boundingRect(with: CGSize(width: textWidth, height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading])
+                XCTAssertEqual(allocated.height.rounded(.up), measured.height.rounded(.up), "unconstrained \(title) must remain one line")
+            }
+            XCTAssertEqual(size.height, DirectorCapabilityFolderLayout.segmentHeight + padding * 2)
+            XCTAssertGreaterThan(control.fittingSize(forWidth: 80).height, size.height, "explicitly narrow controls still wrap at 13pt")
+        }
+    }
+
+    func testFolderStructuralAndHeaderRowsContainTheirTrueActionChildren() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        for (startMarker, endMarker) in [
+            ("private func structuralRow<", "private func entrySectionGap"),
+            ("private func folderHeader(", "private func folderTitleBlock("),
+        ] {
+            let start = try XCTUnwrap(source.range(of: startMarker))
+            let end = try XCTUnwrap(source[start.upperBound...].range(of: endMarker)?.lowerBound)
+            let row = String(source[start.lowerBound..<end])
+            XCTAssertTrue(row.contains(".accessibilityElement(children: .contain)"), "\(startMarker) must preserve real child controls")
+            XCTAssertFalse(row.contains(".accessibilityAction"), "the aggregate row must not impersonate a child Button")
+        }
+        XCTAssertTrue(source.contains("Label(t(\"capabilityFolders.add\", \"New folder\"), systemImage: \"plus\")"))
+        XCTAssertTrue(source.contains("createName = \"\""))
+        XCTAssertTrue(source.contains("showsCreateSheet = true"))
+        XCTAssertTrue(source.contains("selectedFolderID = nil"))
+        XCTAssertTrue(source.contains(".accessibilityAddTraits(.isHeader)"))
+    }
+
+    func testFolderScrollContainerPreservesFullGuttersAndNestedStableTargets() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let folders = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        let bodyStart = try XCTUnwrap(folders.range(of: "public var body: some View"))
+        let bodyEnd = try XCTUnwrap(folders[bodyStart.upperBound...].range(of: "private func entryPage")?.lowerBound)
+        let body = String(folders[bodyStart.lowerBound..<bodyEnd])
+        XCTAssertEqual(body.components(separatedBy: "ScrollView(.vertical)").count - 1, 1)
+        XCTAssertFalse(body.contains("List {"))
+        XCTAssertTrue(body.contains("LazyVStack(alignment: .leading, spacing: 0)"))
+        XCTAssertTrue(body.contains(".frame(maxWidth: DirectorCapabilityFolderLayout.maxContentWidth, alignment: .leading)"))
+        XCTAssertTrue(body.contains(".padding(.horizontal, DirectorCapabilityFolderLayout.horizontalPadding(for: proxy.size.width))"))
+        XCTAssertTrue(body.contains(".scrollPosition(id: activeScrollPosition, anchor: .top)"))
+        XCTAssertFalse(body.contains(".scrollTargetLayout()"), "an outer primary target layout would disable nested resource targets")
+        XCTAssertFalse(folders.contains(".id(\"folder-content-"), "the whole grouped stage must not replace its individual resource targets")
+        for (startMarker, endMarker, headerCall) in [
+            ("private func entryPage", "private func folderPage", "entryHeaderAndSearch(width: width)"),
+            ("private func folderPage", "private func folderStatusBanner", "folderHeader(folder, width: width)"),
+        ] {
+            let start = try XCTUnwrap(folders.range(of: startMarker))
+            let end = try XCTUnwrap(folders[start.upperBound...].range(of: endMarker)?.lowerBound)
+            let page = String(folders[start.lowerBound..<end])
+            XCTAssertTrue(page.contains("VStack(alignment: .leading, spacing: 0) {\n            \(headerCall)\n        }\n        .scrollTargetLayout()"), "the context's stable top child needs its own sibling target layout")
+        }
+        XCTAssertTrue(body.contains(".overlay(alignment: .trailing)"))
+        XCTAssertFalse(folders.contains("rowInsets(for:"), "native List's minus-8 compensation must not survive in ScrollView")
+        XCTAssertEqual(folders.components(separatedBy: ".padding(.bottom, DirectorCapabilityFolderLayout.pageBottomPadding)").count - 1, 1)
+        for (startMarker, endMarker) in [
+            ("private func memberListPanel", "private func companionListPanel"),
+            ("private func companionListPanel", "private func memberRow"),
+        ] {
+            let start = try XCTUnwrap(folders.range(of: startMarker))
+            let end = try XCTUnwrap(folders[start.upperBound...].range(of: endMarker)?.lowerBound)
+            let stage = String(folders[start.lowerBound..<end])
+            XCTAssertTrue(stage.contains(".scrollTargetLayout()"), "independent grouped stages must discover their resource targets")
+            XCTAssertTrue(stage.contains(".id(member.id)"), "scroll restoration must address individual resources, not just the outer stage")
+        }
+        XCTAssertTrue(folders.contains("folderScrollPositionByKey[key]"))
+        XCTAssertTrue(folders.contains("?? \"capability-folder-top-\\(key.folderID)-\\(key.tab.rawValue)\""), "first visits must use their own stable top instead of inheriting another context's offset")
+        XCTAssertTrue(folders.contains(".id(\"capability-folder-top-\\(folder.id)-\\(currentFolderTab(for: folder.id).rawValue)\")"))
+        XCTAssertTrue(folders.contains(".padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorSpacing.space4 : DirectorSpacing.space6)"))
+        XCTAssertTrue(folders.contains("List(filteredResources)"), "the separate native import sheet is not part of the container exception")
+    }
+
+    func testFolderScrollBindingCapturesItsContextAndRetainsValidTargets() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let folders = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(folders.range(of: "private var activeScrollPosition: Binding<String?>"))
+        let end = try XCTUnwrap(folders[start.upperBound...].range(of: "private func structuralRow<")?.lowerBound)
+        let binding = String(folders[start.lowerBound..<end])
+        XCTAssertTrue(binding.contains("let key = selectedFolderID.map { sessionKey(for: $0) }\n        return Binding("), "the callback must retain its original folder/tab key")
+        XCTAssertTrue(binding.contains("guard let value else { return }"), "transition nil must not overwrite a saved entry/folder target")
+        XCTAssertTrue(binding.contains("entryScrollPosition = value"))
+        XCTAssertTrue(binding.contains("folderScrollPositionByKey[key] = value"))
+        XCTAssertFalse(binding.contains("sessionKey(for: selectedFolderID)"), "a delayed callback must not resolve whichever tab happens to be active now")
     }
 
     func testCapabilityFolderVisualContractUsesLocalPresentationPrimitives() throws {
@@ -388,12 +582,12 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(settings.contains("DirectorPrimaryActionButtonStyle"))
         XCTAssertTrue(settings.contains("settings.languageAppearance"))
         XCTAssertTrue(settings.contains("themePicker"))
-        XCTAssertTrue(settings.contains(".pickerStyle(.segmented)"))
+        XCTAssertTrue(settings.contains("DirectorOutlinedSegmentedControl"))
         XCTAssertTrue(settings.contains("settings.about.title"))
         XCTAssertTrue(settings.contains("settings.author"))
         XCTAssertTrue(settings.contains("七木 Simu"))
-        XCTAssertTrue(settings.contains("return version ?? \"1.3.0\""))
-        XCTAssertFalse(settings.contains("1.3.0 (25)"))
+        XCTAssertTrue(settings.contains("return version ?? \"1.3.1\""))
+        XCTAssertFalse(settings.contains("1.3.1 (26)"))
         XCTAssertTrue(settings.contains("eyebrow: nil"))
         XCTAssertTrue(settings.contains("DirectorPageContentFrame(workspaceWidth: viewport.size.width)"))
         XCTAssertTrue(settings.contains("DirectorSecondaryActionButtonStyle(size: .settings, destructive: true)"))
@@ -488,10 +682,10 @@ final class DirectorSchemeATests: XCTestCase {
         let buildScript = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/build-local-app.sh"), encoding: .utf8)
         let appVerifier = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/verify-app-bundle.sh"), encoding: .utf8)
         let harness = try String(contentsOf: sourceRoot.appendingPathComponent("Tests/StartupPerformanceHarness/project.yml"), encoding: .utf8)
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.0"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 25"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.0").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 25").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.1"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 26"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.1").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 26").count - 1, 2)
         XCTAssertTrue(buildScript.contains("verify-app-bundle.sh"))
         XCTAssertTrue(appVerifier.contains("read-project-version.sh"))
         XCTAssertTrue(appVerifier.contains("short_version\" == \"$expected_marketing_version\""))
@@ -513,19 +707,19 @@ final class DirectorSchemeATests: XCTestCase {
         let readme = try String(contentsOf: sourceRoot.appendingPathComponent("README.md"), encoding: .utf8)
         let readmeChinese = try String(contentsOf: sourceRoot.appendingPathComponent("README.zh-CN.md"), encoding: .utf8)
 
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.0"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 25"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.0").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 25").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.1"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 26"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.1").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 26").count - 1, 2)
         XCTAssertTrue(readClient.contains("requestPayload(version: \"1.2.0\")"))
         XCTAssertTrue(validation.contains("CapabilityPackageProducer(version: \"1.2.0\", build: \"24\")"))
         XCTAssertTrue(changelog.contains("## 1.1.1"))
         XCTAssertTrue(changelog.contains("## 1.1.0"))
         XCTAssertTrue(changelog.contains("## 1.0.0"))
-        XCTAssertTrue(readme.contains("1.3.0"))
-        XCTAssertTrue(readmeChinese.contains("1.3.0"))
-        XCTAssertFalse(readme.contains("1.3.0 (25)"))
-        XCTAssertFalse(readmeChinese.contains("1.3.0 (25)"))
+        XCTAssertTrue(readme.contains("1.3.1"))
+        XCTAssertTrue(readmeChinese.contains("1.3.1"))
+        XCTAssertFalse(readme.contains("1.3.1 (26)"))
+        XCTAssertFalse(readmeChinese.contains("1.3.1 (26)"))
 
         for relativePath in [
             "Sources/DirectorUI/Resources/en.lproj/Localizable.strings",
