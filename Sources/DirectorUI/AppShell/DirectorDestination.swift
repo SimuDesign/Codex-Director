@@ -61,6 +61,7 @@ public enum DirectorUtility: String, CaseIterable, Identifiable, Hashable {
 /// produced an empty sidebar).
 public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     case home
+    case capabilityFolders
     case customAgents
     case customSkills
     case installedSkills
@@ -77,9 +78,21 @@ public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
 
     public var id: String { rawValue }
 
+    /// Resolve the unpublished 1.3 grouping deep link without retaining the
+    /// old value as a first-class navigation case or persisted UI key.
+    public init?(rawValue: String) {
+        if rawValue == "capabilityGroups" {
+            self = .capabilityFolders
+            return
+        }
+        guard let value = Self.allCases.first(where: { $0.rawValue == rawValue }) else { return nil }
+        self = value
+    }
+
     public var title: String {
         switch self {
         case .home: return "Home"
+        case .capabilityFolders: return "Capability Folders"
         case .customAgents: return "Custom Agents"
         case .customSkills: return "Custom Skills"
         case .installedSkills: return "Installed Skills"
@@ -96,6 +109,7 @@ public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     public var symbol: String {
         switch self {
         case .home: return DirectorSymbol.home
+        case .capabilityFolders: return DirectorSymbol.capabilityFolders
         case .customAgents: return DirectorSymbol.category(.customAgents)
         case .customSkills: return DirectorSymbol.category(.customSkills)
         case .installedSkills: return DirectorSymbol.category(.installedSkills)
@@ -117,6 +131,6 @@ public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     }
 
     public static var approvedNavigation: [Self] {
-        [.home, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]
+        [.home, .capabilityFolders, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]
     }
 }

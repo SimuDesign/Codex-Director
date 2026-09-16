@@ -10,6 +10,8 @@ public struct DirectorRootView: View {
     @State private var confirmDelete = false
     @State private var showEmptyProjects = false
     @State private var windowPresenceID = UUID()
+    @State private var sidebarSelectionEmphasized = false
+    @Environment(\.colorSchemeContrast) private var contrast
 
     public init(model: DirectorAppModel = DirectorAppModel()) {
         _model = StateObject(wrappedValue: model)
@@ -57,12 +59,14 @@ public struct DirectorRootView: View {
 
     private func sidebarDestination(_ item: DirectorSidebarItem) -> some View {
         let isSelected = model.selection == item
+        let foreground = isSelected ? DirectorColor.navigationSelectedForeground : DirectorColor.textPrimary
         return HStack(spacing: DirectorSpacing.space2) {
             Image(systemName: item.symbol)
-                .foregroundStyle(isSelected ? DirectorColor.sidebarSelectedSymbol : DirectorColor.textPrimary)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(foreground)
                 .accessibilityHidden(true)
             Text(languageStore.localizer.text("nav.\(item.rawValue)", fallback: item.title))
-                .foregroundStyle(isSelected ? DirectorColor.primaryActionForeground : DirectorColor.textPrimary)
+                .foregroundStyle(foreground)
         }
         .padding(.horizontal, DirectorSpacing.space2)
         .padding(.vertical, DirectorSpacing.space2)
@@ -70,14 +74,26 @@ public struct DirectorRootView: View {
         .background {
             if isSelected {
                 RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
-                    .fill(DirectorGradient.primaryButton)
+                    .fill(DirectorGradient.navigationSelected)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                    .stroke(
+                        sidebarSelectionEmphasized ? DirectorColor.focus : DirectorColor.primaryActionBoundary.opacity(0.76),
+                        lineWidth: sidebarSelectionEmphasized || contrast == .increased ? 2 : 1
+                    )
+                    .accessibilityHidden(true)
+                DirectorListSelectionBridge(isEmphasized: $sidebarSelectionEmphasized)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
         .tag(item)
         .listRowBackground(Color.clear)
-        .background(NativeListSelectionVisualSuppressor().allowsHitTesting(false).accessibilityHidden(true))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -95,6 +111,10 @@ public struct DirectorRootView: View {
                 model.selection = sidebarItem(for: category)
                 if let library = model.libraryModels.first(where: { $0.category == category }) { library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending); library.selectedID = id }
             })
+        case .capabilityFolders:
+            CapabilityFoldersView(model: model) { resource in
+                capabilityDetailModel(for: resource)
+            }
         case .customAgents:
             filteredCapabilities(category: .myAgents, model: model.libraryModels[0], titleKey: "nav.customAgents", fallback: "Custom Agents")
         case .customSkills:
@@ -148,6 +168,47 @@ public struct DirectorRootView: View {
         switch category { case .customAgents: return .customAgents; case .customSkills: return .customSkills; case .installedSkills: return .installedSkills; case .installedPlugins: return .installedPlugins }
     }
 
+    private func capabilityDetailModel(for resource: CapabilityResource) -> CapabilityDetailViewModel {
+        let catalog = CapabilityCatalog(resources: model.capabilities.allRows.map(\.resource), relations: model.capabilities.relations).entries
+        let entry = catalog.first(where: { $0.resource.id == resource.id }) ?? CapabilityCatalogEntry(resource: resource, category: nil, parentPluginID: nil)
+        let recent = model.recentCapabilityStats.first(where: { $0.resourceID == resource.id })
+        let row = CapabilityLibraryRow(
+            entry: entry,
+            recent7Count: recent?.callCount,
+            inferredCount: recent?.inferredCount ?? 0,
+            lastUsedAt: recent?.lastUsedAt,
+            sourceModifiedAt: resource.sourceModifiedAt,
+            coverage: recent?.coverage ?? .unknown,
+            statisticsReady: model.hasComputedStatistics,
+            recent30Count: nil
+        )
+        let projects = Self.stableUniqueProjects(from: model.libraryModels.flatMap(\.projects))
+        return CapabilityDetailViewModel(
+            row: row,
+            store: model.readStore,
+            projects: projects,
+            usageProjectIDs: [],
+            evaluationStore: model.evaluationStore,
+            findings: [],
+            now: model.presentationNow,
+            onClassify: { id, ownership in self.model.classify(resourceID: id, ownership: ownership) },
+            onResetClassification: { id in self.model.resetClassification(resourceID: id) }
+        )
+    }
+
+    /// Library projections can expose the same project from multiple
+    /// capability categories. Preserve the first deterministic descriptor
+    /// and sort by stable ID so details never trap on duplicate keys.
+    static func stableUniqueProjects(from projects: [CapabilityProject]) -> [CapabilityProject] {
+        var unique: [String: CapabilityProject] = [:]
+        for project in projects where unique[project.id] == nil {
+            unique[project.id] = project
+        }
+        return unique.values.sorted { lhs, rhs in
+            lhs.id == rhs.id ? lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending : lhs.id < rhs.id
+        }
+    }
+
     @ViewBuilder
     private func filteredCapabilities(category: ResourceInventoryCategory, model libraryModel: CapabilityLibraryViewModel, titleKey: String, fallback: String) -> some View {
         CapabilityLibraryView(model: libraryModel,
@@ -167,6 +228,15 @@ public struct DirectorRootView: View {
                     findings: [], now: self.model.presentationNow,
                     onClassify: { id, ownership in self.model.classify(resourceID: id, ownership: ownership) },
                     onResetClassification: { id in self.model.resetClassification(resourceID: id) })
+            },
+            folderDefinitions: self.model.capabilityFolders.folders,
+            folderMembership: { resourceID, folderID in
+                self.model.capabilityFolderStore.preferences().memberships.contains {
+                    $0.resourceID == resourceID && $0.folderID == folderID
+                }
+            },
+            onToggleFolderMembership: { resourceID, folderID, included in
+                self.model.setCapabilityFolderMembership(resourceID: resourceID, folderID: folderID, included: included)
             })
         .navigationTitle(languageStore.localizer.text(titleKey, fallback: fallback))
     }
@@ -215,41 +285,4 @@ public struct DirectorRootView: View {
         Task { await model.startIndexing() }
     }
 
-}
-
-/// Keeps the native List selection model and keyboard behavior while preventing
-/// AppKit from painting a second system-blue selection layer behind our row.
-private struct NativeListSelectionVisualSuppressor: NSViewRepresentable {
-    func makeNSView(context: Context) -> SelectionHighlightSuppressingView {
-        SelectionHighlightSuppressingView()
-    }
-
-    func updateNSView(_ nsView: SelectionHighlightSuppressingView, context: Context) {
-        nsView.suppressSelectionHighlight()
-    }
-}
-
-private final class SelectionHighlightSuppressingView: NSView {
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        suppressSelectionHighlight()
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        suppressSelectionHighlight()
-    }
-
-    func suppressSelectionHighlight() {
-        DispatchQueue.main.async { [weak self] in
-            var ancestor = self?.superview
-            while let view = ancestor {
-                if let tableView = view as? NSTableView {
-                    tableView.selectionHighlightStyle = .none
-                    return
-                }
-                ancestor = view.superview
-            }
-        }
-    }
 }

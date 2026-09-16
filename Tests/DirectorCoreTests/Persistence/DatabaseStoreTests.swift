@@ -3,6 +3,13 @@ import XCTest
 
 final class DatabaseStoreTests: XCTestCase {
 
+    private final class QueryCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [PresentationQueryOperation] = []
+        func append(_ value: PresentationQueryOperation) { lock.lock(); values.append(value); lock.unlock() }
+        func snapshot() -> [PresentationQueryOperation] { lock.lock(); defer { lock.unlock() }; return values }
+    }
+
     private let epoch = Date(timeIntervalSince1970: 1_700_000_000)
 
     private func tempDatabaseURL() throws -> URL {
@@ -187,6 +194,73 @@ final class DatabaseStoreTests: XCTestCase {
         try await store.replaceSession(sampleBatch())
         let count_sessions_after_rebuild = try await store.count("sessions");
         XCTAssertEqual(count_sessions_after_rebuild, 1)
+    }
+
+    func testRelationshipIndexMarkerIsIndependentAndClearedByDerivedDataDeletion() async throws {
+        let store = try makeStore()
+        let initiallyMissing = try await store.relationshipIndexVersion()
+        XCTAssertNil(initiallyMissing)
+
+        // A normal source completion without the relationship marker keeps
+        // the migration pending; the rollout parser marker is independent.
+        try await store.markSuccessfulSourceIndex(at: epoch)
+        let stillMissing = try await store.relationshipIndexVersion()
+        XCTAssertNil(stillMissing)
+
+        try await store.markSuccessfulSourceIndex(
+            at: epoch.addingTimeInterval(1),
+            relationshipIndexVersion: CapabilityCompanionIndex.currentVersion
+        )
+        let current = try await store.relationshipIndexVersion()
+        XCTAssertEqual(current, CapabilityCompanionIndex.currentVersion)
+        try await store.deleteAllData()
+        let afterDelete = try await store.relationshipIndexVersion()
+        XCTAssertNil(afterDelete)
+    }
+
+    func testCompanionEvidenceUsesOneBoundedRecentSessionCallBatch() async throws {
+        let counter = QueryCounter()
+        let url = try tempDatabaseURL()
+        let store = try DatabaseStore(url: url, queryObserver: { counter.append($0) })
+        let window = CapabilityQueryWindow(start: epoch.addingTimeInterval(-7 * 86_400), end: epoch)
+
+        func batch(id: String, start: Date, calls: [InvocationEvent]) -> PersistedSessionBatch {
+            PersistedSessionBatch(
+                session: TaskSummary(
+                    id: id, projectID: nil, startedAt: start,
+                    endedAt: start.addingTimeInterval(60), status: .completed,
+                    coverage: .complete, parserVersion: "test", sourceFileID: id, title: nil
+                ), calls: calls, tokenSnapshots: [], quotaSnapshots: [], findings: []
+            )
+        }
+
+        let oldStart = epoch.addingTimeInterval(-30 * 86_400)
+        let oldCall = InvocationEvent(
+            id: "old-call", sessionID: "old", parentCallID: nil, ordinal: 0,
+            timestamp: oldStart, actorName: nil, resourceID: "agent:old",
+            kind: .agent, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil
+        )
+        try await store.replaceSession(batch(id: "old", start: oldStart, calls: [oldCall]))
+
+        let recentStart = epoch.addingTimeInterval(-86_400)
+        let inWindow = InvocationEvent(
+            id: "recent-call", sessionID: "recent", parentCallID: nil, ordinal: 0,
+            timestamp: recentStart, actorName: nil, resourceID: "agent:recent",
+            kind: .agent, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil
+        )
+        let outsideCall = InvocationEvent(
+            id: "recent-old-call", sessionID: "recent", parentCallID: nil, ordinal: 1,
+            timestamp: epoch.addingTimeInterval(-10 * 86_400), actorName: nil, resourceID: "skill:old",
+            kind: .skill, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil
+        )
+        try await store.replaceSession(batch(id: "recent", start: recentStart, calls: [inWindow, outsideCall]))
+
+        let snapshot = try await store.fetchCompanionEvidence(window: window)
+        XCTAssertEqual(snapshot.sessions.map(\.id), ["recent"])
+        XCTAssertEqual(snapshot.invocationsBySession["recent"]?.map(\.id), ["recent-call"])
+        XCTAssertNil(snapshot.invocationsBySession["old"])
+        XCTAssertEqual(counter.snapshot().filter { $0 == .companionEvidence }.count, 1)
+        XCTAssertFalse(counter.snapshot().contains(.allInvocations), "companion projection must not use unbounded invocation query")
     }
 
     func testQuotaInsertOrIgnoreDeduplicatesAcrossSessions() async throws {

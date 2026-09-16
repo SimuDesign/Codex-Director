@@ -243,7 +243,7 @@ Codex Director 需要保留 Reduce Motion，且不能把网站滚动叙事原样
 - 系统窗口、工具栏、Picker、List 选择、键盘和焦点行为；
 - SF Pro 语义字体；
 - Light/Dark、Increase Contrast、Reduce Transparency、Reduce Motion；
-- 数据口径、隐私、缓存、索引和六页导航。
+- 数据口径、隐私、缓存、索引和七页导航。
 
 Fulcrum 只影响工作区内容的视觉编排，不替代 macOS 的应用结构。
 

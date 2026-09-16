@@ -12,6 +12,7 @@ public enum PresentationQueryOperation: String, Codable, Sendable {
     case allQuotas
     case allTokens
     case allInvocations
+    case companionEvidence
     case findings
     case diagnostics
     case identity

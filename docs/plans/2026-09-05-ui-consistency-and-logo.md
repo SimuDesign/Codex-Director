@@ -6,7 +6,7 @@ Branch: `ui-optimization`
 ## Approved scope
 
 - Replace the shipping application icon with the approved clean hexagon mark on a subtly graduated dark, full-bleed background.
-- Make Home the page-grid reference for all six primary destinations.
+- Make Home the page-grid reference for every primary destination in the approved navigation at that release.
 - Keep each page's native scroll container full width so its vertical scroll indicator remains on the workspace's far-right edge.
 - Use one responsive page-title scale and one decorative-symbol size across primary pages.
 
@@ -34,6 +34,5 @@ Branch: `ui-optimization`
 
 - Run focused DirectorUI page-chrome and layout tests.
 - Run the complete Swift test suite.
-- Build the synthetic-data UI-validation app and inspect all six primary destinations at standard and compact widths.
+- Build the synthetic-data UI-validation app and inspect every approved primary destination at standard and compact widths.
 - Build, install, verify, and relaunch the local application according to the repository deployment contract.
-

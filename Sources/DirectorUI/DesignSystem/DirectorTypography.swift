@@ -25,7 +25,7 @@ public enum DirectorTypography {
     public static var primaryAction: Font { .system(.body, design: .rounded).weight(.semibold) }
     public static var toolbarAction: Font { .system(.callout, design: .rounded).weight(.semibold) }
     /// Capability ledger row roles, kept distinct from general body/callout
-    /// styles so all four library pages share a stable readable hierarchy.
+    /// styles so all capability library pages share a stable readable hierarchy.
     public static var capabilityRowTitle: Font { .system(size: 16, weight: .semibold) }
     public static var capabilityRowSummary: Font { .system(size: 14, weight: .regular) }
     public static var capabilityRowCount: Font { .system(size: 16, weight: .semibold, design: .monospaced) }

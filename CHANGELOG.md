@@ -4,15 +4,22 @@ All notable public changes will be documented here.
 
 The project follows semantic versioning for public releases.
 
-## Unreleased
+[简体中文更新说明](CHANGELOG.zh-CN.md)
 
-- Add a guided local-safe restore flow for trusted manifest v1 capability packages. It verifies the isolated package, requires manual project mappings, creates missing files only, reports conflicts, and supports an in-session undo without persisting target paths.
-- Prepare Codex Director for a privacy-reviewed open-source release.
-- Add public release auditing and open-source governance documents.
-- Add read-only CI and a pinned, attested, draft-prerelease workflow for universal unnotarized community builds.
-- Add stripped app, package, checksum, dependency, provenance metadata, and archive round-trip verification.
-- Add reproducible synthetic startup gates and database/cache failure coverage for the public release baseline.
-- Reduce quota-history query sorting while preserving seven-day, source, predecessor, and deterministic tie semantics.
+## 1.3.0
+
+Source integration only; a version entry does not imply a published Tag or GitHub Release.
+
+- Added a Capability Folders destination with Global and Project folders, plus an empty Self Training folder that preserves user-selected memberships across refreshes and upgrades.
+- Added custom folder create, rename, delete, reorder, multi-membership, atomic existing-capability import, global search, folder search, project Agent/Skill tabs, and recent/name sorting. Folder preferences contain only stable IDs and names; no paths or capability content.
+- Removed the unpublished automatic category classifier and eight preset categories. Plugin-provided Skills are visible in Global; system capabilities, plugin packages, instructions, MCP/tools, and stale plugin caches remain excluded.
+- Added explicit Agent/Skill companion relationships from registry declarations, Agent TOML/Brief instructions, and Skill descriptions. Negative or ambiguous references fail closed; related previews never become members automatically.
+- Separated declarations from batched seven-day shared-session evidence and added bidirectional detail navigation. Shared Skills retain one resource identity.
+- Refined the folder interface with responsive 4/3/2/1 grids, three internal tabs, compact outlined relationship groups, current-value sort menus, and a trailing detail sidebar. Preserved existing Self Training and other folder memberships; fresh installs still start with an empty Self Training folder.
+- Fixed native search layout re-entry during clear-search and tab changes by instantiating only one search editor for each responsive layout.
+- Fixed the presentation clock monitor ignoring a shorter configured polling interval when a source refresh was already running. Normal automatic refresh cadence is unchanged.
+- Fixed replayed snapshots from an earlier weekly reset cycle being counted as new consumption. A regression sequence that previously produced 224% now produces 62%; genuine forward reset-cycle consumption is not artificially capped.
+- Updated bilingual product documentation, synthetic Capability Folders screenshots, local UI contracts, and regression tests. Capability package manifest v1 and the rollout parser version are unchanged.
 
 ## 1.2.0
 

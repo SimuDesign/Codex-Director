@@ -118,6 +118,36 @@ final class QuotaDailyUsageTests: XCTestCase {
         XCTAssertTrue(QuotaDailyUsage.reportedCycleChanged(from: drifted, to: nextCycle))
     }
 
+    func testStalePreviousCycleReplayAfterResetIsIgnored() throws {
+        let oldReset = date("2026-09-15 10:02")
+        let newReset = date("2026-09-19 16:09")
+        let observations = try [
+            quota("prior", "2026-09-11 23:59", 51, reset: oldReset),
+            quota("before-reset", "2026-09-12 16:09", 81, reset: oldReset),
+            quota("after-reset", "2026-09-12 16:10", 0, reset: newReset),
+            quota("stale-old-cycle-1", "2026-09-12 16:11", 81, reset: oldReset),
+            quota("new-cycle-recovered-1", "2026-09-12 16:12", 0, reset: newReset),
+            quota("stale-old-cycle-2", "2026-09-12 16:13", 81, reset: oldReset),
+            quota("new-cycle-recovered-2", "2026-09-12 16:14", 0, reset: newReset),
+            quota("latest", "2026-09-12 23:58", 32, reset: newReset)
+        ]
+
+        XCTAssertEqual(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-09-12 18:00"), observations: observations, calendar: calendar
+            ),
+            62
+        )
+        XCTAssertFalse(QuotaDailyUsage.reportedCycleChanged(
+            from: observations[2],
+            to: observations[3]
+        ))
+        XCTAssertNil(QuotaDailyUsage.isSameReportedCycle(
+            from: observations[2],
+            to: observations[3]
+        ))
+    }
+
     func testDayWithoutObservationIsUnavailable() throws {
         let observations = try [quota("prior", "2026-09-03 23:00", 20)]
 

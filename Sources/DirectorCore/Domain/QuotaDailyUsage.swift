@@ -70,6 +70,12 @@ public enum QuotaDailyUsage {
                 segmentBaseline = 0
                 segmentHighWater = current.usedPercent
                 segmentLatest = current.usedPercent
+            case .stalePreviousCycle:
+                // Active and archived rollout logs can overlap around a real
+                // reset. Once the reported reset instant has moved forward,
+                // a later observation that jumps back to the previous reset
+                // belongs to an older cycle and must not open another segment.
+                continue
             case .ambiguous:
                 return nil
             }
@@ -86,7 +92,7 @@ public enum QuotaDailyUsage {
         return total
     }
 
-    /// Reports a reset only when both observations carry materially different
+    /// Reports a reset only when the next observation carries a materially later
     /// reset instants. Missing reset evidence remains non-affirmative.
     public static func reportedCycleChanged(
         from previous: QuotaSnapshot,
@@ -106,6 +112,7 @@ public enum QuotaDailyUsage {
         switch cycleRelationship(from: previous, to: current) {
         case .same: true
         case .reset: false
+        case .stalePreviousCycle: nil
         case .ambiguous: nil
         }
     }
@@ -113,6 +120,7 @@ public enum QuotaDailyUsage {
     private enum CycleRelationship {
         case same
         case reset
+        case stalePreviousCycle
         case ambiguous
     }
 
@@ -124,9 +132,11 @@ public enum QuotaDailyUsage {
         case let (.some(previousReset), .some(currentReset)):
             // Reset timestamps can be reconstructed from a countdown and
             // therefore drift by seconds across otherwise identical reports.
-            return abs(currentReset.timeIntervalSince(previousReset)) <= resetTimeTolerance
-                ? .same
-                : .reset
+            let difference = currentReset.timeIntervalSince(previousReset)
+            if abs(difference) <= resetTimeTolerance { return .same }
+            // A real reset advances the next reset instant. A backwards jump
+            // is an older-cycle replay, not a second reset.
+            return difference > 0 ? .reset : .stalePreviousCycle
         case (nil, nil):
             return .same
         case (.some, nil), (nil, .some):

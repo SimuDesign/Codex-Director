@@ -66,6 +66,39 @@ final class ValidationRedesignTests: XCTestCase {
         XCTAssertTrue(session.model.evaluationStore.all().keys.allSatisfy { $0.hasPrefix("call:validation-") })
     }
 
+    func testRepresentativeFixtureIncludesCompanionRelationsForFolderValidation() async throws {
+        let session = try UIValidationSession(dataset: .representative)
+        try await session.prepare()
+
+        let projection = session.model.capabilityFolders
+        let sharedRelations = projection.companionRelations.filter { $0.skillID == "skill:validation-custom" }
+        XCTAssertEqual(
+            Set(sharedRelations.map(\.agentID)),
+            Set(["agent:validation-global", "agent:validation-project-a", "agent:validation-project-b"])
+        )
+        XCTAssertTrue(sharedRelations.allSatisfy { $0.kind == .companionSkill })
+        XCTAssertTrue(sharedRelations.contains { $0.declarationSource == .agentBrief })
+        XCTAssertTrue(sharedRelations.contains { $0.declarationSource == .projectRegistry })
+
+        let projectFolder = try XCTUnwrap(
+            projection.folders.first { $0.source == .project && $0.projectID == "project:validation-a" }
+        )
+        let projectPreview = projection.companionSkills(
+            for: "agent:validation-project-a", in: projectFolder.id
+        )
+        XCTAssertTrue(projectPreview.contains {
+            $0.resource.id == "skill:validation-custom" && $0.isPreview
+        })
+
+        let globalFolder = try XCTUnwrap(projection.folders.first { $0.source == .global })
+        let globalCompanion = projection.companionSkills(
+            for: "agent:validation-global", in: globalFolder.id
+        )
+        XCTAssertTrue(globalCompanion.contains {
+            $0.resource.id == "skill:validation-custom" && !$0.isPreview
+        })
+    }
+
     func testStressFixtureSupportsPagedEvidence() async throws {
         let session = try UIValidationSession(dataset: .stress)
         try await session.prepare()

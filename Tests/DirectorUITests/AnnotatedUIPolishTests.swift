@@ -19,10 +19,13 @@ final class AnnotatedUIPolishTests: XCTestCase {
         XCTAssertFalse(root.contains("brandToolbarTitle"))
         XCTAssertFalse(root.contains("ToolbarItem(placement: .navigation)"))
         XCTAssertTrue(root.contains("sidebarDestination"))
-        XCTAssertTrue(root.contains("DirectorColor.primaryActionForeground"))
+        XCTAssertTrue(root.contains("DirectorColor.navigationSelectedForeground"))
+        XCTAssertTrue(root.contains("Image(systemName: item.symbol)"))
+        XCTAssertTrue(root.contains(".symbolRenderingMode(.monochrome)"))
+        XCTAssertGreaterThanOrEqual(root.components(separatedBy: ".foregroundStyle(foreground)").count - 1, 2)
         XCTAssertTrue(home.contains("titleAccent: DirectorUI.productName"))
         XCTAssertTrue(components.contains("public let titleAccent: String?"))
-        XCTAssertTrue(components.contains("Text(titleAccent).foregroundStyle(DirectorGradient.primaryButton)"))
+        XCTAssertTrue(components.contains("Text(titleAccent).foregroundStyle(DirectorGradient.brand)"))
         XCTAssertTrue(components.contains(".accessibilityLabel(title)"))
         XCTAssertTrue(typography.contains("size: 52"))
         XCTAssertTrue(typography.contains("size: 36"))
@@ -67,17 +70,20 @@ final class AnnotatedUIPolishTests: XCTestCase {
         let root = try source("Sources/DirectorUI/AppShell/DirectorRootView.swift")
         let colors = try source("Sources/DirectorUI/DesignSystem/DirectorColor.swift")
         let scheme = try source("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift")
+        let selectionBridge = try source("Sources/DirectorUI/Components/DirectorListSelectionBridge.swift")
 
         XCTAssertTrue(root.contains(".tint(.clear)"))
-        XCTAssertTrue(root.contains("NativeListSelectionVisualSuppressor"))
-        XCTAssertTrue(root.contains("tableView.selectionHighlightStyle = .none"))
-        XCTAssertTrue(root.contains("DirectorColor.sidebarSelectedSymbol"))
-        XCTAssertTrue(colors.contains("sidebarSelectedSymbol"))
+        XCTAssertTrue(root.contains("DirectorListSelectionBridge"))
+        XCTAssertFalse(root.contains("NativeListSelectionVisualSuppressor"))
+        XCTAssertFalse(selectionBridge.contains("tableView.selectionHighlightStyle"))
+        XCTAssertTrue(selectionBridge.contains("rowView.selectionHighlightStyle = .none"))
+        XCTAssertTrue(root.contains("DirectorColor.navigationSelectedForeground"))
+        XCTAssertTrue(colors.contains("navigationSelectedForeground"))
         XCTAssertTrue(root.contains(".sharedBackgroundVisibility(.hidden)"))
         XCTAssertTrue(scheme.contains("size == .toolbar ? 0"))
     }
 
-    func testCapabilityGroupsHaveSpacingAndProminentProjectHeaders() throws {
+    func testCapabilityProjectGroupsHaveSpacingAndProminentProjectHeaders() throws {
         let library = try source("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift")
         let shared = try source("Sources/DirectorUI/DesignSystem/DirectorSharedComponents.swift")
 

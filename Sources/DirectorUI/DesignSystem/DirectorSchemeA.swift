@@ -10,14 +10,51 @@ public enum DirectorAccentTone: String, CaseIterable, Sendable {
     case teal
 }
 
+/// Visual feedback variants for a filled primary action. Each variant keeps
+/// an opaque, appearance-specific rail so state feedback never reduces the
+/// contrast of the label or symbol.
+public enum DirectorActionState: Sendable {
+    case normal
+    case hover
+    case pressed
+    case disabled
+}
+
 /// Gradients are shared surface treatments, not per-page decoration.
 public enum DirectorGradient {
-    /// The single filled action treatment used for the primary action.
-    public static let primaryButton = LinearGradient(
+    /// The blue → ice → mint brand rail used by the quota visualization,
+    /// Home title and navigation selection. Action controls use the separate
+    /// appearance-aware rail below.
+    public static let brand = LinearGradient(
         colors: [DirectorColor.accentBlue, DirectorColor.accentIce, DirectorColor.accentMint],
         startPoint: .leading,
         endPoint: .trailing
     )
+
+    /// Compatibility name for existing non-action brand consumers. New
+    /// controls should use `primaryAction(state:)` so their foreground and
+    /// background semantics stay independent from charts and titles.
+    public static let primaryButton = brand
+
+    public static let navigationSelected = brand
+
+    /// Appearance-aware filled action treatment. Light mode uses the deeper
+    /// approved stops (#0065B3 → #00738B → #087765) for white content; Dark
+    /// mode retains the existing bright stops for black content.
+    public static func primaryAction(state: DirectorActionState = .normal) -> LinearGradient {
+        let colors: [Color]
+        switch state {
+        case .normal:
+            colors = [DirectorColor.actionBlue, DirectorColor.actionIce, DirectorColor.actionMint]
+        case .hover:
+            colors = [DirectorColor.actionHoverBlue, DirectorColor.actionHoverIce, DirectorColor.actionHoverMint]
+        case .pressed:
+            colors = [DirectorColor.actionPressedBlue, DirectorColor.actionPressedIce, DirectorColor.actionPressedMint]
+        case .disabled:
+            colors = [DirectorColor.actionDisabledBlue, DirectorColor.actionDisabledIce, DirectorColor.actionDisabledMint]
+        }
+        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
+    }
 
     /// Vertical quota-bar treatment using the same brand rail as primary
     /// actions, without assigning a warning or status meaning to the chart.
@@ -536,6 +573,15 @@ public struct DirectorPrimaryActionButtonStyle: ButtonStyle {
 
     public func makeBody(configuration: Configuration) -> some View {
         let visuallyActive = isEnabled || isProcessing
+        let actionState: DirectorActionState = if !visuallyActive {
+            .disabled
+        } else if configuration.isPressed {
+            .pressed
+        } else if isHovering {
+            .hover
+        } else {
+            .normal
+        }
         configuration.label
             .font(size.font)
             .foregroundStyle(DirectorColor.primaryActionForeground)
@@ -544,8 +590,7 @@ public struct DirectorPrimaryActionButtonStyle: ButtonStyle {
             .padding(.vertical, size.verticalPadding)
             .frame(minHeight: size.minimumHeight)
             .background {
-                DirectorGradient.primaryButton
-                    .opacity(visuallyActive ? (configuration.isPressed ? 0.78 : (isHovering ? 0.92 : 1)) : 0.42)
+                DirectorGradient.primaryAction(state: actionState)
             }
             .clipShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
             .overlay {
@@ -558,7 +603,6 @@ public struct DirectorPrimaryActionButtonStyle: ButtonStyle {
                 radius: size == .toolbar ? 0 : 3,
                 y: size == .toolbar ? 0 : 1
             )
-            .opacity(visuallyActive ? 1 : 0.72)
             .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
             .onHover { isHovering = $0 }
     }

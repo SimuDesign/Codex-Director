@@ -1,7 +1,9 @@
 import XCTest
+import AppKit
 @testable import DirectorUI
 
 /// Layout contract for the capability table's primary identifying column.
+@MainActor
 final class CapabilitiesLayoutTests: XCTestCase {
 
     func testCapabilityNameColumnFitsThreeWordSkillNamesByDefault() {
@@ -78,9 +80,10 @@ final class CapabilitiesLayoutTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let library = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift"), encoding: .utf8)
-        let normalized = library.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-        XCTAssertTrue(normalized.contains("filterSearchField .frame(minWidth: 220, maxWidth: .infinity) controls"))
-        XCTAssertTrue(normalized.contains("filterSearchField .frame(maxWidth: .infinity) controls"))
+        XCTAssertTrue(library.contains("filterRibbonContent(width: max(0, contentWidth - ribbonInset))"))
+        XCTAssertTrue(library.contains("searchAndControlsFit(width: width, category: model.category)"))
+        XCTAssertTrue(library.contains("controls(width: width)"))
+        XCTAssertTrue(library.contains("DirectorFilterLayout.searchMinimumWidth"))
         XCTAssertFalse(library.contains("private var resultCount"))
     }
 
@@ -120,6 +123,38 @@ final class CapabilitiesLayoutTests: XCTestCase {
         XCTAssertTrue(library.contains(".listRowBackground(Color.clear)"))
         XCTAssertTrue(library.contains("DirectorTypography.capabilityRowCount"))
         XCTAssertTrue(library.contains("DirectorTypography.capabilityRowCountLabel"))
+        XCTAssertTrue(library.contains("DirectorColor.textSupporting"))
+        XCTAssertTrue(library.contains("DirectorGradient.selectionWash(pageTone)"))
+        XCTAssertTrue(library.contains("ZStack"))
+    }
+
+    func testFilterLayoutUsesOneMeasuredWidthForSearchAndSelectors() {
+        XCTAssertTrue(DirectorFilterLayout.searchAndControlsFit(width: 668, category: .installedPlugins))
+        XCTAssertFalse(DirectorFilterLayout.searchAndControlsFit(width: 667, category: .installedPlugins))
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 667, category: .installedPlugins), .row)
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 400, category: .installedPlugins), .twoColumns)
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 300, category: .installedPlugins), .singleColumn)
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 320, category: .customAgents), .row)
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 280, category: .customAgents), .singleColumn)
+    }
+
+    func testRowSelectionAdapterNeverChangesTableWideStyle() {
+        let table = NSTableView()
+        table.selectionHighlightStyle = .regular
+        let row = NSTableRowView()
+        row.selectionHighlightStyle = .regular
+        let probe = DirectorListSelectionProbeView()
+        row.addSubview(probe)
+        table.addSubview(row)
+
+        probe.installIfPossible()
+
+        XCTAssertEqual(row.selectionHighlightStyle, .none)
+        XCTAssertEqual(table.selectionHighlightStyle, .regular)
+
+        probe.restore()
+        XCTAssertEqual(row.selectionHighlightStyle, .regular)
+        XCTAssertEqual(table.selectionHighlightStyle, .regular)
     }
 
     func testCapabilityGroupHeaderHasOneBoundarySource() throws {

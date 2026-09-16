@@ -7,19 +7,24 @@ public struct DiscoveryOutput: Sendable, Equatable {
     public let provenance: [CapabilityProvenance]
     public let projects: [CapabilityProject]
     public let relations: [ResourceRelation]
+    /// Ephemeral Agent TOML/Brief pairings used by companion resolution. The
+    /// relative paths are never persisted in the derived inventory.
+    public let agentPairings: [CapabilityAgentPairing]
 
     public init(
         resources: [CapabilityResource],
         issues: [DiscoveryIssue],
         provenance: [CapabilityProvenance] = [],
         projects: [CapabilityProject] = [],
-        relations: [ResourceRelation] = []
+        relations: [ResourceRelation] = [],
+        agentPairings: [CapabilityAgentPairing] = []
     ) {
         self.resources = resources
         self.issues = issues
         self.provenance = provenance
         self.projects = projects
         self.relations = relations
+        self.agentPairings = agentPairings
     }
 }
 
@@ -75,6 +80,7 @@ public struct ResourceScanner: Sendable {
         var provenance: [CapabilityProvenance] = []
         var projects: [CapabilityProject] = []
         var relations: [ResourceRelation] = []
+        var agentPairings: [CapabilityAgentPairing] = []
         var seenIDs = Set<String>()
 
         for root in roots {
@@ -91,7 +97,7 @@ public struct ResourceScanner: Sendable {
             }
             switch root.kind {
             case .skills: scanSkills(root: root, resources: &resources, provenance: &provenance, issues: &issues, seen: &seenIDs)
-            case .agents: scanAgents(root: root, resources: &resources, issues: &issues, seen: &seenIDs)
+            case .agents: scanAgents(root: root, resources: &resources, issues: &issues, seen: &seenIDs, pairings: &agentPairings)
             case .plugins: scanPlugins(root: root, resources: &resources, issues: &issues, seen: &seenIDs, relations: &relations)
             case .projects: scanProject(root: root, resources: &resources, provenance: &provenance, projects: &projects, issues: &issues, seen: &seenIDs)
             }
@@ -100,7 +106,7 @@ public struct ResourceScanner: Sendable {
         resources.sort { $0.id < $1.id }
         provenance.sort { $0.id < $1.id }
         projects.sort { $0.id < $1.id }
-        return DiscoveryOutput(resources: resources, issues: issues, provenance: provenance, projects: projects, relations: relations)
+        return DiscoveryOutput(resources: resources, issues: issues, provenance: provenance, projects: projects, relations: relations, agentPairings: agentPairings)
     }
 
     // MARK: - Skills
@@ -182,17 +188,93 @@ public struct ResourceScanner: Sendable {
         root: ScanRoot,
         resources: inout [CapabilityResource],
         issues: inout [DiscoveryIssue],
-        seen: inout Set<String>
+        seen: inout Set<String>,
+        pairings: inout [CapabilityAgentPairing]
     ) {
-        for entry in safeEntries(in: root.url, root: root, issues: &issues) {
-            guard fileSystem.isDirectory(entry) else { continue }
+        let entries = safeEntries(in: root.url, root: root, issues: &issues)
+        let briefRecords: [(entry: URL, relative: String, text: String, name: String)] = entries.compactMap { entry in
+            guard fileSystem.isDirectory(entry) else { return nil }
             let brief = ["agent.md", "Agent.md", "AGENTS.md"]
                 .map { entry.appendingPathComponent($0) }
                 .first { fileSystem.exists($0) }
-            guard let brief else { continue }
+            guard let brief else { return nil }
             let text = (try? String(contentsOf: brief, encoding: .utf8)) ?? ""
             let name = Self.firstHeading(in: text) ?? entry.lastPathComponent
-            let relative = "\(entry.lastPathComponent)/\(brief.lastPathComponent)"
+            return (entry, "\(entry.lastPathComponent)/\(brief.lastPathComponent)", text, name)
+        }
+        let tomlEntries = entries.filter { $0.pathExtension.lowercased() == "toml" }
+        var pairedBriefPaths = Set<String>()
+        var pairedBriefByTOMLPath: [String: (relative: String, text: String)] = [:]
+
+        // A global Agent's callable `<role>.toml` and `<role>/agent.md` are
+        // one logical capability. Pair only a unique exact normalized name;
+        // ambiguity remains two legacy resources rather than guessing.
+        for entry in tomlEntries {
+            let text = (try? String(contentsOf: entry, encoding: .utf8)) ?? ""
+            let manifest = Self.parseTopLevelAgentTOML(text)
+            let tomlNames = Set([manifest.name, entry.deletingPathExtension().lastPathComponent]
+                .compactMap { $0 }
+                .map(Self.normalizedAgentName))
+            let matches = briefRecords.filter { record in
+                let briefNames = Set([record.name, record.entry.lastPathComponent].map(Self.normalizedAgentName))
+                return !tomlNames.isDisjoint(with: briefNames)
+            }
+            if matches.count == 1, let match = matches.first {
+                pairedBriefPaths.insert(match.entry.path)
+                pairedBriefByTOMLPath[entry.path] = (match.relative, match.text)
+                pairings.append(CapabilityAgentPairing(
+                    sourceRootID: root.id,
+                    // Keep the existing field aligned with the historical
+                    // Brief-derived resource identity. The callable TOML is
+                    // carried separately as ephemeral metadata below.
+                    agentRelativePath: match.relative,
+                    briefRelativePath: match.relative,
+                    configurationRelativePath: entry.lastPathComponent
+                ))
+            }
+        }
+
+        // Global Agent libraries commonly keep the callable TOML beside its
+        // Brief directory. Preserve the historical Brief path and stable ID
+        // as the logical Agent identity while retaining both documents for
+        // fingerprints and ephemeral companion declaration resolution.
+        for entry in tomlEntries {
+            let paired = pairedBriefByTOMLPath[entry.path]
+            let relative = paired?.relative ?? entry.lastPathComponent
+            let text = (try? String(contentsOf: entry, encoding: .utf8)) ?? ""
+            let manifest = Self.parseTopLevelAgentTOML(text)
+            let fingerprintText = [text, paired?.text].compactMap { $0 }.joined(separator: "\n")
+            let resourceID = Self.stableID(kind: .agent, scope: root.scope, rootID: root.id, relative: relative)
+            let fingerprint = Self.stableHash(fingerprintText)
+            let modified = previousModified[resourceID] == true
+                || (previousFingerprints[resourceID].map { $0 != fingerprint } ?? false)
+            let summary = manifest.description ?? paired.flatMap { Self.agentPurpose(in: $0.text) }
+            let modifiedAt = [fileSystem.fileAttributes(entry), paired.flatMap { fileSystem.fileAttributes(root.url.appendingPathComponent($0.relative)) }]
+                .compactMap { $0?.modificationDate }
+                .map(Date.init(timeIntervalSince1970:))
+                .max()
+            add(CapabilityResource(
+                id: resourceID,
+                name: manifest.name ?? entry.deletingPathExtension().lastPathComponent,
+                kind: .agent,
+                status: .unknown,
+                scope: root.scope,
+                projectID: nil,
+                confidence: .exact,
+                summary: summary,
+                sourceRootID: root.id,
+                relativeSourcePath: relative,
+                sourcePathHash: Self.stableHash(relative),
+                lastSeenAt: Date(),
+                contentFingerprint: fingerprint,
+                sourceModifiedAt: modifiedAt,
+                modified: modified
+            ), to: &resources, seen: &seen)
+        }
+        for record in briefRecords where !pairedBriefPaths.contains(record.entry.path) {
+            let name = record.name
+            let relative = record.relative
+            let text = record.text
             let resourceID = Self.stableID(kind: .agent, scope: root.scope, rootID: root.id, relative: relative)
             let fingerprint = Self.stableHash(text)
             let modified = previousModified[resourceID] == true
@@ -213,7 +295,8 @@ public struct ResourceScanner: Sendable {
                 sourcePathHash: Self.stableHash(relative),
                 lastSeenAt: Date(),
                 contentFingerprint: fingerprint,
-                sourceModifiedAt: fileSystem.fileAttributes(brief).map { Date(timeIntervalSince1970: $0.modificationDate) },
+                sourceModifiedAt: fileSystem.fileAttributes(record.entry.appendingPathComponent(relative.split(separator: "/").last.map(String.init) ?? "agent.md"))
+                    .map { Date(timeIntervalSince1970: $0.modificationDate) },
                 modified: modified
             )
             add(resource, to: &resources, seen: &seen)
@@ -866,6 +949,15 @@ public struct ResourceScanner: Sendable {
         text.split(separator: "\n")
             .first { $0.hasPrefix("# ") }
             .map { String($0.dropFirst(2)).trimmingCharacters(in: .whitespaces) }
+    }
+
+    private static func normalizedAgentName(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "[-_]", with: " ", options: .regularExpression)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+            .lowercased()
     }
 
     private struct AgentTOMLManifest {

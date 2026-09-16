@@ -2,26 +2,38 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.2.0`. Requires macOS 26 or later.
+> Current development version: `1.3.0`. Requires macOS 26 or later.
 
-[简体中文](README.zh-CN.md)
+[简体中文](README.zh-CN.md) · [Version notes](CHANGELOG.md) · [中文更新说明](CHANGELOG.zh-CN.md)
 
 ## What it does
 
 - Inventories global, installed, and project-level Agents and Skills, keeping configuration ownership distinct from project usage.
 - Shows privacy-safe recent usage evidence and data freshness without treating activity as proof of effectiveness.
-- Records lightweight human evaluations and classification corrections alongside the evidence.
+- Records lightweight human evaluations alongside the evidence.
 - Exports an open, unencrypted `.codexpack.zip` with manifests, checksums, plugin and dependency lists, and bilingual recovery instructions.
 - Restores a trusted `.codexpack.zip` locally through an isolated verification and preflight flow. It creates missing files only, skips identical files, stops on conflicts, and never executes or installs package content. Before writing, it creates a private mode-0700 quarantine. Failure cleanup and in-session Undo move verified unchanged objects out of their logical paths into that quarantine without deleting them; Codex Director never automatically destroys quarantine contents. The result can reveal the local folder in Finder for manual review and deletion.
 - Supports Simplified Chinese and English, Light and Dark themes, and shared background refresh.
 - Shows a privacy-safe allowance summary in the macOS menu bar by default; when the Codex account reports both windows, it shows the five-hour and weekly percentages, otherwise it shows the one available percentage. Users can turn it off in Settings. The popover includes each available reset time, reset-card count, data refresh, and a shortcut to the main window. While enabled, account-only refresh adapts between bounded five- and thirty-minute intervals and pauses while the Mac is locked, asleep, or in Low Power Mode.
 - Keeps Home's current five-hour and weekly rings synchronized with the same sanitized live account reading while retaining indexed, same-source observations as the sole evidence for the seven-day weekly chart.
+- Organizes eligible Agents and Skills through local, user-controlled capability folders. Folders support multi-membership, ordering, search, and project/global browsing without changing source files. Each folder exposes Agent & Companion Skills, Agent, and Skill tabs; explicit companion declarations are shown separately from co-observation evidence.
 
 Codex Director keeps source capabilities read-only. It does not upload capability content, sessions, credentials, cookies, Director databases, or plugin files. See [Privacy](PRIVACY.md) for the exact boundary.
 
+## Capability Folders
+
+The Capability Folders page creates one empty local **Self Training** folder. Users can create, rename, delete, reorder, and search custom folders, import existing Agents and Skills with a staged multi-select sheet, and add the same capability to more than one folder. Existing memberships are preserved across upgrades; no capability is added implicitly. Folder membership stores only stable resource and folder IDs; source files, paths, capability content, and sessions are never changed or persisted by this feature.
+
+Global and project folders reflect configuration ownership from the current read-only index. Every folder exposes Agent & Companion Skills / Agent / Skill tabs. Explicit relationships come from declared local metadata only; a related Skill outside the folder is a preview and is never counted or auto-added. Plugin-provided Skills appear in Global; plugin packages, system capabilities, MCP, tools, instructions, and stale plugin caches are excluded. Folder preferences are independent of the derived database and are not included in `.codexpack.zip` packages.
+
+The browser uses responsive folder grids, compact outlined lists, and an in-place detail sidebar. Search, sort, the selected tab, and expanded relationships stay independent within each folder/tab for the current window session. Skill details link back to related Agents; declarations and seven-day shared-session observations remain separate, and neither implies effectiveness or proves invocation.
+
 ## Product screenshots
 
-These three synthetic 1280×800 captures show the shipped hierarchy in Light and Dark. They contain no production data, user paths, sessions, or credentials.
+These native Debug validation captures use synthetic data only. The Capability Folders images show the current 1.3.0 content area in Light and Dark, excluding window chrome and the glass sidebar; they contain no production data, user paths, sessions, or credentials.
+
+![Capability Folders in English, Dark](docs/screenshots/folders-en-dark.png)
+![Agent and companion Skills in English, Light](docs/screenshots/folder-companions-en-light.png)
 
 ![Home in English, Light](docs/screenshots/home-en-light.png)
 ![Custom Agents in English, Light](docs/screenshots/agents-en-light.png)

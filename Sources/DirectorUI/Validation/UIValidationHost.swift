@@ -1,6 +1,7 @@
 #if DEBUG
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 /// Pure sizing rules for the Debug validation host.
 ///
@@ -89,6 +90,8 @@ private struct ValidationWorkspace: View {
     @ObservedObject var themeStore: AppThemeStore
     @State private var appearance: UIValidationHost.Appearance = .system
     @State private var window: NSWindow?
+    @State private var productCaptureView: NSView?
+    @State private var captureError = false
     @State private var controlsHeight: CGFloat = 0
     @State private var requestedProductSize = CGSize(width: 1280, height: 800)
     @State private var productViewportSize: CGSize = .zero
@@ -128,6 +131,11 @@ private struct ValidationWorkspace: View {
         .onChange(of: session.generation) { _, _ in
             simulatesRefresh = false
         }
+        .alert("Synthetic capture unavailable", isPresented: $captureError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The product view could not be rendered or saved. No production data was accessed.")
+        }
         .task {
             do {
                 try await session.prepare()
@@ -146,6 +154,7 @@ private struct ValidationWorkspace: View {
             .environmentObject(themeStore)
             .id(session.generation)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ProductCaptureReader { productCaptureView = $0 })
             .overlay {
                 GeometryReader { proxy in
                     Color.clear
@@ -176,6 +185,8 @@ private struct ValidationWorkspace: View {
                     .font(DirectorTypography.sectionTitle)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 0)
+                Button("Save PNG") { saveProductPNG() }
+                    .help("Save only the current synthetic product view, excluding validation controls, other windows and the desktop.")
                 Text(session.hasError ? "Synthetic data unavailable" : (session.isReady ? "Synthetic data ready" : "Loading synthetic data…"))
                     .font(DirectorTypography.label)
                     .foregroundStyle(DirectorColor.textSecondary)
@@ -274,6 +285,27 @@ private struct ValidationWorkspace: View {
         return "\(contrast), \(transparency), \(motion)"
     }
 
+    private func saveProductPNG() {
+        guard session.isReady,
+              let marker = UIValidationCaptureTarget.view ?? productCaptureView,
+              let targetWindow = marker.window,
+              let content = targetWindow.contentView else { captureError = true; return }
+        let rect = marker.convert(marker.bounds, to: content).intersection(content.bounds)
+        guard rect.width > 0, rect.height > 0,
+              let bitmap = content.bitmapImageRepForCachingDisplay(in: rect) else { captureError = true; return }
+        content.cacheDisplay(in: rect, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { captureError = true; return }
+        let panel = NSSavePanel()
+        panel.title = "Save synthetic product screenshot"
+        panel.nameFieldStringValue = "capabilities.png"
+        panel.allowedContentTypes = [.png]
+        panel.beginSheetModal(for: targetWindow) { response in
+            guard response == .OK, let url = panel.url else { return }
+            do { try png.write(to: url, options: .atomic) }
+            catch { captureError = true }
+        }
+    }
+
     private func setWindowSize(width: CGFloat, height: CGFloat) {
         requestedProductSize = CGSize(width: width, height: height)
         refreshWindowMetrics()
@@ -340,6 +372,36 @@ private struct ValidationWorkspace: View {
         }
         return "Product \(Int(reported.width.rounded())) × \(Int(reported.height.rounded()))"
     }
+}
+
+/// A weak, Debug-only marker for the current module content. Native glass
+/// sidebars cannot be faithfully flattened by AppKit's view bitmap cache,
+/// so module captures intentionally exclude the application sidebar.
+@MainActor
+enum UIValidationCaptureTarget {
+    static weak var view: NSView?
+}
+
+struct UIValidationCaptureMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { MarkerView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+    private final class MarkerView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil { UIValidationCaptureTarget.view = self }
+            else if UIValidationCaptureTarget.view === self { UIValidationCaptureTarget.view = nil }
+        }
+    }
+}
+
+private struct ProductCaptureReader: NSViewRepresentable {
+    let onView: (NSView) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { onView(view) }
+        return view
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 private struct WindowReader: NSViewRepresentable {

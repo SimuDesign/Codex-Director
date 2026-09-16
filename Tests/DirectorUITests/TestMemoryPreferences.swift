@@ -59,7 +59,8 @@ enum TestMemoryPreferences {
             classificationOverrides: stores.0,
             evaluationStore: stores.1,
             previewMode: previewMode,
-            bootstrapError: bootstrapError
+            bootstrapError: bootstrapError,
+            capabilityFolderStore: CapabilityFolderStore.makeMemory()
         )
     }
 }

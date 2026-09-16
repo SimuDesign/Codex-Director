@@ -10,7 +10,7 @@ Codex Director 是个人 Agent 与 Skill 的能力盘点和使用反馈工具。
 
 - 首页回答额度还剩多少、能力规模多大、最近主要用了什么；能力页回答用途、近期调用与使用项目；详情提供调用证据和人工评价。
 - 区分能力配置归属、实际使用项目、调用证据与人工评价。项目级数量是能力数量，不是项目个数；`AGENTS.md` 是项目说明，不是 Agent。
-- 一级导航固定为：首页、自定义 Agent、自定义 Skill、安装 Skill、安装插件、设置。旧任务、审查、用量、数据状态仅可作为详情或设置内容，不恢复独立入口。
+- 一级导航固定为：首页、能力文件夹、自定义 Agent、自定义 Skill、安装 Skill、安装插件、设置。旧任务、审查、用量、数据状态仅可作为详情或设置内容，不恢复独立入口。
 - 近 7 天为当前时区今天及前 6 个自然日，截至当前时刻；首页、清单、详情共享口径。调用频次和执行完成不代表有效性。
 - 额度是账户报告的重置周期比例，不是 Token 换算值；首页每日周额度使用按同一来源相邻账户快照的周期感知增量计算。缺测、跨缺测日、重置证据不完整、过期、未观察到和无法统计必须区别呈现，不得补零或伪造每日消耗。
 - 所有单选控件闭合时显示当前选中项，不得退化为只有图标。
@@ -34,7 +34,7 @@ Codex Director 是个人 Agent 与 Skill 的能力盘点和使用反馈工具。
 
 ## Visual design routing
 
-- Approved Home-only0.2.2 refresh and Top10 cache compatibility: `docs/plans/2026-08-28-home-visual-refresh.md`. It supersedes Home Top5 presentation only; six-page navigation and startup/privacy boundaries remain. The current allowance ring stays cumulative, while the daily chart uses the 2026-09-05 reset-aware observed-increase contract.
+- Approved Home-only0.2.2 refresh and Top10 cache compatibility: `docs/plans/2026-08-28-home-visual-refresh.md`. It supersedes Home Top5 presentation only; the seven-page navigation and startup/privacy boundaries remain. The current allowance ring stays cumulative, while the daily chart uses the 2026-09-05 reset-aware observed-increase contract.
 
 - Use the project Skill `.agents/skills/director-visual-system/SKILL.md` for any main-window, menu-bar, Liquid Glass, topology, timeline, workflow, visualization, iconography, motion, accessibility, or desktop-pet design or review task.
 - Read `.design/codex-director/DESIGN_SYSTEM_V1.md` before proposing or implementing visual changes.

@@ -168,4 +168,33 @@ final class QuotaOverviewQueryTests: XCTestCase {
         XCTAssertEqual(source.daily.first?.usedPercentDelta, 5)
         XCTAssertFalse(source.daily.first?.cycleChanged == true)
     }
+
+    func testQuotaProjectionIgnoresStalePreviousCycleReplayAfterReset() async throws {
+        let store = try store()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = calendar.startOfDay(for: base)
+        let oldReset = start.addingTimeInterval(3 * 86_400)
+        let newReset = start.addingTimeInterval(7 * 86_400)
+        let window = CapabilityQueryWindow(
+            start: start,
+            end: start.addingTimeInterval(6 * 86_400 + 3_600),
+            timeZone: calendar.timeZone
+        )
+        try await insert(store, [
+            try quota("prior", start.addingTimeInterval(-60), limitID: "acct", name: "Account", used: 51, reset: oldReset),
+            try quota("before-reset", start.addingTimeInterval(9 * 3_600), limitID: "acct", name: "Account", used: 81, reset: oldReset),
+            try quota("after-reset", start.addingTimeInterval(10 * 3_600), limitID: "acct", name: "Account", used: 0, reset: newReset),
+            try quota("stale-old-cycle-1", start.addingTimeInterval(10 * 3_600 + 60), limitID: "acct", name: "Account", used: 81, reset: oldReset),
+            try quota("new-cycle-recovered-1", start.addingTimeInterval(10 * 3_600 + 120), limitID: "acct", name: "Account", used: 0, reset: newReset),
+            try quota("stale-old-cycle-2", start.addingTimeInterval(10 * 3_600 + 180), limitID: "acct", name: "Account", used: 81, reset: oldReset),
+            try quota("new-cycle-recovered-2", start.addingTimeInterval(10 * 3_600 + 240), limitID: "acct", name: "Account", used: 0, reset: newReset),
+            try quota("latest", start.addingTimeInterval(20 * 3_600), limitID: "acct", name: "Account", used: 32, reset: newReset)
+        ])
+
+        let result = try await store.fetchQuotaOverview(window: window)
+        let source = try XCTUnwrap(result.sources.first)
+        XCTAssertEqual(source.daily.first?.usedPercentDelta, 62)
+        XCTAssertTrue(source.daily.first?.cycleChanged == true)
+    }
 }

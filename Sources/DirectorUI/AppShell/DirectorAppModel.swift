@@ -111,6 +111,18 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var accountUsageSnapshot: CodexAccountUsageSnapshot?
     @Published public private(set) var accountUsageError: String?
     @Published public private(set) var accountUsageReadRevision: UInt64 = 0
+    @Published public private(set) var capabilityFolderProjection: CapabilityFolderProjection
+    @Published public private(set) var capabilityFolderPreferencesState: CapabilityFolderPreferencesState
+    @Published public private(set) var capabilityFolderError: String?
+    /// Batch co-observation evidence keyed by the stable declaration ID. The
+    /// map is rebuilt only when the indexed directory, statistics window, or
+    /// materialized invocation snapshot changes; rows never query SQLite.
+    @Published public private(set) var capabilityCompanionUsageByRelationID: [String: CapabilityCompanionUsageStats] = [:]
+    /// Increments whenever the indexed directory invalidates the companion
+    /// projection. Folder views key their one-shot load task to this value so
+    /// delayed directory changes cannot leave a permanent unknown state.
+    @Published public private(set) var capabilityCompanionUsageGeneration: UInt64 = 0
+    @Published public private(set) var capabilityCompanionUsageIsLoading = false
 
     /// One truthful application-wide busy state for refresh controls. Source
     /// indexing and bounded presentation projection are both visible; queued,
@@ -279,6 +291,7 @@ public final class DirectorAppModel: ObservableObject {
     private var libraryReloadGeneration: [String: Int] = [:]
     public let classificationOverrides: ResourceClassificationOverrideStore
     public let evaluationStore: InvocationEvaluationStore
+    public let capabilityFolderStore: CapabilityFolderStore
     private let menuBarPreferences: MenuBarPreferences
     /// Keeps model instances in separate windows aligned with the shared
     /// application preference. The App scene and Settings may observe the
@@ -321,6 +334,9 @@ public final class DirectorAppModel: ObservableObject {
     private var monitorStatisticsDay: Date?
     private var pendingMonitorDayProjection = false
     private var libraryPresentationKeys: [String: LibraryPresentationKey] = [:]
+    private var capabilityCompanionUsageWindow: CapabilityQueryWindow?
+    private var capabilityCompanionUsageRelationIDs: [String] = []
+    private var capabilityRelationshipMigrationTask: Task<Void, Never>?
     /// Deterministic async seam for publication race tests. Production never
     /// assigns this hook; it only delays the already-built immutable DTO.
     internal var presentationProjectionTestHook: (@Sendable () async throws -> Void)?
@@ -375,7 +391,8 @@ public final class DirectorAppModel: ObservableObject {
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
         presentationRefreshCoordinator: RefreshCoordinator? = nil,
         menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
-        accountUsageReading: CodexAccountUsageReading? = nil
+        accountUsageReading: CodexAccountUsageReading? = nil,
+        capabilityFolderStore: CapabilityFolderStore = CapabilityFolderStore.makeMemory()
     ) {
         self.store = store
         self.readStore = readStore ?? store
@@ -396,6 +413,7 @@ public final class DirectorAppModel: ObservableObject {
         self.selection = selection
         self.classificationOverrides = classificationOverrides
         self.evaluationStore = evaluationStore
+        self.capabilityFolderStore = capabilityFolderStore
         var statisticsCalendar = calendar
         statisticsCalendar.locale = Locale(identifier: "en_US_POSIX")
         self.statisticsCalendar = statisticsCalendar
@@ -432,6 +450,21 @@ public final class DirectorAppModel: ObservableObject {
             findings: usesPreview ? SyntheticPreviewData.findings : [],
             sessions: usesPreview ? SyntheticPreviewData.tasks : []
         )
+        let initialFolderPreferences: CapabilityFolderPreferencesV1
+        do {
+            initialFolderPreferences = try capabilityFolderStore.ensureInitialized()
+        } catch {
+            initialFolderPreferences = capabilityFolderStore.preferences()
+        }
+        self.capabilityFolderProjection = CapabilityFolderProjection(
+            resources: usesPreview ? SyntheticPreviewData.resources : [],
+            projects: [],
+            preferences: initialFolderPreferences,
+            relations: usesPreview ? SyntheticPreviewData.relations : []
+        )
+        let initialFolderState = capabilityFolderStore.preferencesState()
+        self.capabilityFolderPreferencesState = initialFolderState
+        self.capabilityFolderError = initialFolderState == .corrupted ? "capabilityFolders.corrupted" : nil
         self.libraryModels = CapabilityCategory.allCases.map { CapabilityLibraryViewModel(category: $0) }
         if usesPreview {
             let catalog = CapabilityCatalog(resources: SyntheticPreviewData.resources, relations: SyntheticPreviewData.relations).entries
@@ -662,6 +695,9 @@ public final class DirectorAppModel: ObservableObject {
         libraryResultContext.removeAll(keepingCapacity: false)
         sourceDataMonitorTask?.cancel()
         sourceDataMonitorTask = nil
+        capabilityRelationshipMigrationTask?.cancel()
+        capabilityRelationshipMigrationTask = nil
+        capabilityCompanionUsageIsLoading = false
         sourceMonitorActionTask?.cancel()
         sourceMonitorActionTask = nil
         cancelHomeRankingUpgrade()
@@ -731,6 +767,7 @@ public final class DirectorAppModel: ObservableObject {
         if visible { visibleWindowIDs.insert(id) }
         else { visibleWindowIDs.remove(id) }
         if visible {
+            scheduleCapabilityRelationshipMigrationIfNeeded()
             if hasLoadedInitialData {
                 if !(normalPresentationRefreshDeferred && selection == .home) {
                     ensurePresentationRefreshCoordinator().scheduleStartup(domains: [.quota, .directory])
@@ -993,7 +1030,10 @@ public final class DirectorAppModel: ObservableObject {
                 let completedAt = nowProvider()
                 // Persist the two markers atomically before publishing a
                 // successful source phase to the main-actor model.
-                try await store.markSuccessfulSourceIndex(at: completedAt)
+                try await store.markSuccessfulSourceIndex(
+                    at: completedAt,
+                    relationshipIndexVersion: CapabilityCompanionIndex.currentVersion
+                )
                 guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
                 presentationRefreshCoordinator?.setAutomaticSourceEnabled(true)
                 diagnosticsRequestSequence &+= 1
@@ -1044,6 +1084,9 @@ public final class DirectorAppModel: ObservableObject {
         let quotas = try await readStore.fetchAllQuotaSnapshots()
         let findings = try await readStore.fetchAllFindings()
         let taskCallSummaries = try await fetchTaskCallSummaries(sessions: sessions, store: readStore)
+        let companionWindow = statisticsWindow ?? CapabilityQueryWindow.recent7(now: nowProvider(), calendar: statisticsCalendar)
+        let companionEvidence = try await readStore.fetchCompanionEvidence(window: companionWindow)
+        let invocationsBySession = companionEvidence.invocationsBySession
         try Task.checkCancellation()
         let currentIdentity = try await readStore.presentationIdentity()
         guard isCurrent(ticket), currentIdentity == ticket.identity else { throw CancellationError() }
@@ -1061,13 +1104,28 @@ public final class DirectorAppModel: ObservableObject {
             )
         )
         applyClassificationOverrides()
+        refreshCapabilityFolderProjection()
         tasks = TasksViewModel(
             sessions: sessions,
-            invocationsBySession: [:],
+            invocationsBySession: invocationsBySession,
             tokenSnapshotsBySession: [:],
             callSummaries: taskCallSummaries,
             evaluations: evaluations
         )
+        let relationsForUsage = capabilityCompanionRelations
+        let usageCalendar = statisticsCalendar
+        let companionUsage = await Task.detached(priority: .utility) {
+            CapabilityCompanionUsageStats.calculateBatch(
+                relations: relationsForUsage,
+                invocationsBySession: companionEvidence.invocationsBySession,
+                sessions: companionEvidence.sessions,
+                window: companionWindow,
+                calendar: usageCalendar
+            )
+        }.value
+        capabilityCompanionUsageByRelationID = companionUsage
+        capabilityCompanionUsageWindow = companionWindow
+        capabilityCompanionUsageRelationIDs = relationsForUsage.map(\.id).sorted()
         usage = UsageViewModel(quotaSnapshots: quotas, tokenSnapshots: allTokens, now: nowProvider())
         review = ReviewViewModel(findings: findings, sessions: sessions)
         hasIndexedData = !capabilities.allRows.isEmpty || !sessions.isEmpty
@@ -1260,11 +1318,416 @@ public final class DirectorAppModel: ObservableObject {
         }
     }
 
+    // MARK: - Capability folders
+
+    /// Current folder projection. Default global/project folders are derived
+    /// from the read-only capability directory; custom memberships come from
+    /// the independent local preference store.
+    public var capabilityFolders: CapabilityFolderProjection {
+        capabilityFolderProjection
+    }
+
+    public var capabilityCompanionRelations: [CapabilityCompanionRelation] {
+        capabilityFolderProjection.companionRelations
+    }
+
+    /// Returns separate, best-effort co-observation evidence for a declared
+    /// Agent/Skill pair. It never creates a relationship and never implies
+    /// that one capability caused the other. The value comes from the shared
+    /// batch projection rather than rescanning events for each row.
+    public func companionUsageStats(for relation: CapabilityCompanionRelation) -> CapabilityCompanionUsageStats {
+        capabilityCompanionUsageByRelationID[relation.id] ?? .unavailable
+    }
+
+    /// Public cache/projection entry point for the capability-folder UI. It
+    /// materializes authoritative indexed calls once, computes all declared
+    /// pairs in one batch, and keeps the result keyed by stable relation ID.
+    /// No source files, parser state, or SQLite rows are changed.
+    public func loadCapabilityCompanionUsageIfNeeded() async {
+        guard let readStore,
+              directoryLoaded,
+              !isDeletingDerivedData else { return }
+        // SwiftUI may create one task per tab/window. Only the first task
+        // performs the shared read; later tasks observe the published batch.
+        guard !capabilityCompanionUsageIsLoading else { return }
+        let relations = capabilityCompanionRelations
+        let relationIDs = relations.map(\.id).sorted()
+        let window = statisticsWindow ?? CapabilityQueryWindow.recent7(now: nowProvider(), calendar: statisticsCalendar)
+        let usageGeneration = capabilityCompanionUsageGeneration
+        guard capabilityCompanionUsageWindow != window || capabilityCompanionUsageRelationIDs != relationIDs else { return }
+        guard !relations.isEmpty else {
+            capabilityCompanionUsageByRelationID = [:]
+            capabilityCompanionUsageWindow = window
+            capabilityCompanionUsageRelationIDs = relationIDs
+            return
+        }
+
+        capabilityCompanionUsageIsLoading = true
+        defer { capabilityCompanionUsageIsLoading = false }
+        let ticket = beginDetailTicket()
+        do {
+            // Opening the companion tab is the explicit demand that permits
+            // one recent-window evidence read. It never scans all history.
+            let evidence = try await readStore.fetchCompanionEvidence(window: window)
+            guard isCurrent(ticket), usageGeneration == capabilityCompanionUsageGeneration else { return }
+            let calendar = statisticsCalendar
+            let usageTask = Task.detached(priority: .utility) {
+                CapabilityCompanionUsageStats.calculateBatch(
+                    relations: relations,
+                    invocationsBySession: evidence.invocationsBySession,
+                    sessions: evidence.sessions,
+                    window: window,
+                    calendar: calendar
+                )
+            }
+            let usage = await usageTask.value
+            guard isCurrent(ticket), usageGeneration == capabilityCompanionUsageGeneration else { return }
+            capabilityCompanionUsageByRelationID = usage
+            capabilityCompanionUsageWindow = window
+            capabilityCompanionUsageRelationIDs = relationIDs
+        } catch is CancellationError {
+            return
+        } catch {
+            // The folder remains usable without historical evidence. Keep the
+            // cache unavailable instead of converting a read error into zero.
+            guard usageGeneration == capabilityCompanionUsageGeneration else { return }
+            capabilityCompanionUsageByRelationID = Dictionary(uniqueKeysWithValues: relations.map { ($0.id, .unavailable) })
+            capabilityCompanionUsageWindow = window
+            capabilityCompanionUsageRelationIDs = relationIDs
+        }
+    }
+
+    @discardableResult
+    public func createCapabilityFolder(named name: String) throws -> CapabilityFolderDefinition {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try validateCapabilityFolderName(trimmed, excluding: nil)
+            var preferences = try currentCapabilityFolderPreferences()
+            let definition = CapabilityFolderDefinition(
+                id: "custom-\(UUID().uuidString.lowercased())",
+                source: .custom,
+                customName: trimmed
+            )
+            preferences = CapabilityFolderPreferencesV1(
+                selfTrainingSeedVersion: preferences.selfTrainingSeedVersion,
+                customFolders: [definition] + preferences.customFolders,
+                memberships: preferences.memberships
+            )
+            try persistCapabilityFolders(preferences)
+            return definition
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+            throw error
+        }
+    }
+
+    public func renameCapabilityFolder(id: String, to name: String) throws {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try validateCapabilityFolderName(trimmed, excluding: id)
+            let preferences = try currentCapabilityFolderPreferences()
+            guard let index = preferences.customFolders.firstIndex(where: { $0.id == id }) else {
+                throw CapabilityFolderStoreError.immutableFolder
+            }
+            let folder = preferences.customFolders[index]
+            let renamed = CapabilityFolderDefinition(
+                id: folder.id,
+                source: folder.source,
+                customName: trimmed,
+                projectID: folder.projectID,
+                projectName: folder.projectName
+            )
+            var folders = preferences.customFolders
+            folders[index] = renamed
+            try persistCapabilityFolders(CapabilityFolderPreferencesV1(
+                selfTrainingSeedVersion: preferences.selfTrainingSeedVersion,
+                customFolders: folders,
+                memberships: preferences.memberships
+            ))
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+            throw error
+        }
+    }
+
+    public func deleteCapabilityFolder(id: String) throws {
+        do {
+            let preferences = try currentCapabilityFolderPreferences()
+            guard preferences.customFolders.contains(where: { $0.id == id }) else {
+                throw CapabilityFolderStoreError.immutableFolder
+            }
+            let folders = preferences.customFolders.filter { $0.id != id }
+            let memberships = preferences.memberships.filter { $0.folderID != id }
+            try persistCapabilityFolders(CapabilityFolderPreferencesV1(
+                selfTrainingSeedVersion: preferences.selfTrainingSeedVersion,
+                customFolders: folders,
+                memberships: memberships
+            ))
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+            throw error
+        }
+    }
+
+    public func reorderCapabilityFolders(fromOffsets offsets: IndexSet, toOffset destination: Int) {
+        do {
+            let preferences = try currentCapabilityFolderPreferences()
+            var folders = preferences.customFolders
+            // SwiftUI's drop callbacks are UI input, not a trusted index. A
+            // stale callback can arrive after the projection changed, so
+            // reject every invalid source or destination before Array.move
+            // (which traps on out-of-range indexes).
+            guard !offsets.isEmpty,
+                  offsets.allSatisfy({ $0 >= 0 && $0 < folders.count }),
+                  destination >= 0,
+                  destination <= folders.count else { return }
+            folders.move(fromOffsets: offsets, toOffset: destination)
+            try persistCapabilityFolders(CapabilityFolderPreferencesV1(
+                selfTrainingSeedVersion: preferences.selfTrainingSeedVersion,
+                customFolders: folders,
+                memberships: preferences.memberships
+            ))
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+        }
+    }
+
+    public func moveCapabilityFolder(id: String, direction: CapabilityFolderMoveDirection) {
+        let folders = capabilityFolderStore.preferences().customFolders
+        // Derived Global/Project IDs and stale menu actions must never enter
+        // the custom-folder reorder path.
+        guard let index = folders.firstIndex(where: { $0.id == id && $0.isCustom }) else { return }
+        var target = index + (direction == .up ? -1 : 1)
+        guard target >= 0, target < folders.count else { return }
+        if direction == .down { target += 1 }
+        reorderCapabilityFolders(fromOffsets: IndexSet(integer: index), toOffset: target)
+    }
+
+    public func setCapabilityFolderMembership(resourceID: String, folderID: String, included: Bool) {
+        do {
+            let preferences = try currentCapabilityFolderPreferences()
+            guard preferences.customFolders.contains(where: { $0.id == folderID }) else { throw CapabilityFolderStoreError.missingFolder }
+            guard capabilityFolderProjection.resources.contains(where: { $0.id == resourceID }) else { throw CapabilityFolderStoreError.invalidMembership }
+            var memberships = preferences.memberships
+            let pair = CapabilityFolderMembership(folderID: folderID, resourceID: resourceID)
+            if included {
+                if !memberships.contains(pair) { memberships.append(pair) }
+            } else {
+                memberships.removeAll { $0 == pair }
+            }
+            try persistCapabilityFolders(CapabilityFolderPreferencesV1(
+                selfTrainingSeedVersion: preferences.selfTrainingSeedVersion,
+                customFolders: preferences.customFolders,
+                memberships: memberships
+            ))
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+        }
+    }
+
+    /// Adds a batch of currently visible Agents and Skills to one custom
+    /// folder using a single preference write. Existing memberships remain
+    /// unchanged, and any invalid input rejects the complete batch.
+    @discardableResult
+    public func addCapabilitiesToFolder(resourceIDs: Set<String>, folderID: String) throws -> Int {
+        do {
+            let preferences = try currentCapabilityFolderPreferences()
+            guard preferences.customFolders.contains(where: { $0.id == folderID }) else {
+                throw CapabilityFolderStoreError.missingFolder
+            }
+            let availableIDs = Set(capabilityFolderProjection.resources.map(\.id))
+            guard resourceIDs.isSubset(of: availableIDs) else {
+                throw CapabilityFolderStoreError.invalidMembership
+            }
+
+            var memberships = preferences.memberships
+            var existing = Set(memberships.map(\.id))
+            var addedCount = 0
+            for resourceID in resourceIDs.sorted() {
+                let membership = CapabilityFolderMembership(folderID: folderID, resourceID: resourceID)
+                if existing.insert(membership.id).inserted {
+                    memberships.append(membership)
+                    addedCount += 1
+                }
+            }
+            guard addedCount > 0 else { return 0 }
+            try persistCapabilityFolders(CapabilityFolderPreferencesV1(
+                selfTrainingSeedVersion: preferences.selfTrainingSeedVersion,
+                customFolders: preferences.customFolders,
+                memberships: memberships
+            ))
+            return addedCount
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+            throw error
+        }
+    }
+
+    public func toggleCapabilityFolderMembership(resourceID: String, folderID: String) {
+        let isMember = capabilityFolderStore.preferences().memberships.contains {
+            $0.folderID == folderID && $0.resourceID == resourceID
+        }
+        setCapabilityFolderMembership(resourceID: resourceID, folderID: folderID, included: !isMember)
+    }
+
+    public func clearCapabilityFolderError() { capabilityFolderError = nil }
+
+    public func retryCapabilityFolderPreferences() {
+        do {
+            _ = try capabilityFolderStore.ensureInitialized()
+            refreshCapabilityFolderProjection()
+            capabilityFolderError = nil
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+        }
+    }
+
+    public func clearCorruptedCapabilityFolderPreferences() {
+        capabilityFolderStore.clearCorruptedPreferences()
+        retryCapabilityFolderPreferences()
+    }
+
+    private func currentCapabilityFolderPreferences() throws -> CapabilityFolderPreferencesV1 {
+        try capabilityFolderStore.ensureInitialized()
+    }
+
+    private func validateCapabilityFolderName(_ name: String, excluding id: String?) throws {
+        guard !name.isEmpty, name.count <= 40 else { throw CapabilityFolderStoreError.invalidFolderName }
+        let normalized = normalizedCapabilityFolderName(name)
+        // Validate against the complete visible projection, not just the
+        // persisted custom array. This includes localized Self Training,
+        // Global, and the current privacy-safe Project display names. Exclude
+        // the folder being renamed so it can retain its current name.
+        let duplicate = capabilityFolderProjection.folders.contains { folder in
+            guard folder.id != id else { return false }
+            let names = [
+                folder.displayName(language: .simplifiedChinese),
+                folder.displayName(language: .english)
+            ]
+            return names.contains { normalizedCapabilityFolderName($0) == normalized }
+        }
+        if duplicate {
+            throw CapabilityFolderStoreError.duplicateFolderName
+        }
+    }
+
+    private func normalizedCapabilityFolderName(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    private func persistCapabilityFolders(_ preferences: CapabilityFolderPreferencesV1) throws {
+        do {
+            try capabilityFolderStore.save(preferences)
+            capabilityFolderPreferencesState = capabilityFolderStore.preferencesState()
+            capabilityFolderError = nil
+            refreshCapabilityFolderProjection()
+        } catch {
+            capabilityFolderError = folderErrorKey(error)
+            throw error
+        }
+    }
+
+    private func folderErrorKey(_ error: Error) -> String {
+        guard let error = error as? CapabilityFolderStoreError else { return "capabilityFolders.saveFailed" }
+        switch error {
+        case .corruptedPreferences: return "capabilityFolders.corrupted"
+        case .invalidFolderName: return "capabilityFolders.invalidName"
+        case .duplicateFolderName: return "capabilityFolders.duplicateName"
+        case .immutableFolder: return "capabilityFolders.immutable"
+        case .missingFolder: return "capabilityFolders.missingFolder"
+        case .invalidMembership: return "capabilityFolders.invalidMembership"
+        case .persistenceFailed: return "capabilityFolders.saveFailed"
+        }
+    }
+
+    private func refreshCapabilityFolderProjection() {
+        capabilityFolderPreferencesState = capabilityFolderStore.preferencesState()
+        capabilityCompanionUsageGeneration &+= 1
+        // Allow a new generation to load immediately. Any prior load checks
+        // the generation before publication and is therefore harmless when
+        // its detached calculation finishes later.
+        capabilityCompanionUsageIsLoading = false
+        capabilityCompanionUsageByRelationID = [:]
+        capabilityCompanionUsageWindow = nil
+        capabilityCompanionUsageRelationIDs = []
+        // Self Training is intentionally empty for new installs. Never infer
+        // membership from the current catalog: existing saved memberships are
+        // user's explicit organization and must survive refreshes/restarts.
+        let folderPreferences = capabilityFolderStore.preferences()
+        var projectByID: [String: CapabilityProject] = [:]
+        for project in libraryModels.flatMap(\.projects) where projectByID[project.id] == nil {
+            projectByID[project.id] = project
+        }
+        let projects = projectByID.values.sorted {
+            $0.id == $1.id ? $0.name.localizedStandardCompare($1.name) == .orderedAscending : $0.id < $1.id
+        }
+        capabilityFolderProjection = CapabilityFolderProjection(
+            resources: capabilities.allRows.map(\.resource),
+            projects: projects,
+            preferences: folderPreferences,
+            relations: capabilities.relations
+        )
+    }
+
+    /// Schedules the one-time relationship source pass for databases created
+    /// by 1.2 or earlier. The marker is written only by a successful source
+    /// index, so failures and cancellation naturally retry on a later visible
+    /// lifecycle. This does not touch rollout parser versions or session data.
+    private func scheduleCapabilityRelationshipMigrationIfNeeded() {
+        guard capabilityRelationshipMigrationTask == nil,
+              let readStore,
+              coordinator != nil,
+              configuration != nil,
+              hasIndexedData || hasCompletedIndexPass,
+              !isDeletingDerivedData,
+              !visibleWindowIDs.isEmpty else { return }
+        let epoch = lifecycleEpoch
+        capabilityRelationshipMigrationTask = Task { @MainActor [weak self] in
+            defer {
+                if let self, self.lifecycleEpoch == epoch {
+                    self.capabilityRelationshipMigrationTask = nil
+                }
+            }
+            guard let self,
+                  self.lifecycleEpoch == epoch,
+                  !self.isDeletingDerivedData,
+                  !self.visibleWindowIDs.isEmpty else { return }
+            // `relationshipIndexVersion()` returns an optional by design:
+            // absence is the upgrade signal for a 1.2 database. Do not use
+            // optional binding here, because `try? await` + `let` would make
+            // a legitimate nil marker exit before migration is scheduled.
+            let version: String?
+            do {
+                version = try await readStore.relationshipIndexVersion()
+            } catch {
+                return
+            }
+            guard CapabilityCompanionIndexMigration.needsSourceRefresh(
+                marker: version,
+                hasIndexedData: self.hasIndexedData || self.hasCompletedIndexPass
+            ) else { return }
+            let outcome = await self.ensurePresentationRefreshCoordinator().request(RefreshRequest(
+                domains: [.directory],
+                reason: .startup,
+                force: true,
+                sourceIntent: true
+            ))
+            guard self.lifecycleEpoch == epoch, !self.isDeletingDerivedData else { return }
+            // A failed/cancelled request leaves the database marker absent;
+            // the next visible lifecycle may retry it. Do not manufacture a
+            // success marker from a presentation-only completion.
+            if outcome == .completed || outcome == .noNewData {
+                return
+            }
+        }
+    }
+
     private func syncLibraryCatalog() {
         let catalog = CapabilityCatalog(resources: capabilities.allRows.map(\.resource), relations: capabilities.relations).entries
         for library in libraryModels {
             library.setDirectory(catalog: catalog, projects: library.projects)
         }
+        refreshCapabilityFolderProjection()
     }
 
     private func classificationDidChange() {
@@ -1607,7 +2070,10 @@ public final class DirectorAppModel: ObservableObject {
             }
         }
         let requestedDelay = wakeDate.map { max(0, $0.timeIntervalSince(now)) } ?? pollInterval
-        return min(60, max(0.05, requestedDelay))
+        // A reset/day boundary may shorten the monitor interval, never extend
+        // it. In particular, an already-running source phase must still allow
+        // the presentation clock to tick at the configured polling cadence.
+        return min(60, max(0.05, min(pollInterval, requestedDelay)))
     }
 
     private func nextPresentationWakeDate(after now: Date) -> Date? {
@@ -1675,6 +2141,8 @@ public final class DirectorAppModel: ObservableObject {
         sourceDataMonitorTask = nil
         sourceMonitorActionTask?.cancel()
         sourceMonitorActionTask = nil
+        capabilityRelationshipMigrationTask?.cancel()
+        capabilityRelationshipMigrationTask = nil
         homeRankingUpgradeTask?.cancel()
         homeRankingUpgradeTask = nil
     }
@@ -2198,6 +2666,8 @@ public final class DirectorAppModel: ObservableObject {
         }
         hasIndexedData = !resources.isEmpty || directory.indexedSessionCount > 0
         directoryLoaded = true
+        refreshCapabilityFolderProjection()
+        scheduleCapabilityRelationshipMigrationIfNeeded()
         lastIndexCompletedAt = directory.metadata.lastIndexCompletedAt
         sourceDataLastCheckedAt = directory.metadata.lastSourceCheckAt
         hasCompletedIndexPass = directory.metadata.lastIndexCompletedAt != nil
@@ -2265,6 +2735,8 @@ public final class DirectorAppModel: ObservableObject {
         sourceDataLastCheckedAt = metadata.lastSourceCheckAt
         hasCompletedIndexPass = metadata.lastIndexCompletedAt != nil
         directoryLoaded = true
+        refreshCapabilityFolderProjection()
+        scheduleCapabilityRelationshipMigrationIfNeeded()
         statisticsWindow = window
         hasComputedStatistics = true
         syncMonitorDayToPublishedWindow(window, now: now)
@@ -2461,8 +2933,14 @@ public final class DirectorAppModel: ObservableObject {
         do {
             let sessions = try await readStore.fetchAllSessions()
             let summaries = try await fetchTaskCallSummaries(sessions: sessions, store: readStore)
+            let invocationsBySession = try await readStore.fetchInvocationsBySession()
             guard isCurrent(ticket) else { return }
-            tasks = TasksViewModel(sessions: sessions, callSummaries: summaries, evaluations: evaluationStore.all())
+            tasks = TasksViewModel(
+                sessions: sessions,
+                invocationsBySession: invocationsBySession,
+                callSummaries: summaries,
+                evaluations: evaluationStore.all()
+            )
         } catch {
             if isCurrent(ticket) { indexingError = "tasks_load_failed" }
         }
@@ -2535,6 +3013,9 @@ public final class DirectorAppModel: ObservableObject {
         libraryResultContext.removeAll(keepingCapacity: false)
         sourceDataMonitorTask?.cancel()
         sourceDataMonitorTask = nil
+        capabilityRelationshipMigrationTask?.cancel()
+        capabilityRelationshipMigrationTask = nil
+        capabilityCompanionUsageIsLoading = false
         sourceMonitorActionTask?.cancel()
         sourceMonitorActionTask = nil
         homeRankingUpgradeTask?.cancel()
@@ -2588,6 +3069,7 @@ public final class DirectorAppModel: ObservableObject {
             library.setPluginData([], browseStats: [])
             library.selectedID = nil
         }
+        refreshCapabilityFolderProjection()
         lastRefresh = nil
         lastIndexCompletedAt = nil
         hasCompletedIndexPass = false

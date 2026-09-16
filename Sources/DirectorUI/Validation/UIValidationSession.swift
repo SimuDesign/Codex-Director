@@ -86,6 +86,7 @@ public final class UIValidationSession: ObservableObject {
             writeData: { [preferences] data in preferences.set(data, forKey: InvocationEvaluationStore.defaultsKey); return true },
             removeData: { [preferences] in preferences.removeObject(forKey: InvocationEvaluationStore.defaultsKey); return true }
         )
+        let folderStore = CapabilityFolderStore.makeMemory()
         let store: DatabaseStore
         do {
             store = try DatabaseStore(url: databaseURL)
@@ -102,7 +103,8 @@ public final class UIValidationSession: ObservableObject {
             classificationOverrides: classificationStore,
             evaluationStore: evaluationStore,
             nowProvider: { Fixture.referenceNow },
-            calendar: Fixture.validationCalendar
+            calendar: Fixture.validationCalendar,
+            capabilityFolderStore: folderStore
         )
     }
 
@@ -151,6 +153,7 @@ public final class UIValidationSession: ObservableObject {
                 writeData: { [newPreferences] data in newPreferences.set(data, forKey: InvocationEvaluationStore.defaultsKey); return true },
                 removeData: { [newPreferences] in newPreferences.removeObject(forKey: InvocationEvaluationStore.defaultsKey); return true }
             )
+            let folderStore = CapabilityFolderStore.makeMemory()
             let newStore = try DatabaseStore(url: newURL)
             let newModel = DirectorAppModel(
                 store: newStore,
@@ -160,7 +163,8 @@ public final class UIValidationSession: ObservableObject {
                 classificationOverrides: classificationStore,
                 evaluationStore: evaluationStore,
                 nowProvider: { Fixture.referenceNow },
-                calendar: Fixture.validationCalendar
+                calendar: Fixture.validationCalendar,
+                capabilityFolderStore: folderStore
             )
             try await seed(dataset: dataset, store: newStore, evaluationStore: evaluationStore)
             try await newModel.refresh()
@@ -564,6 +568,36 @@ private struct Fixture {
         }
         var relations = zip(resources, resources.dropFirst()).prefix(8).map { source, target in
             ResourceRelation(sourceResourceID: source.id, targetResourceID: target.id, relationKind: "uses", confidence: .inferred, evidenceSummary: "Synthetic relation")
+        }
+        // The representative folder fixture needs explicit declarations so
+        // the validation host exercises the real companion presentation:
+        // one global Skill is shared by three Agents, including two project
+        // Agents. Project folders therefore show the global Skill as a
+        // relation preview without changing project membership.
+        if resources.contains(where: { $0.id == "skill:validation-custom" }) {
+            relations.append(contentsOf: [
+                ResourceRelation(
+                    sourceResourceID: "agent:validation-global",
+                    targetResourceID: "skill:validation-custom",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.agentBrief.rawValue
+                ),
+                ResourceRelation(
+                    sourceResourceID: "agent:validation-project-a",
+                    targetResourceID: "skill:validation-custom",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.projectRegistry.rawValue
+                ),
+                ResourceRelation(
+                    sourceResourceID: "agent:validation-project-b",
+                    targetResourceID: "skill:validation-custom",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.projectRegistry.rawValue
+                )
+            ])
         }
         relations.append(ResourceRelation(sourceResourceID: "plugin:validation-enabled", targetResourceID: "skill:validation-plugin-child", relationKind: "contains", confidence: .exact, evidenceSummary: "Synthetic plugin manifest"))
         return Fixture(resources: resources, projects: projects, provenance: provenance, relations: relations, batches: batches, evaluations: evaluations)

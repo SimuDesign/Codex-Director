@@ -5,7 +5,7 @@ Codex Director separates local source discovery from Director-owned projections 
 ## Layers
 
 - **DirectorCore** discovers local resources, parses allowlisted evidence, coordinates refresh, persists projections and evaluations, and builds capability packages.
-- **DirectorUI** renders the six primary destinations, detail flows, settings, export flow, themes, localization, and accessibility states.
+- **DirectorUI** renders the seven primary destinations, detail flows, settings, export flow, themes, localization, and accessibility states.
 - **CodexDirectorApp** owns application composition, dependency injection, windows, and app-level shared stores.
 
 ## Data authority
@@ -71,3 +71,34 @@ the concrete read-only plugin and dependency checklists.
 ## Privacy boundary
 
 Only allowlisted normalized evidence reaches persistence. Prompts, arguments, raw outputs, credentials, cookies, session bodies, and unredacted personal paths are excluded.
+
+## Capability folders
+
+Capability Folders is a presentation-only projection over the current Agent and
+Skill directory. Global and project folders are derived from configuration
+ownership; plugin-provided Skills are included in Global while plugin packages,
+system capabilities, instructions, MCP, tools, and stale caches are excluded.
+The independent `CapabilityFolderStore` persists only custom folder definitions
+and many-to-many stable resource-ID memberships under its dedicated UserDefaults
+key. New installs create an empty Self Training folder; existing memberships
+remain unchanged across refreshes and upgrades. There is no automatic
+classification, implicit membership, network access, or source-file write.
+
+Custom folders can be renamed, deleted, reordered, searched, and populated from
+the current eligible directory through one validated atomic preference write.
+Each folder exposes Agent & Companion Skills, Agent, and Skill presentation tabs. Explicit
+declarations and near-seven-day co-observation evidence are separate, and a
+related capability outside the current folder is preview-only. Memberships may
+contain resources that are temporarily absent so a later directory projection
+can restore them. Folder preferences survive derived-index deletion and are not
+included in manifest v1 capability packages. Legacy capability-grouping
+preferences are discarded only after the new folder document is successfully
+written.
+
+Global Agent discovery pairs a top-level `<role>.toml` with a uniquely matching
+`<role>/agent.md` Brief as one stable resource. The resolver reads both local
+documents for explicit declarations while retaining TOML-only and Brief-only
+compatibility. Relationship history is a separate batch projection: the App
+Model materializes indexed invocations once per seven-day snapshot and maps
+distinct-session co-observation to relation IDs; co-observation never proves
+that an Agent invoked a Skill.
