@@ -17,7 +17,7 @@ public struct CapabilityFoldersView: View {
     @State private var selectedFolderID: String?
     @State private var entrySearch = ""
     // Keep the entry page's scroll target independent from each folder page.
-    // A non-nil anchor also gives the native List a stable initial target.
+    // A non-nil anchor also gives the native scroll view a stable initial target.
     @State private var entryScrollPosition: String? = "capability-folders-entry-top"
     // Folder browsing state is session-only and keyed by folder + tab. A
     // search, sort, expansion, scroll target, or selected detail in Agent is
@@ -46,24 +46,28 @@ public struct CapabilityFoldersView: View {
     public var body: some View {
         DirectorEditorialFrame {
             GeometryReader { proxy in
-                List {
-                    if let selectedFolderID,
-                       let folder = model.capabilityFolders.folder(withID: selectedFolderID) {
-                        folderPage(folder, width: proxy.size.width)
-                    } else {
-                        entryPage(width: proxy.size.width)
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if let selectedFolderID,
+                           let folder = model.capabilityFolders.folder(withID: selectedFolderID) {
+                            folderPage(folder, width: proxy.size.width)
+                        } else {
+                            entryPage(width: proxy.size.width)
+                        }
                     }
+                    .frame(maxWidth: DirectorCapabilityFolderLayout.maxContentWidth, alignment: .leading)
+                    .padding(.bottom, DirectorCapabilityFolderLayout.pageBottomPadding)
+                    .padding(.horizontal, DirectorCapabilityFolderLayout.horizontalPadding(for: proxy.size.width))
+                    .frame(maxWidth: .infinity, alignment: .center)
                 }
-                .listStyle(.plain)
-                .scrollContentBackground(.hidden)
                 .contentMargins(.horizontal, 0, for: .scrollContent)
                 .contentMargins(.vertical, 0, for: .scrollContent)
                 .background(Color.clear)
                 #if DEBUG
                 .background(UIValidationCaptureMarker().allowsHitTesting(false).accessibilityHidden(true))
                 #endif
-                .scrollPosition(id: activeScrollPosition)
-                // Keep the overlay's layout box equal to the list viewport.
+                .scrollPosition(id: activeScrollPosition, anchor: .top)
+                // Keep the overlay's layout box equal to the scroll viewport.
                 // A bare ViewBuilder with scrim + sheet siblings sizes the
                 // overlay to the sheet and centers it; the explicit ZStack
                 // lets the sheet remain pinned to the content trailing edge.
@@ -144,61 +148,62 @@ public struct CapabilityFoldersView: View {
 
     @ViewBuilder
     private func entryPage(width: CGFloat) -> some View {
-        entryHeaderAndSearch(width: width)
-        folderStatusBanner(width: width)
+        VStack(alignment: .leading, spacing: 0) {
+            entryHeaderAndSearch(width: width)
+        }
+        .scrollTargetLayout()
+        folderStatusBanner(width: width, topGap: entrySectionGap(for: width))
         if entrySearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Section {
-                folderGrid(model.capabilityFolders.folders.filter(\.isCustom), width: width)
-            } header: {
-                sectionHeader("\(t("capabilityFolders.myFolders", "My Folders")) \(model.capabilityFolders.folders.filter(\.isCustom).count)", action: newFolderButton)
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets(for: width))
-            }
-
-            Section {
-                folderGrid(model.capabilityFolders.folders.filter(\.isDefault), width: width)
-            } header: {
-                sectionHeader("\(t("capabilityFolders.defaults", "Global & Projects")) \(model.capabilityFolders.folders.filter(\.isDefault).count)")
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets(for: width))
-            }
+            structuralRow(
+                sectionHeader("\(t("capabilityFolders.myFolders", "My Folders")) \(model.capabilityFolders.folders.filter(\.isCustom).count)", action: newFolderButton),
+                width: width,
+                top: entrySectionGap(for: width)
+            )
+            folderGrid(model.capabilityFolders.folders.filter(\.isCustom), width: width)
+                .padding(.top, DirectorCapabilityFolderLayout.sectionContentGap)
+            structuralRow(
+                sectionHeader("\(t("capabilityFolders.defaults", "Global & Projects")) \(model.capabilityFolders.folders.filter(\.isDefault).count)"),
+                width: width,
+                top: sectionGap(for: width)
+            )
+            folderGrid(model.capabilityFolders.folders.filter(\.isDefault), width: width)
+                .padding(.top, DirectorCapabilityFolderLayout.sectionContentGap)
         } else if !model.directoryLoaded {
             pendingState(width: width)
         } else {
-            Section {
-                if globalSearchResults.isEmpty {
-                    emptyState(
-                        t("capabilityFolders.empty.search", "No capabilities match this search."),
-                        width: width,
-                        actionTitle: t("capabilityFolders.clearSearch", "Clear search"),
-                        action: { entrySearch = "" }
-                    )
-                } else {
-                    memberListPanel(globalSearchResults, folder: nil, width: width)
-                }
-            } header: {
-                sectionHeader(t("capabilityFolders.searchResults", "Search results · all capabilities"))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(rowInsets(for: width))
+            structuralRow(
+                sectionHeader(t("capabilityFolders.searchResults", "Search results · all capabilities")),
+                width: width,
+                top: entrySectionGap(for: width)
+            )
+            if globalSearchResults.isEmpty {
+                emptyState(
+                    t("capabilityFolders.empty.search", "No capabilities match this search."),
+                    width: width,
+                    actionTitle: t("capabilityFolders.clearSearch", "Clear search"),
+                    action: { entrySearch = "" }
+                )
+                .padding(.top, DirectorCapabilityFolderLayout.sectionContentGap)
+            } else {
+                memberListPanel(globalSearchResults, folder: nil, width: width)
+                    .padding(.top, DirectorCapabilityFolderLayout.sectionContentGap)
             }
         }
     }
 
     @ViewBuilder
     private func folderPage(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
-        folderHeader(folder, width: width)
+        VStack(alignment: .leading, spacing: 0) {
+            folderHeader(folder, width: width)
+        }
+        .scrollTargetLayout()
 
         folderTabs(for: folder.id, width: width)
 
         folderFilterRow(for: folder.id, width: width)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
 
         folderStatusBanner(width: width)
+            .padding(.bottom, DirectorCapabilityFolderLayout.filterContentGap)
         if !model.directoryLoaded {
             pendingState(width: width)
         } else {
@@ -215,9 +220,6 @@ public struct CapabilityFoldersView: View {
                     // view's route into the complete Skill list instead of a
                     // misleading empty-directory message.
                     companionListPanel([], folder: folder, width: width)
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(rowInsets(for: width))
                 } else {
                     emptyState(
                         hasQuery
@@ -246,10 +248,6 @@ public struct CapabilityFoldersView: View {
                         memberListPanel(members, folder: folder, width: width)
                     }
                 }
-                .id("folder-content-\(folder.id)-\(currentFolderTab(for: folder.id).rawValue)")
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
-                .listRowInsets(rowInsets(for: width))
             }
         }
     }
@@ -259,7 +257,7 @@ public struct CapabilityFoldersView: View {
     /// derived from the existing AppModel refresh and cache signals; no new
     /// data or failure channel is introduced for this presentation surface.
     @ViewBuilder
-    private func folderStatusBanner(width: CGFloat) -> some View {
+    private func folderStatusBanner(width: CGFloat, topGap: CGFloat = 0) -> some View {
         let hasFailure = model.backgroundRefreshError != nil
             || model.indexingError != nil
             || hasPresentationFailure
@@ -303,9 +301,7 @@ public struct CapabilityFoldersView: View {
                                 : hasFailure
                                 ? t("capabilityFolders.status.failed", "Background update failed. Showing the last available data.")
                                 : t("capabilityFolders.status.stale", "Needs update. Showing the last available data."))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-            .listRowInsets(rowInsets(for: width))
+            .padding(.top, topGap)
         }
     }
 
@@ -344,15 +340,12 @@ public struct CapabilityFoldersView: View {
                 )
                 .accessibilityHidden(true)
         }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
     }
 
     private func entryHeaderAndSearch(width: CGFloat) -> some View {
         // Instantiate only one native text field. ViewThatFits candidates
         // sharing this binding can re-enter AppKit's accessibility graph
-        // when a focused search is cleared while List sections change.
+        // when a focused search is cleared while content blocks change.
         Group {
             if width >= DirectorCapabilityFolderLayout.entryInlineBreakpoint {
                 HStack(alignment: .lastTextBaseline, spacing: DirectorSpacing.space6) {
@@ -370,11 +363,7 @@ public struct CapabilityFoldersView: View {
             }
         }
         .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorSpacing.space4 : DirectorSpacing.space6)
-        .padding(.bottom, DirectorSpacing.space4)
         .id("capability-folders-entry-top")
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
     }
 
     private func entryTitleBlock(width: CGFloat) -> some View {
@@ -410,18 +399,23 @@ public struct CapabilityFoldersView: View {
 
     private func sectionHeader(_ title: String, action: AnyView? = nil) -> some View {
         HStack {
-            Text(title).font(DirectorTypography.sectionTitle.weight(.semibold)).foregroundStyle(DirectorColor.textPrimary)
+            Text(title)
+                .font(DirectorTypography.sectionTitle.weight(.semibold))
+                .foregroundStyle(DirectorColor.textPrimary)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
             if let action { action }
         }
-        .padding(.top, DirectorSpacing.space4)
-        .padding(.bottom, DirectorSpacing.space3)
     }
 
     private var newFolderButton: AnyView {
-        AnyView(Button { createName = ""; showsCreateSheet = true } label: {
+        AnyView(Button {
+            createName = ""
+            showsCreateSheet = true
+        } label: {
             Label(t("capabilityFolders.add", "New folder"), systemImage: "plus")
-        }.buttonStyle(DirectorSecondaryActionButtonStyle()))
+        }
+        .buttonStyle(DirectorSecondaryActionButtonStyle()))
     }
 
     private func folderHeader(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
@@ -431,11 +425,10 @@ public struct CapabilityFoldersView: View {
                     selectedFolderID = nil
                 } label: {
                     Label(t("capabilityFolders.back", "Capability Folders"), systemImage: "chevron.left")
+                        .font(DirectorTypography.label)
+                        .foregroundStyle(DirectorColor.textSecondary)
                 }
                 .buttonStyle(.plain)
-                .font(DirectorTypography.label)
-                .foregroundStyle(DirectorColor.textSecondary)
-                .accessibilityLabel(t("capabilityFolders.back", "Back to folders"))
                 Spacer()
                 if folder.isCustom {
                     Button {
@@ -460,11 +453,10 @@ public struct CapabilityFoldersView: View {
                 }
             }
         }
-        .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorSpacing.space3 : DirectorSpacing.space4)
-        .padding(.bottom, DirectorSpacing.space3)
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
+        .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint ? DirectorSpacing.space4 : DirectorSpacing.space6)
+        .padding(.bottom, 0)
+        .id("capability-folder-top-\(folder.id)-\(currentFolderTab(for: folder.id).rawValue)")
+        .accessibilityElement(children: .contain)
     }
 
     private func folderTitleBlock(_ folder: CapabilityFolderDefinition, width: CGFloat) -> some View {
@@ -479,6 +471,7 @@ public struct CapabilityFoldersView: View {
                     .foregroundStyle(DirectorColor.textPrimary)
                     .lineLimit(2)
                     .minimumScaleFactor(0.75)
+                    .accessibilityAddTraits(.isHeader)
             }
             Text(folder.isDefault
                  ? t("capabilityFolders.defaultSubtitle", "Browse capabilities by configuration ownership.")
@@ -516,6 +509,7 @@ public struct CapabilityFoldersView: View {
                 }
             }
         }
+        .padding(.bottom, DirectorCapabilityFolderLayout.filterContentGap)
     }
 
     private func folderSearchField(for folderID: String) -> some View {
@@ -570,9 +564,7 @@ public struct CapabilityFoldersView: View {
                 }
             }
         }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
+        .scrollTargetLayout()
         .accessibilityElement(children: .contain)
     }
 
@@ -629,26 +621,23 @@ public struct CapabilityFoldersView: View {
     }
 
     private func folderActions(_ folder: CapabilityFolderDefinition) -> some View {
-        Menu {
-            Button(t("capabilityFolders.import", "Add existing capabilities")) {
-                importTargetFolder = folder
-            }
-            Divider()
-            Button(t("capabilityFolders.rename", "Rename folder")) {
-                editName = folder.customName ?? folderTitle(folder)
-                editingFolder = folder
-            }
-            Button(t("capabilityFolders.moveUp", "Move up")) { model.moveCapabilityFolder(id: folder.id, direction: .up) }
-            Button(t("capabilityFolders.moveDown", "Move down")) { model.moveCapabilityFolder(id: folder.id, direction: .down) }
-            Divider()
-            Button(t("capabilityFolders.delete", "Delete"), role: .destructive) {
-                folderToDelete = folder
-                showsDeleteConfirmation = true
-            }
-        } label: {
-            Image(systemName: "ellipsis.circle").foregroundStyle(DirectorColor.textSecondary)
+        DirectorOutlinedIconMenu(systemImage: "ellipsis.circle") {
+                Button(t("capabilityFolders.import", "Add existing capabilities")) {
+                    importTargetFolder = folder
+                }
+                Divider()
+                Button(t("capabilityFolders.rename", "Rename folder")) {
+                    editName = folder.customName ?? folderTitle(folder)
+                    editingFolder = folder
+                }
+                Button(t("capabilityFolders.moveUp", "Move up")) { model.moveCapabilityFolder(id: folder.id, direction: .up) }
+                Button(t("capabilityFolders.moveDown", "Move down")) { model.moveCapabilityFolder(id: folder.id, direction: .down) }
+                Divider()
+                Button(t("capabilityFolders.delete", "Delete"), role: .destructive) {
+                    folderToDelete = folder
+                    showsDeleteConfirmation = true
+                }
         }
-        .menuIndicator(.hidden)
         .accessibilityLabel(t("capabilityFolders.actions", "Folder actions"))
     }
 
@@ -664,11 +653,14 @@ public struct CapabilityFoldersView: View {
                 }
                 if let folder, currentFolderTab(for: folder.id) == .skills {
                     skillRelationshipRow(member, folder: folder, width: width)
+                        .id(member.id)
                 } else {
                     memberRow(member, folder: folder, width: width)
+                        .id(member.id)
                 }
             }
         }
+        .scrollTargetLayout()
         .padding(.horizontal, DirectorSpacing.space4)
         .padding(.vertical, DirectorSpacing.space2)
         .background(DirectorColor.panel)
@@ -696,6 +688,7 @@ public struct CapabilityFoldersView: View {
                : DirectorCapabilityFolderLayout.agentGroupGap) {
             ForEach(agents) { member in
                 agentCompanionRow(member, folder: folder, width: width)
+                    .id(member.id)
             }
             if hasUnrepresentedSkills {
                 Button {
@@ -719,6 +712,7 @@ public struct CapabilityFoldersView: View {
                 .accessibilityHint(t("capabilityFolders.companions.unrepresentedHintAX", "Switches to the complete Skill list."))
             }
         }
+        .scrollTargetLayout()
     }
 
     private func memberRow(_ member: CapabilityFolderMember, folder: CapabilityFolderDefinition?, width: CGFloat) -> some View {
@@ -938,28 +932,25 @@ public struct CapabilityFoldersView: View {
     }
 
     private func folderMembershipMenu(_ resource: CapabilityResource, currentFolder: CapabilityFolderDefinition?) -> some View {
-        Menu {
-            ForEach(model.capabilityFolders.folders.filter(\.isCustom)) { folder in
-                let checked = model.capabilityFolderStore.preferences().memberships.contains { $0.folderID == folder.id && $0.resourceID == resource.id }
-                Button {
-                    model.setCapabilityFolderMembership(resourceID: resource.id, folderID: folder.id, included: !checked)
-                } label: {
-                    HStack {
-                        Text(folderTitle(folder))
-                        if checked { Image(systemName: "checkmark") }
+        DirectorOutlinedIconMenu(systemImage: "folder.badge.plus") {
+                ForEach(model.capabilityFolders.folders.filter(\.isCustom)) { folder in
+                    let checked = model.capabilityFolderStore.preferences().memberships.contains { $0.folderID == folder.id && $0.resourceID == resource.id }
+                    Button {
+                        model.setCapabilityFolderMembership(resourceID: resource.id, folderID: folder.id, included: !checked)
+                    } label: {
+                        HStack {
+                            Text(folderTitle(folder))
+                            if checked { Image(systemName: "checkmark") }
+                        }
                     }
                 }
-            }
-            if let currentFolder, currentFolder.isCustom {
-                Divider()
-                Button(t("capabilityFolders.remove", "Remove from folder"), role: .destructive) {
-                    model.setCapabilityFolderMembership(resourceID: resource.id, folderID: currentFolder.id, included: false)
+                if let currentFolder, currentFolder.isCustom {
+                    Divider()
+                    Button(t("capabilityFolders.remove", "Remove from folder"), role: .destructive) {
+                        model.setCapabilityFolderMembership(resourceID: resource.id, folderID: currentFolder.id, included: false)
+                    }
                 }
-            }
-        } label: {
-            Image(systemName: "folder.badge.plus").foregroundStyle(DirectorColor.textSecondary)
         }
-        .menuIndicator(.hidden)
         .accessibilityLabel(t("capabilityFolders.addToFolder", "Add to folder"))
         .disabled(model.capabilityFolders.folders.filter(\.isCustom).isEmpty)
     }
@@ -1242,30 +1233,32 @@ public struct CapabilityFoldersView: View {
                 )
                 .accessibilityHidden(true)
         }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
     }
 
     private func folderTabs(for folderID: String, width: CGFloat) -> some View {
-        Picker(
+        DirectorOutlinedSegmentedControl(
             t("capabilityFolders.tabs.label", "Capability view"),
-            selection: folderTabBinding(for: folderID)
-        ) {
-            Text(t("capabilityFolders.tabs.companions", "Agent & Companion Skills"))
-                .tag(CapabilityFolderTab.agentCompanions)
-            Text("\(t("capabilityFolders.tabs.agents", "Agents")) \(tabCount(for: folderID, kind: .agent))")
-                .tag(CapabilityFolderTab.agents)
-            Text("\(t("capabilityFolders.tabs.skills", "Skills")) \(tabCount(for: folderID, kind: .skill))")
-                .tag(CapabilityFolderTab.skills)
-        }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: width < DirectorCapabilityFolderLayout.compactBreakpoint ? .infinity : 620)
-        .frame(minHeight: DirectorCapabilityFolderLayout.segmentHeight)
-        .accessibilityLabel(t("capabilityFolders.tabs.label", "Capability view"))
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listRowInsets(rowInsets(for: width))
+            selection: folderTabBinding(for: folderID),
+            options: [
+                .init(
+                    value: .agentCompanions,
+                    title: t("capabilityFolders.tabs.companions", "Agent & Companion Skills")
+                ),
+                .init(
+                    value: .agents,
+                    title: "\(t("capabilityFolders.tabs.agents", "Agents")) \(tabCount(for: folderID, kind: .agent))"
+                ),
+                .init(
+                    value: .skills,
+                    title: "\(t("capabilityFolders.tabs.skills", "Skills")) \(tabCount(for: folderID, kind: .skill))"
+                )
+            ]
+        )
+        .frame(maxWidth: width < DirectorCapabilityFolderLayout.compactBreakpoint ? .infinity : 620, alignment: .leading)
+        .padding(.top, width < DirectorCapabilityFolderLayout.compactBreakpoint
+                 ? DirectorCapabilityFolderLayout.headerTabsGapCompact
+                 : DirectorCapabilityFolderLayout.headerTabsGap)
+        .padding(.bottom, DirectorCapabilityFolderLayout.tabsFilterGap)
     }
 
     private func tabCount(for folderID: String, kind: ResourceKind) -> String {
@@ -1275,23 +1268,22 @@ public struct CapabilityFoldersView: View {
 
     private func sortMenu(for folderID: String) -> some View {
         let selected = folderSort(for: folderID)
-        return Menu {
+        return DirectorOutlinedMenuField(selected.title(languageStore.language)) {
             ForEach(CapabilityFolderSort.allCases) { value in
-                Button(value.title(languageStore.language)) { folderSortByKey[sessionKey(for: folderID)] = value }
+                Button {
+                    folderSortByKey[sessionKey(for: folderID)] = value
+                } label: {
+                    HStack {
+                        Text(value.title(languageStore.language))
+                        if value == selected { Image(systemName: "checkmark") }
+                    }
+                }
             }
-        } label: {
-            Label(selected.title(languageStore.language), systemImage: "arrow.up.arrow.down")
-                .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
         }
-        .menuStyle(.borderlessButton)
-        .padding(.horizontal, DirectorSpacing.space2)
-        .background(DirectorColor.controlField, in: RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
-                .stroke(DirectorColor.controlBoundary, lineWidth: 1)
-                .accessibilityHidden(true)
-        }
+        .frame(width: DirectorCapabilityFolderLayout.sortFieldWidth)
+        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight, alignment: .leading)
         .accessibilityLabel(t("capabilityFolders.filter.sort", "Sort"))
+        .accessibilityValue(selected.title(languageStore.language))
     }
 
     private func createFolder() {
@@ -1384,23 +1376,47 @@ public struct CapabilityFoldersView: View {
     }
 
     private var activeScrollPosition: Binding<String?> {
-        Binding(
+        // Retain the callback's context even while another folder/tab is
+        // being laid out, rather than recording its target in the new tab.
+        let key = selectedFolderID.map { sessionKey(for: $0) }
+        return Binding(
             get: {
-                guard let selectedFolderID else { return entryScrollPosition }
-                return folderScrollPositionByKey[sessionKey(for: selectedFolderID)] ?? nil
+                guard let key else { return entryScrollPosition }
+                return (folderScrollPositionByKey[key] ?? nil)
+                    ?? "capability-folder-top-\(key.folderID)-\(key.tab.rawValue)"
             },
             set: { value in
-                guard let selectedFolderID else {
-                    entryScrollPosition = value ?? "capability-folders-entry-top"
+                // Missing targets during a context transition must not
+                // erase that context's last valid scroll target.
+                guard let value else { return }
+                guard let key else {
+                    entryScrollPosition = value
                     return
                 }
-                folderScrollPositionByKey[sessionKey(for: selectedFolderID)] = value
+                folderScrollPositionByKey[key] = value
             }
         )
     }
 
-    private func rowInsets(for width: CGFloat) -> EdgeInsets {
-        EdgeInsets(top: 0, leading: DirectorCapabilityFolderLayout.listRowInset(for: width), bottom: 0, trailing: DirectorCapabilityFolderLayout.listRowInset(for: width))
+    /// Structural headings share the scroll content's common grid and
+    /// own only their named inter-block rhythm.
+    private func structuralRow<Content: View>(_ content: Content, width: CGFloat, top: CGFloat = 0, bottom: CGFloat = 0) -> some View {
+        content
+            .padding(.top, top)
+            .padding(.bottom, bottom)
+            .accessibilityElement(children: .contain)
+    }
+
+    private func entrySectionGap(for width: CGFloat) -> CGFloat {
+        width < DirectorCapabilityFolderLayout.compactBreakpoint
+            ? DirectorCapabilityFolderLayout.entrySectionGapCompact
+            : DirectorCapabilityFolderLayout.entrySectionGap
+    }
+
+    private func sectionGap(for width: CGFloat) -> CGFloat {
+        width < DirectorCapabilityFolderLayout.compactBreakpoint
+            ? DirectorCapabilityFolderLayout.sectionGapCompact
+            : DirectorCapabilityFolderLayout.sectionGap
     }
 
     private func t(_ key: String, _ fallback: String) -> String { languageStore.localizer.text(key, fallback: fallback) }
@@ -1508,13 +1524,13 @@ private struct CapabilityFolderImportSheet: View {
                 }
             }
 
-            Picker(t("capabilityFolders.filter.type", "Type filter"), selection: $typeFilter) {
-                ForEach(CapabilityFolderTypeFilter.allCases) { filter in
-                    Text(filter.title(languageStore.language)).tag(filter)
+            DirectorOutlinedSegmentedControl(
+                t("capabilityFolders.filter.type", "Type filter"),
+                selection: $typeFilter,
+                options: CapabilityFolderTypeFilter.allCases.map {
+                    .init(value: $0, title: $0.title(languageStore.language))
                 }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityLabel(t("capabilityFolders.filter.type", "Type filter"))
+            )
 
             Group {
                 if filteredResources.isEmpty {

@@ -34,6 +34,22 @@ enum UIValidationCaptureLayout {
     }
 }
 
+/// Capture mode alone installs an Escape command. Returning the original
+/// content in normal mode leaves the product's responder handling untouched.
+private struct UIValidationCaptureExitCommand: ViewModifier {
+    let isCaptureMode: Bool
+    let exitCaptureMode: () -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isCaptureMode {
+            content.onExitCommand(perform: exitCaptureMode)
+        } else {
+            content
+        }
+    }
+}
+
 /// Debug-only native host for testing the shipped workspace with synthetic data.
 public struct UIValidationHost: View {
     public enum Appearance: String, CaseIterable, Identifiable {
@@ -115,9 +131,7 @@ private struct ValidationWorkspace: View {
         })
         .frame(minWidth: 720, minHeight: 480)
         .preferredColorScheme(appearance == .system ? nil : (appearance == .light ? .light : .dark))
-        .onExitCommand {
-            if isCaptureMode { exitCaptureMode() }
-        }
+        .modifier(UIValidationCaptureExitCommand(isCaptureMode: isCaptureMode, exitCaptureMode: exitCaptureMode))
         .onChange(of: isCaptureMode) { _, _ in
             refreshWindowMetrics()
             applyRequestedProductSize()

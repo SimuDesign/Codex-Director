@@ -6,6 +6,15 @@ The project follows semantic versioning for public releases.
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.3.1
+
+Local presentation patch; this entry does not imply a published Tag or GitHub Release.
+
+- Aligned Capability Folders section headings, actions, grids and lists to the same page gutters; added explicit vertical rhythm between the header, tabs, search and content.
+- Unified folder tabs, capability-import filters and Settings theme choices with real native segmented brand-outline controls rather than system-blue fills.
+- Matched folder search/sort painted heights and outlined icon-menu targets while preserving search, tab state, sorting, details and membership controls.
+- Preserved all saved folder memberships, capability relationships, source files, cache/index behavior and package manifest v1.
+
 ## 1.3.0
 
 Source integration only; a version entry does not imply a published Tag or GitHub Release.

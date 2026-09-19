@@ -2,7 +2,7 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.3.0`. Requires macOS 26 or later.
+> Current development version: `1.3.1`. Requires macOS 26 or later.
 
 [简体中文](README.zh-CN.md) · [Version notes](CHANGELOG.md) · [中文更新说明](CHANGELOG.zh-CN.md)
 
@@ -26,11 +26,11 @@ The Capability Folders page creates one empty local **Self Training** folder. Us
 
 Global and project folders reflect configuration ownership from the current read-only index. Every folder exposes Agent & Companion Skills / Agent / Skill tabs. Explicit relationships come from declared local metadata only; a related Skill outside the folder is a preview and is never counted or auto-added. Plugin-provided Skills appear in Global; plugin packages, system capabilities, MCP, tools, instructions, and stale plugin caches are excluded. Folder preferences are independent of the derived database and are not included in `.codexpack.zip` packages.
 
-The browser uses responsive folder grids, compact outlined lists, and an in-place detail sidebar. Search, sort, the selected tab, and expanded relationships stay independent within each folder/tab for the current window session. Skill details link back to related Agents; declarations and seven-day shared-session observations remain separate, and neither implies effectiveness or proves invocation.
+The browser uses responsive folder grids, compact outlined lists, brand-outline tabs, consistent section gutters and explicit control spacing, plus an in-place detail sidebar. Search, sort, the selected tab, and expanded relationships stay independent within each folder/tab for the current window session. Skill details link back to related Agents; declarations and seven-day shared-session observations remain separate, and neither implies effectiveness or proves invocation.
 
 ## Product screenshots
 
-These native Debug validation captures use synthetic data only. The Capability Folders images show the current 1.3.0 content area in Light and Dark, excluding window chrome and the glass sidebar; they contain no production data, user paths, sessions, or credentials.
+These native Debug validation captures use synthetic data only. The Capability Folders images show the 1.3.0 content area in Light and Dark, excluding window chrome and the glass sidebar; they contain no production data, user paths, sessions, or credentials.
 
 ![Capability Folders in English, Dark](docs/screenshots/folders-en-dark.png)
 ![Agent and companion Skills in English, Light](docs/screenshots/folder-companions-en-light.png)

@@ -103,6 +103,21 @@ public enum DirectorCapabilityFolderLayout {
     public static let folderCardHeightNarrow: CGFloat = 112
     public static let controlHeight: CGFloat = 36
     public static let segmentHeight: CGFloat = 32
+    public static let sortFieldWidth: CGFloat = 176
+    /// Explicit rhythm for the folder browser. These values are applied by
+    /// the owning structural row exactly once; they do not rely on native
+    /// List section spacing, which is not aligned with ordinary rows on macOS.
+    public static let entrySectionGap: CGFloat = 20
+    public static let entrySectionGapCompact: CGFloat = 16
+    public static let sectionContentGap: CGFloat = 12
+    public static let sectionGap: CGFloat = 32
+    public static let sectionGapCompact: CGFloat = 24
+    public static let headerTabsGap: CGFloat = 20
+    public static let headerTabsGapCompact: CGFloat = 16
+    public static let tabsFilterGap: CGFloat = 16
+    public static let filterContentGap: CGFloat = 16
+    public static let pageBottomPadding: CGFloat = 24
+    public static let iconMenuTarget: CGFloat = 28
     public static let agentGroupGap: CGFloat = 12
     public static let agentGroupGapCompact: CGFloat = 10
     public static let agentHeaderTopPadding: CGFloat = 16

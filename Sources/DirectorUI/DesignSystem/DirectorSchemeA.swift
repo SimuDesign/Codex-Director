@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import DirectorCore
 
 /// The small, semantic accent vocabulary used by Scheme A. Keeping the
@@ -437,6 +438,336 @@ public struct DirectorControlField<Content: View>: View {
                     .accessibilityHidden(true)
             }
             .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+    }
+}
+
+/// A real native single-choice control with local Scheme A drawing. AppKit
+/// owns the three actionable accessibility children, selection, keyboard
+/// navigation and focus; there is no hidden accessibility-only replica.
+public struct DirectorOutlinedSegmentedControl<Selection: Hashable>: View {
+    public struct Option: Identifiable {
+        public let value: Selection
+        public let title: String
+
+        public init(value: Selection, title: String) {
+            self.value = value
+            self.title = title
+        }
+
+        public var id: Selection { value }
+    }
+
+    private let label: String
+    private let options: [Option]
+    @Binding private var selection: Selection
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    public init(_ label: String, selection: Binding<Selection>, options: [Option]) {
+        self.label = label
+        self.options = options
+        self._selection = selection
+    }
+
+    public var body: some View {
+        DirectorNativeSegmentedControlBridge(
+            label: label,
+            titles: options.map(\.title),
+            selectedIndex: options.firstIndex(where: { $0.value == selection }) ?? -1,
+            isEnabled: isEnabled,
+            increasedContrast: contrast == .increased,
+            reduceTransparency: reduceTransparency
+        ) { index in
+            guard options.indices.contains(index) else { return }
+            selection = options[index].value
+        }
+    }
+}
+
+private struct DirectorNativeSegmentedControlBridge: NSViewRepresentable {
+    let label: String
+    let titles: [String]
+    let selectedIndex: Int
+    let isEnabled: Bool
+    let increasedContrast: Bool
+    let reduceTransparency: Bool
+    let selectionChanged: (Int) -> Void
+
+    func makeNSView(context: Context) -> DirectorNativeOutlinedSegmentedControl {
+        DirectorNativeOutlinedSegmentedControl(frame: .zero)
+    }
+
+    func updateNSView(_ control: DirectorNativeOutlinedSegmentedControl, context: Context) {
+        if control.segmentCount != titles.count { control.segmentCount = titles.count }
+        for (index, title) in titles.enumerated() {
+            control.setLabel(title, forSegment: index)
+            control.setToolTip(title, forSegment: index)
+        }
+        control.selectedSegment = selectedIndex
+        control.isEnabled = isEnabled
+        control.increasedContrast = increasedContrast
+        control.reduceTransparency = reduceTransparency
+        control.selectionChanged = selectionChanged
+        control.setAccessibilityLabel(label)
+        control.invalidateIntrinsicContentSize()
+        control.needsLayout = true
+        control.needsDisplay = true
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: DirectorNativeOutlinedSegmentedControl, context: Context) -> CGSize? {
+        nsView.fittingSize(forWidth: proposal.width)
+    }
+}
+
+/// The native cell and real segment labels remain the AX and interaction
+/// source of truth. Only this instance's painting is replaced; no window-wide
+/// control discovery, appearance mutation, private APIs or swizzling.
+final class DirectorNativeOutlinedSegmentedControl: NSSegmentedControl {
+    var increasedContrast = false
+    var reduceTransparency = false
+    var selectionChanged: ((Int) -> Void)?
+    private var hoveredSegment: Int?
+    private var pressedSegment: Int?
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        trackingMode = .selectOne
+        segmentDistribution = .fillEqually
+        segmentStyle = .rounded
+        font = NSFont.preferredFont(forTextStyle: .body)
+        focusRingType = .exterior
+        target = self
+        action = #selector(selectionDidChange)
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { isEnabled }
+
+    @objc private func selectionDidChange() {
+        needsDisplay = true
+        selectionChanged?(selectedSegment)
+    }
+
+    override func layout() {
+        super.layout()
+        guard segmentCount > 0 else { return }
+        for index in 0..<segmentCount {
+            setWidth(bounds.width / CGFloat(segmentCount), forSegment: index)
+        }
+    }
+
+    override var intrinsicContentSize: NSSize { fittingSize(forWidth: nil) }
+
+    func fittingSize(forWidth proposedWidth: CGFloat?) -> CGSize {
+        guard segmentCount > 0 else { return .zero }
+        let padding = DirectorSpacing.space1
+        let gaps = padding * CGFloat(segmentCount - 1)
+        let idealItemWidth = (0..<segmentCount).map {
+            attributedTitle(for: $0, useSemibold: true).boundingRect(
+                with: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            ).width.rounded(.up) + padding
+        }.max() ?? 0
+        let width = proposedWidth ?? (idealItemWidth + DirectorSpacing.space2 * 2) * CGFloat(segmentCount) + gaps + padding * 2
+        let textWidth = max(1, (width - padding * 2 - gaps) / CGFloat(segmentCount) - DirectorSpacing.space2 * 2)
+        let textHeight = (0..<segmentCount).map {
+            attributedTitle(for: $0, useSemibold: true).boundingRect(
+                with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            ).height.rounded(.up)
+        }.max() ?? 0
+        return CGSize(width: width, height: max(DirectorCapabilityFolderLayout.segmentHeight, textHeight + padding * 2) + padding * 2)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        hoveredSegment = segmentIndex(at: convert(event.locationInWindow, from: nil))
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hoveredSegment = nil
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        pressedSegment = segmentIndex(at: convert(event.locationInWindow, from: nil))
+        needsDisplay = true
+        displayIfNeeded()
+        super.mouseDown(with: event)
+        pressedSegment = nil
+        needsDisplay = true
+    }
+
+    private func segmentIndex(at point: CGPoint) -> Int? {
+        guard segmentCount > 0, bounds.contains(point), bounds.width > 0 else { return nil }
+        return min(segmentCount - 1, max(0, Int((point.x - bounds.minX) / bounds.width * CGFloat(segmentCount))))
+    }
+
+    private func attributedTitle(for index: Int, useSemibold: Bool = false) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
+        let weight: NSFont.Weight = useSemibold || index == selectedSegment ? .semibold : .regular
+        return NSAttributedString(
+            string: label(forSegment: index) ?? "",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: font?.pointSize ?? NSFont.systemFontSize, weight: weight),
+                .foregroundColor: NSColor(DirectorColor.textPrimary).withAlphaComponent(isEnabled ? 1 : 0.52),
+                .paragraphStyle: paragraph
+            ]
+        )
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let boundaryWidth: CGFloat = increasedContrast ? 1.5 : 1
+        let outline = NSBezierPath(roundedRect: bounds.insetBy(dx: boundaryWidth / 2, dy: boundaryWidth / 2), xRadius: DirectorRadius.control, yRadius: DirectorRadius.control)
+        NSColor(reduceTransparency ? DirectorColor.inset : DirectorColor.controlField).setFill()
+        outline.fill()
+        NSColor(DirectorColor.controlBoundary).setStroke()
+        outline.lineWidth = boundaryWidth
+        outline.stroke()
+        guard segmentCount > 0 else { return }
+        let padding = DirectorSpacing.space1
+        let itemWidth = max(0, (bounds.width - padding * 2 - padding * CGFloat(segmentCount - 1)) / CGFloat(segmentCount))
+        for index in 0..<segmentCount {
+            let rect = NSRect(x: bounds.minX + padding + CGFloat(index) * (itemWidth + padding), y: bounds.minY + padding, width: itemWidth, height: max(0, bounds.height - padding * 2))
+            let item = NSBezierPath(roundedRect: rect, xRadius: DirectorRadius.compact, yRadius: DirectorRadius.compact)
+            if index == selectedSegment || index == hoveredSegment || index == pressedSegment {
+                NSColor(DirectorColor.inset).setFill()
+                item.fill()
+            }
+            if index == selectedSegment {
+                let lineWidth: CGFloat = increasedContrast ? 2 : 1.5
+                let ring = NSBezierPath(roundedRect: rect, xRadius: DirectorRadius.compact, yRadius: DirectorRadius.compact)
+                ring.append(NSBezierPath(roundedRect: rect.insetBy(dx: lineWidth, dy: lineWidth), xRadius: DirectorRadius.compact - lineWidth, yRadius: DirectorRadius.compact - lineWidth))
+                ring.windingRule = .evenOdd
+                NSGradient(colors: [NSColor(DirectorColor.accentBlue), NSColor(DirectorColor.accentIce), NSColor(DirectorColor.accentMint)])?.draw(in: ring, angle: 0)
+            }
+            let text = attributedTitle(for: index)
+            let textWidth = max(0, rect.width - DirectorSpacing.space2 * 2)
+            let textHeight = text.boundingRect(with: CGSize(width: max(1, textWidth), height: .greatestFiniteMagnitude), options: [.usesLineFragmentOrigin, .usesFontLeading]).height.rounded(.up)
+            text.draw(with: NSRect(x: rect.minX + DirectorSpacing.space2, y: rect.midY - textHeight / 2, width: textWidth, height: textHeight), options: [.usesLineFragmentOrigin, .usesFontLeading])
+        }
+    }
+
+    override var focusRingMaskBounds: NSRect { bounds }
+
+    override func drawFocusRingMask() {
+        NSBezierPath(roundedRect: bounds, xRadius: DirectorRadius.control, yRadius: DirectorRadius.control).fill()
+    }
+}
+
+/// Neutral outlined frame around an icon-only native Menu. The frame belongs
+/// outside Menu because macOS may synthesize its label into an AppKit button
+/// and discard label-local backgrounds and sizing.
+public struct DirectorOutlinedIconMenu<Content: View>: View {
+    private let systemImage: String
+    private let content: Content
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    public init(systemImage: String, @ViewBuilder content: () -> Content) {
+        self.systemImage = systemImage
+        self.content = content()
+    }
+
+    public var body: some View {
+        Menu {
+            content
+        } label: {
+            Image(systemName: systemImage)
+                .font(DirectorTypography.segmentedControl.weight(.semibold))
+                .frame(width: DirectorCapabilityFolderLayout.iconMenuTarget, height: DirectorCapabilityFolderLayout.iconMenuTarget)
+                .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .foregroundStyle(DirectorColor.textSecondary)
+        .opacity(isEnabled ? 1 : 0.52)
+        .frame(width: DirectorCapabilityFolderLayout.iconMenuTarget, height: DirectorCapabilityFolderLayout.iconMenuTarget)
+        .background {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .fill(reduceTransparency ? DirectorColor.inset : DirectorColor.controlField)
+                .accessibilityHidden(true)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .stroke(
+                    DirectorColor.controlBoundary,
+                    lineWidth: contrast == .increased ? 1.5 : 1
+                )
+                .accessibilityHidden(true)
+        }
+        .frame(width: DirectorCapabilityFolderLayout.iconMenuTarget, height: DirectorCapabilityFolderLayout.iconMenuTarget)
+        .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+    }
+}
+
+/// Full-width outlined frame around a native `Menu` whose value must remain
+/// visible when closed. The painted field owns the hit geometry and sits
+/// outside Menu so AppKit cannot collapse it to a small pill.
+public struct DirectorOutlinedMenuField<Content: View>: View {
+    private let title: String
+    private let content: Content
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    public init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    public var body: some View {
+        Menu {
+            content
+        } label: {
+            HStack(spacing: DirectorSpacing.space2) {
+                Text(title)
+                    .lineLimit(1)
+                Spacer(minLength: DirectorSpacing.space1)
+                Image(systemName: "chevron.down")
+                    .accessibilityHidden(true)
+            }
+            .font(DirectorTypography.segmentedControl)
+            .padding(.horizontal, DirectorSpacing.space3)
+            .frame(maxWidth: .infinity, minHeight: DirectorCapabilityFolderLayout.controlHeight, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .foregroundStyle(DirectorColor.textPrimary)
+        .opacity(isEnabled ? 1 : 0.52)
+        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
+        .background {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .fill(reduceTransparency ? DirectorColor.inset : DirectorColor.controlField)
+                .accessibilityHidden(true)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .stroke(
+                    DirectorColor.controlBoundary,
+                    lineWidth: contrast == .increased ? 1.5 : 1
+                )
+                .accessibilityHidden(true)
+        }
+        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
+        .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
     }
 }
 

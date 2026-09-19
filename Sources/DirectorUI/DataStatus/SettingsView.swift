@@ -189,11 +189,14 @@ public struct SettingsView: View {
     }
 
     private var themePicker: some View {
-        Picker(t("settings.appearance", "Theme"), selection: Binding(get: { themeStore.theme }, set: { themeStore.setTheme($0) })) {
-            Text(t("settings.appearance.light", "Light")).tag(AppTheme.light)
-            Text(t("settings.appearance.dark", "Dark")).tag(AppTheme.dark)
-        }
-        .pickerStyle(.segmented)
+        DirectorOutlinedSegmentedControl(
+            t("settings.appearance", "Theme"),
+            selection: Binding(get: { themeStore.theme }, set: { themeStore.setTheme($0) }),
+            options: [
+                .init(value: .light, title: t("settings.appearance.light", "Light")),
+                .init(value: .dark, title: t("settings.appearance.dark", "Dark"))
+            ]
+        )
         .labelsHidden()
         .fixedSize()
         .accessibilityValue(themeStore.theme == .light ? t("settings.appearance.light", "Light") : t("settings.appearance.dark", "Dark"))
@@ -212,7 +215,7 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "1.3.0"
+        return version ?? "1.3.1"
     }
 
     private func section<Content: View>(ordinal: String, titleKey: String, fallback: String, tone: DirectorAccentTone, @ViewBuilder content: () -> Content) -> some View {
