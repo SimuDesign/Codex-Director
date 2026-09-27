@@ -2,7 +2,7 @@
 
 Codex Director 是一款原生 macOS 应用，用于理解和迁移个人 Codex 能力系统。它盘点 Agent、Skill、已安装插件、项目使用证据和人工评价，同时不会把调用次数或任务完成直接解释为能力有效。
 
-> 当前开发版本：`1.3.1`。需要 macOS 26 或更高版本。
+> 当前开发版本：`1.4.0`。需要 macOS 26 或更高版本。
 
 [English](README.md) · [中文更新说明](CHANGELOG.zh-CN.md) · [English version notes](CHANGELOG.md)
 

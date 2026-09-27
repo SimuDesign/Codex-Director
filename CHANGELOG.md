@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0
+
+Source update only; no Tag or GitHub Release is created by this merge. Internal build: `28`.
+
+- Recognizes ChatGPT's embedded CodexCLI application bundle even without a shell PATH, restoring the runtime discovery entry point used by live quota reads.
+- Preserves legacy application paths, explicit user-selected runtime priority, source-data boundaries, and saved folder memberships.
+- Adds regression coverage for missing legacy locations and runtime-selection priority. The local 30-day ranking and experimental list-performance work are not part of this version.
+
 All notable public changes will be documented here.
 
 The project follows semantic versioning for public releases.
