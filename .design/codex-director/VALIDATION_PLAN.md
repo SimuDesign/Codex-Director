@@ -1,6 +1,6 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.3.1`  
+Version: `1.4.0`  
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
 Last updated: 2026-09-17
 
@@ -273,7 +273,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.3.0 with internal build 25, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.4.0 with internal build 28, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 

@@ -1,6 +1,6 @@
 # Codex Director Design System v1
 
-Version: `1.3.1` (visible marketing version; internal build `26`)  
+Version: `1.4.0` (visible marketing version; internal build `28`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
 Last updated: 2026-09-17

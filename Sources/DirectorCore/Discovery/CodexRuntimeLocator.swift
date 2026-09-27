@@ -89,6 +89,13 @@ public struct CodexRuntimeLocator: Sendable {
             url: URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
             source: .chatGPTApplication
         ),
+        // ChatGPT's embedded CLI bundle layout (legacy locations above stay
+        // supported). Resolve it explicitly: Finder-launched apps need not
+        // inherit the interactive shell's PATH.
+        CodexRuntimeCandidate(
+            url: URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"),
+            source: .chatGPTApplication
+        ),
     ]
 
     private let knownApplicationCandidates: [CodexRuntimeCandidate]

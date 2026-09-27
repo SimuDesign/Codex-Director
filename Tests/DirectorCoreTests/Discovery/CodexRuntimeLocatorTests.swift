@@ -81,6 +81,39 @@ final class CodexRuntimeLocatorTests: XCTestCase {
         XCTAssertEqual(status.source, .path)
     }
 
+    func testEmbeddedChatGPTCLIFoundWithNoShellPATHAndMissingLegacyLocations() async {
+        let embedded = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+        XCTAssertTrue(CodexRuntimeLocator.defaultApplicationCandidates.contains(.init(url: embedded, source: .chatGPTApplication)))
+        let recorder = ProbeRecorder(versions: [embedded.path: "codex-cli 0.158.0-alpha.2.1"])
+        let locator = makeLocator(
+            available: [embedded.path], executable: [embedded.path], environment: [:],
+            knownCandidates: CodexRuntimeLocator.defaultApplicationCandidates, recorder: recorder
+        )
+        let status = await locator.locate()
+        XCTAssertEqual(status.executableURL, embedded)
+        XCTAssertEqual(status.source, .chatGPTApplication)
+        XCTAssertEqual(status.compatibility, .compatible)
+        XCTAssertTrue(status.isUsable)
+        let paths = await recorder.recordedPaths()
+        XCTAssertEqual(paths, [embedded.path])
+    }
+
+    func testEmbeddedChatGPTCLIKeepsLegacyAndExplicitSelectionPriority() async {
+        let candidates = CodexRuntimeLocator.defaultApplicationCandidates
+        let legacy = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")
+        let embedded = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+        let selected = URL(fileURLWithPath: "/opt/custom/codex")
+        let available = Set([legacy.path, embedded.path, selected.path])
+        let recorder = ProbeRecorder(versions: Dictionary(uniqueKeysWithValues: available.map { ($0, Optional("codex-cli 0.158.0")) }))
+        let locator = makeLocator(available: available, executable: available, environment: [:], knownCandidates: candidates, recorder: recorder)
+        let automatic = await locator.locate()
+        let explicit = await locator.locate(userSelectedURL: selected)
+        XCTAssertEqual(automatic.executableURL, legacy)
+        XCTAssertEqual(explicit.executableURL, selected)
+        let paths = await recorder.recordedPaths()
+        XCTAssertEqual(paths, [legacy.path, selected.path])
+    }
+
     func testExplicitMissingAndNonExecutableSelectionsAreReportedWithoutFallback() async {
         let fallback = URL(fileURLWithPath: "/usr/local/bin/codex")
         let missing = URL(fileURLWithPath: "/opt/missing/codex")

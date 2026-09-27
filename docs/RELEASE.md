@@ -28,11 +28,13 @@ All reusable GitHub Actions are pinned to full commit SHAs. The workflow verifie
 
 The `v<marketing-version>` tag must match `MARKETING_VERSION`. `CURRENT_PROJECT_VERSION` is a monotonically increasing integer. Public release notes must state the exact signing and notarization status.
 
-The public application currently targets `1.3.0` (build `25`). The planned
+The public application currently targets `1.4.0` (build `28`). The planned
 sequence remains historical release context; create a new tag only after the
 project version and build number are updated together and all release gates
-pass. The `1.3.0` release includes local-safe restore and Capability Folders
-while retaining manifest v1 compatibility.
+pass. The current source update adapts discovery to ChatGPT's embedded
+CodexCLI bundle and retains the earlier local-safe restore, Capability Folders,
+and manifest v1 contracts. No tag or release is implied. Unmerged local ranking
+and experimental performance changes are outside this source update.
 
 ## Workflow security
 
