@@ -1,6 +1,6 @@
 # Codex Director Design System v1
 
-Version: `1.4.0` (visible marketing version; internal build `27`)  
+Version: `1.4.1` (visible marketing version; internal build `29`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
 Last updated: 2026-09-23
@@ -788,7 +788,7 @@ retain real native controls and their existing Scheme A appearance. No
 hidden duplicate, virtual action or clickable aggregate is allowed. Fresh
 native action and scroll-restoration evidence is required.
 
-### 1.4.0 capability sorting extension
+### 1.4.1 capability sorting extension
 
 All capability-library sort menus and the three folder tabs offer an explicit
 "Past 30 days ↓ / 近 30 天调用 ↓" option immediately after the seven-day option.

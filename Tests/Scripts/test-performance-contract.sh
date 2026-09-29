@@ -186,7 +186,7 @@ report = {
     "runtimeEnvironment": {"operatingSystem": "Version 26", "architecture": "arm64", "syntheticData": True},
     "buildIdentity": {
         "bundleIdentifier": "com.peiweitang.CodexDirector.InteractionPerformance",
-        "appVersion": "1.4.0",
+        "appVersion": "1.4.1",
         "configuration": "Release",
         "optimization": "release",
         "compilationCondition": "DIRECTOR_INTERACTION_PERFORMANCE",

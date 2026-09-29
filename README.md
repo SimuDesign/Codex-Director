@@ -2,7 +2,7 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.4.0`. Requires macOS 26 or later.
+> Current development version: `1.4.1`. Requires macOS 26 or later.
 
 [简体中文](README.zh-CN.md) · [Version notes](CHANGELOG.md) · [中文更新说明](CHANGELOG.zh-CN.md)
 

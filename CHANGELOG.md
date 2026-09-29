@@ -1,29 +1,27 @@
 # Changelog
 
-All notable public changes will be documented here.
-
-The project follows semantic versioning for public releases.
+All notable public changes will be documented here. The project follows semantic versioning for public releases.
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.4.1
+
+Source update; this merge does not create a Tag or GitHub Release. Internal build: `29`.
+
+- Added remembered 7- and 30-day Home rankings and 30-day sorting across capability libraries and folder tabs. Both windows use one bounded aggregate and cached projections; switching periods does not trigger indexing, account reads, or a database query.
+- Aligned Installed Skills totals, lists, and rankings to independently installed Skills. Plugin counts remain separate, while observed plugin-provided Skills remain source-labeled in folders.
+- Moved installed-plugin inventory to the local Codex app-server's `plugin/installed` report. Partial or local-only results remain unverified rather than becoming zero, and distinct marketplaces retain distinct identities.
+- Completed offline Chinese purpose descriptions for the current Agent/Skill inventory and improved Markdown purpose parsing without indexing body instructions.
+- Improved library navigation and rendering responsiveness, folder-entry search, control hit areas, and synthetic interaction-performance validation.
+- Preserved prior source-data, folder membership, quota-history, presentation-cache schema v1, and capability-package manifest v1 boundaries.
+
 ## 1.4.0
 
-- Aligned Installed Skills totals, library rows, and 7/30-day rankings to independently installed Skills only. Plugin counts stay separate; observed plugin-provided Skills remain source-labeled in capability folders. Older cached rankings are upgraded in the background without hiding the independent total.
-- Switched production installed-plugin discovery and capability-pack inventory to the local Codex app-server's `plugin/installed` report. Partial/local-only responses stay unverified instead of being shown as zero; verified plugin identities remain distinct across marketplaces, and unavailable child Skill packages keep their last-observed warning state.
-- Completed offline Chinese purpose copy for the current Agent/Skill inventory, including changed Agent declarations and newly indexed custom, template, and plugin Skills. Identity/source-signature matching and original-language fallback remain unchanged; no capability source files or folder memberships are modified.
-- Fixed Skill purpose discovery for folded/literal multiline frontmatter descriptions and bounded opening prose in Markdown-only manifests. Missing or malformed declarations remain unknown; body instructions are not indexed as purposes. Historical session parsing and package manifest v1 are unchanged.
+Source update only; no Tag or GitHub Release was created by this merge. Internal build: `28`.
 
-- Recognizes ChatGPT's embedded CodexCLI app bundle without relying on a shell PATH, preserving legacy application locations and explicit user-selection priority for quota and runtime discovery.
-
-Local development entry; this does not imply a published Tag or GitHub Release.
-
-- Matched the Capability Folders entry title to the shared editorial scale and added its folder symbol. Entry search now filters folder names; interior search still finds capabilities, with existing memberships preserved.
-- Made search-field icons/padding focus the native editor and expanded native scope/sort/plugin-status Menu labels to the whole outlined control, retaining keyboard selection and current-value labels.
-- Added a remembered 7-day / 30-day selector to Home usage rankings. A missing or invalid preference defaults to 7 days, while subsequent launches restore the last valid selection.
-- Extended 30-day descending usage sorting to all capability lists and folder tabs, with matching list counts and unknown-last ordering. Folder entry reuses the startup aggregate or lazily loads one shared bounded aggregate; sort changes do not query or index.
-- Computes both ranking windows from one bounded 30-day SQLite aggregate and caches both Top 10 projections, so switching periods does not start indexing, refresh, account reads, or an on-demand database query.
-- Preserved schema-v1 presentation-cache compatibility: legacy rankings remain the 7-day result, while a missing 30-day projection stays distinct from a completed empty result and is upgraded through the bounded Home-only read.
-- Kept usage frequency separate from effectiveness, retained inferred-evidence labels, and preserved all existing capability-package, source-file, library, menu-bar, and quota-history contracts.
+- Recognizes ChatGPT's embedded CodexCLI application bundle even without a shell PATH, restoring the runtime discovery entry point used by live quota reads.
+- Preserves legacy application paths, explicit user-selected runtime priority, source-data boundaries, and saved folder memberships.
+- Adds regression coverage for missing legacy locations and runtime-selection priority.
 
 ## 1.3.1
 
