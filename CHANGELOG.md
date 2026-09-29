@@ -6,6 +6,25 @@ The project follows semantic versioning for public releases.
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.4.0
+
+- Aligned Installed Skills totals, library rows, and 7/30-day rankings to independently installed Skills only. Plugin counts stay separate; observed plugin-provided Skills remain source-labeled in capability folders. Older cached rankings are upgraded in the background without hiding the independent total.
+- Switched production installed-plugin discovery and capability-pack inventory to the local Codex app-server's `plugin/installed` report. Partial/local-only responses stay unverified instead of being shown as zero; verified plugin identities remain distinct across marketplaces, and unavailable child Skill packages keep their last-observed warning state.
+- Completed offline Chinese purpose copy for the current Agent/Skill inventory, including changed Agent declarations and newly indexed custom, template, and plugin Skills. Identity/source-signature matching and original-language fallback remain unchanged; no capability source files or folder memberships are modified.
+- Fixed Skill purpose discovery for folded/literal multiline frontmatter descriptions and bounded opening prose in Markdown-only manifests. Missing or malformed declarations remain unknown; body instructions are not indexed as purposes. Historical session parsing and package manifest v1 are unchanged.
+
+- Recognizes ChatGPT's embedded CodexCLI app bundle without relying on a shell PATH, preserving legacy application locations and explicit user-selection priority for quota and runtime discovery.
+
+Local development entry; this does not imply a published Tag or GitHub Release.
+
+- Matched the Capability Folders entry title to the shared editorial scale and added its folder symbol. Entry search now filters folder names; interior search still finds capabilities, with existing memberships preserved.
+- Made search-field icons/padding focus the native editor and expanded native scope/sort/plugin-status Menu labels to the whole outlined control, retaining keyboard selection and current-value labels.
+- Added a remembered 7-day / 30-day selector to Home usage rankings. A missing or invalid preference defaults to 7 days, while subsequent launches restore the last valid selection.
+- Extended 30-day descending usage sorting to all capability lists and folder tabs, with matching list counts and unknown-last ordering. Folder entry reuses the startup aggregate or lazily loads one shared bounded aggregate; sort changes do not query or index.
+- Computes both ranking windows from one bounded 30-day SQLite aggregate and caches both Top 10 projections, so switching periods does not start indexing, refresh, account reads, or an on-demand database query.
+- Preserved schema-v1 presentation-cache compatibility: legacy rankings remain the 7-day result, while a missing 30-day projection stays distinct from a completed empty result and is upgraded through the bounded Home-only read.
+- Kept usage frequency separate from effectiveness, retained inferred-evidence labels, and preserved all existing capability-package, source-file, library, menu-bar, and quota-history contracts.
+
 ## 1.3.1
 
 Local presentation patch; this entry does not imply a published Tag or GitHub Release.

@@ -92,6 +92,50 @@ final class DomainModelTests: XCTestCase {
         XCTAssertEqual(Array(values.keys), ["call:valid"])
     }
 
+    func testEvaluationDecodeCacheObservesOtherStoreWritesAndRemovals() throws {
+        let suiteName = "codex-director-evaluation-cache-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let first = InvocationEvaluationStore(defaults: defaults)
+        let second = InvocationEvaluationStore(defaults: defaults)
+        let evaluation = InvocationEvaluation(
+            invocationID: "call:cached", sessionID: "session:cached", resourceID: "agent:cached",
+            label: .effective, updatedAt: epoch
+        )
+
+        XCTAssertTrue(first.all().isEmpty)
+        XCTAssertTrue(second.set(evaluation))
+        XCTAssertEqual(first.all()[evaluation.id], evaluation)
+        XCTAssertEqual(first.all()[evaluation.id], evaluation)
+        XCTAssertTrue(second.remove(for: evaluation.id))
+        XCTAssertTrue(first.all().isEmpty)
+        XCTAssertTrue(second.set(evaluation))
+        XCTAssertEqual(first.all()[evaluation.id], evaluation)
+        XCTAssertTrue(second.removeAll())
+        XCTAssertTrue(first.all().isEmpty)
+    }
+
+    func testFailedEvaluationWriteDoesNotEnterDecodeCache() throws {
+        let existing = InvocationEvaluation(
+            invocationID: "call:existing", sessionID: "session:existing", resourceID: nil,
+            label: .uncertain, updatedAt: epoch
+        )
+        let data = try JSONEncoder().encode([existing.id: existing])
+        let store = InvocationEvaluationStore(
+            readData: { data },
+            writeData: { _ in false },
+            removeData: { false }
+        )
+        XCTAssertEqual(store.all()[existing.id], existing)
+        let rejected = InvocationEvaluation(
+            invocationID: "call:rejected", sessionID: "session:existing", resourceID: nil,
+            label: .effective, updatedAt: epoch
+        )
+        XCTAssertFalse(store.set(rejected))
+        XCTAssertNil(store.all()[rejected.id])
+        XCTAssertEqual(store.all()[existing.id], existing)
+    }
+
     func testTokenUsageRoundTripPreservesAllFields() throws {
         let usage = try TokenUsage(
             inputTokens: 10, cachedInputTokens: 2, cacheWriteInputTokens: 1,

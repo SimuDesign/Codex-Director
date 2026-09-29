@@ -94,6 +94,12 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var cacheStatus: DirectorCacheStatus = .unavailable
     @Published public private(set) var bootstrapStatus: DirectorBootstrapStatus = .idle
     @Published public private(set) var directoryLoaded = false
+    /// Nil until this process has completed a runtime plugin query. A failed
+    /// query is not equivalent to an authoritative empty installed list.
+    @Published public private(set) var pluginInventoryAvailable: Bool?
+    /// Independently tracks whether every installed plugin had an approved
+    /// local package root for child Skill attribution.
+    @Published public private(set) var pluginPackagesAvailable: Bool?
     @Published public private(set) var statisticsWindow: CapabilityQueryWindow?
     @Published public private(set) var hasComputedStatistics = false
     @Published public private(set) var libraryQueryStatus: [CapabilityCategory: DirectorLibraryQueryStatus] = [:]
@@ -108,6 +114,7 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var capabilityRestoreProgress: CapabilityRestoreProgress?
     @Published public private(set) var isCapabilityRestoring = false
     @Published public private(set) var menuBarEnabled: Bool
+    @Published public private(set) var homeUsageRankingPeriod: HomeUsageRankingPeriod
     @Published public private(set) var accountUsageSnapshot: CodexAccountUsageSnapshot?
     @Published public private(set) var accountUsageError: String?
     @Published public private(set) var accountUsageReadRevision: UInt64 = 0
@@ -280,6 +287,9 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var review: ReviewViewModel
     @Published public private(set) var libraryModels: [CapabilityLibraryViewModel]
     @Published public private(set) var recentCapabilityStats: [CapabilityUsageStats] = []
+    @Published public private(set) var folderUsagePeriods: [String: CapabilityUsagePeriodSnapshot]?
+    private var folderUsageWindow: CapabilityQueryWindow?
+    private var folderUsageLoadTask: Task<Void, Never>?
     @Published public var quotaSourceID: String?
     public private(set) var statisticsCalendar: Calendar
     private let nowProvider: @Sendable () -> Date
@@ -289,14 +299,20 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var lastIndexCompletedAt: Date?
     private var hasCompletedIndexPass = false
     private var libraryReloadGeneration: [String: Int] = [:]
+    #if DIRECTOR_INTERACTION_PERFORMANCE
+    /// Synthetic harness rendezvous only; never persisted or shipped.
+    public private(set) var performanceLibraryReloadCompletions: [CapabilityCategory: Int] = [:]
+    #endif
     public let classificationOverrides: ResourceClassificationOverrideStore
     public let evaluationStore: InvocationEvaluationStore
     public let capabilityFolderStore: CapabilityFolderStore
     private let menuBarPreferences: MenuBarPreferences
+    private let homeUsageRankingPreferences: HomeUsageRankingPreferences
     /// Keeps model instances in separate windows aligned with the shared
     /// application preference. The App scene and Settings may observe the
     /// same store through different model instances.
     private var menuBarPreferencesCancellable: AnyCancellable?
+    private var homeUsageRankingPreferencesCancellable: AnyCancellable?
 
     public private(set) var store: DatabaseStore?
     public private(set) var readStore: DatabaseStore?
@@ -391,6 +407,7 @@ public final class DirectorAppModel: ObservableObject {
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
         presentationRefreshCoordinator: RefreshCoordinator? = nil,
         menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
+        homeUsageRankingPreferences: HomeUsageRankingPreferences = HomeUsageRankingPreferences(memoryPeriod: .sevenDays),
         accountUsageReading: CodexAccountUsageReading? = nil,
         capabilityFolderStore: CapabilityFolderStore = CapabilityFolderStore.makeMemory()
     ) {
@@ -407,6 +424,8 @@ public final class DirectorAppModel: ObservableObject {
         self.accountUsageRefreshScheduler = nil
         self.menuBarPreferences = menuBarPreferences
         self.menuBarEnabled = menuBarPreferences.snapshot().isEnabled
+        self.homeUsageRankingPreferences = homeUsageRankingPreferences
+        self.homeUsageRankingPeriod = homeUsageRankingPreferences.snapshot()
         self.accountUsageSnapshot = nil
         self.accountUsageError = nil
         self.presentationRefreshCoordinator = presentationRefreshCoordinator
@@ -500,6 +519,20 @@ public final class DirectorAppModel: ObservableObject {
                 self.menuBarEnabled = enabled
                 self.accountUsageRefreshScheduler?.setEnabled(enabled)
             }
+        self.homeUsageRankingPreferencesCancellable = homeUsageRankingPreferences.$period
+            .removeDuplicates()
+            .sink { [weak self] period in
+                guard let self, self.homeUsageRankingPeriod != period else { return }
+                self.homeUsageRankingPeriod = period
+            }
+    }
+
+    /// Changes only the Home ranking projection. Both bounded result sets are
+    /// already present in the cache after a successful startup/upgrade, so a
+    /// period switch never starts indexing, refresh, account usage, or a
+    /// SQLite read.
+    public func setHomeUsageRankingPeriod(_ period: HomeUsageRankingPeriod) {
+        homeUsageRankingPreferences.setPeriod(period)
     }
 
     /// Installs services after the first window is already visible. This
@@ -786,7 +819,7 @@ public final class DirectorAppModel: ObservableObject {
     private func scheduleHomeRankingUpgradeIfNeeded() {
         guard homeRankingUpgradeTask == nil,
               let home = presentationHomeSummary,
-              home.rankingCapacity < PresentationHomeSummary.currentRankingCapacity,
+              home.needsRankingUpgrade,
               let window = statisticsWindow,
               readStore != nil,
               presentationSnapshotStore != nil,
@@ -821,7 +854,7 @@ public final class DirectorAppModel: ObservableObject {
                   classification == self.classificationEpoch,
                   classificationRevision == self.currentClassificationRevision,
                   self.statisticsWindow == window,
-                  self.presentationHomeSummary.map { $0.rankingCapacity < PresentationHomeSummary.currentRankingCapacity } == true,
+                  self.presentationHomeSummary?.needsRankingUpgrade == true,
                   !self.visibleWindowIDs.isEmpty,
                   !self.isSystemSleeping,
                   !self.isDeletingDerivedData else { return }
@@ -1014,6 +1047,8 @@ public final class DirectorAppModel: ObservableObject {
                 }
             }
             guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
+            pluginInventoryAvailable = result.runtimePluginInventoryAvailable
+            pluginPackagesAvailable = result.runtimePluginPackagesAvailable
             indexingProgress = .init(
                 phase: result.cancelled ? .cancelled : .completed,
                 processedFiles: result.processedFiles,
@@ -1037,7 +1072,8 @@ public final class DirectorAppModel: ObservableObject {
                 guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
                 presentationRefreshCoordinator?.setAutomaticSourceEnabled(true)
                 diagnosticsRequestSequence &+= 1
-                presentationDiagnostics = nil
+                // Keep the last valid bounded diagnostics while an open
+                // Settings view reloads them for the new index generation.
                 diagnosticsError = nil
                 hasCompletedIndexPass = true
                 lastIndexCompletedAt = completedAt
@@ -1144,10 +1180,10 @@ public final class DirectorAppModel: ObservableObject {
         let generation = (libraryReloadGeneration[category.rawValue] ?? 0) + 1
         libraryReloadGeneration[category.rawValue] = generation
         let requestedScope = scope
-        libraryQueryStatus[category] = .loading
-        library.isLoading = true
-        library.loadError = nil
         defer {
+            #if DIRECTOR_INTERACTION_PERFORMANCE
+            performanceLibraryReloadCompletions[category, default: 0] += 1
+            #endif
             if libraryReloadGeneration[category.rawValue] == generation,
                library.context.scope == requestedScope,
                library.isLoading {
@@ -1162,7 +1198,13 @@ public final class DirectorAppModel: ObservableObject {
             // Capture the identity and classification fingerprint before the
             // bounded DTO query. The key prevents a later database generation
             // or classification from being attached to an older result.
+            #if DIRECTOR_INTERACTION_PERFORMANCE
+            let identityStart = DispatchTime.now().uptimeNanoseconds
+            #endif
             let identity = try await readStore.presentationIdentity()
+            #if DIRECTOR_INTERACTION_PERFORMANCE
+            InteractionPerformanceProbe.record(.identityRead, since: identityStart)
+            #endif
             let classificationRevision = currentClassificationRevision
             let key = LibraryPresentationKey(
                 category: category,
@@ -1175,10 +1217,18 @@ public final class DirectorAppModel: ObservableObject {
             if libraryPresentationKeys[category.rawValue] == key,
                libraryResultContext[category]?.scope == requestedScope,
                libraryResultContext[category]?.window == window {
-                library.isLoading = false
-                libraryQueryStatus[category] = .loaded(window)
+                if library.isLoading { library.isLoading = false }
+                if library.loadError != nil { library.loadError = nil }
+                if libraryQueryStatus[category] != .loaded(window) {
+                    libraryQueryStatus[category] = .loaded(window)
+                }
                 return
             }
+            // A valid warm presentation needs no loading publication. On a
+            // real miss, retain the last rows while the bounded read runs.
+            libraryQueryStatus[category] = .loading
+            library.isLoading = true
+            library.loadError = nil
             let snapshot = try await readStore.fetchLibraryPresentation(
                 category: category,
                 window: window,
@@ -1212,6 +1262,9 @@ public final class DirectorAppModel: ObservableObject {
             libraryQueryStatus[category] = .loaded(window)
         } catch {
             guard isCurrentLibraryRequest(category: category, generation: generation, scope: requestedScope) else { return }
+            #if DIRECTOR_INTERACTION_PERFORMANCE
+            InteractionPerformanceProbe.increment(.libraryReloadFailure)
+            #endif
             library.isLoading = false
             library.loadError = error.localizedDescription
             libraryQueryStatus[category] = .failed
@@ -1337,6 +1390,47 @@ public final class DirectorAppModel: ObservableObject {
     /// batch projection rather than rescanning events for each row.
     public func companionUsageStats(for relation: CapabilityCompanionRelation) -> CapabilityCompanionUsageStats {
         capabilityCompanionUsageByRelationID[relation.id] ?? .unavailable
+    }
+
+    /// One shared bounded read on folder entry when no full startup projection
+    /// has populated the periods yet. Search, tab, member and sort changes only
+    /// consume this dictionary; they never initiate queries.
+    public func loadCapabilityFolderUsageIfNeeded() async {
+        guard let readStore, directoryLoaded, !isDeletingDerivedData else { return }
+        if let pending = folderUsageLoadTask {
+            await pending.value
+            guard !Task.isCancelled else { return }
+        }
+        let window = statisticsWindow ?? CapabilityQueryWindow.recent7(now: nowProvider(), calendar: statisticsCalendar)
+        guard folderUsageWindow != window || folderUsagePeriods == nil else { return }
+        let epoch = lifecycleEpoch
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = window.timeZone
+        let thirty = CapabilityQueryWindow.recent30(now: window.end, calendar: calendar)
+        let task = Task { [weak self] in
+            guard let self else { return }
+            defer { self.folderUsageLoadTask = nil }
+            do {
+                let identity = try await readStore.presentationIdentity()
+                let periods = try await readStore.fetchCapabilityUsagePeriodStats(sevenDayWindow: window, thirtyDayWindow: thirty)
+                let currentIdentity = try await readStore.presentationIdentity()
+                guard !Task.isCancelled, self.lifecycleEpoch == epoch, !self.isDeletingDerivedData,
+                      identity == currentIdentity,
+                      self.statisticsWindow == nil || self.statisticsWindow == window else { return }
+                self.folderUsagePeriods = Dictionary(uniqueKeysWithValues: periods.map { ($0.resourceID, $0) })
+                self.folderUsageWindow = window
+            } catch {
+                // Preserve the last valid projection. Unknown never becomes zero.
+            }
+        }
+        folderUsageLoadTask = task
+        await task.value
+    }
+
+    public func capabilityFolderUsageCount(for id: String, thirtyDays: Bool) -> Int? {
+        guard let folderUsagePeriods else { return nil }
+        guard let period = folderUsagePeriods[id] else { return 0 }
+        return (thirtyDays ? period.thirtyDay : period.sevenDay)?.callCount ?? 0
     }
 
     /// Public cache/projection entry point for the capability-folder UI. It
@@ -1575,7 +1669,7 @@ public final class DirectorAppModel: ObservableObject {
     public func retryCapabilityFolderPreferences() {
         do {
             _ = try capabilityFolderStore.ensureInitialized()
-            refreshCapabilityFolderProjection()
+            refreshCapabilityFolderProjection(invalidateCompanionUsage: false)
             capabilityFolderError = nil
         } catch {
             capabilityFolderError = folderErrorKey(error)
@@ -1620,7 +1714,10 @@ public final class DirectorAppModel: ObservableObject {
             try capabilityFolderStore.save(preferences)
             capabilityFolderPreferencesState = capabilityFolderStore.preferencesState()
             capabilityFolderError = nil
-            refreshCapabilityFolderProjection()
+            // Membership and folder order change only the browsing projection;
+            // they do not change indexed calls, relation declarations, or the
+            // statistics window. Preserve the shared evidence batch.
+            refreshCapabilityFolderProjection(invalidateCompanionUsage: false)
         } catch {
             capabilityFolderError = folderErrorKey(error)
             throw error
@@ -1640,16 +1737,18 @@ public final class DirectorAppModel: ObservableObject {
         }
     }
 
-    private func refreshCapabilityFolderProjection() {
+    private func refreshCapabilityFolderProjection(invalidateCompanionUsage: Bool = true) {
         capabilityFolderPreferencesState = capabilityFolderStore.preferencesState()
-        capabilityCompanionUsageGeneration &+= 1
-        // Allow a new generation to load immediately. Any prior load checks
-        // the generation before publication and is therefore harmless when
-        // its detached calculation finishes later.
-        capabilityCompanionUsageIsLoading = false
-        capabilityCompanionUsageByRelationID = [:]
-        capabilityCompanionUsageWindow = nil
-        capabilityCompanionUsageRelationIDs = []
+        if invalidateCompanionUsage {
+            capabilityCompanionUsageGeneration &+= 1
+            // Allow a new generation to load immediately. Any prior load checks
+            // the generation before publication and is therefore harmless when
+            // its detached calculation finishes later.
+            capabilityCompanionUsageIsLoading = false
+            capabilityCompanionUsageByRelationID = [:]
+            capabilityCompanionUsageWindow = nil
+            capabilityCompanionUsageRelationIDs = []
+        }
         // Self Training is intentionally empty for new installs. Never infer
         // membership from the current catalog: existing saved memberships are
         // user's explicit organization and must survive refreshes/restarts.
@@ -1742,11 +1841,19 @@ public final class DirectorAppModel: ObservableObject {
         }
         libraryPresentationKeys.removeAll(keepingCapacity: false)
         syncLibraryCatalog()
-        presentationHomeSummary = HomeOverviewModel(
+        let rebuiltHomeSummary = HomeOverviewModel(
             catalog: CapabilityCatalog(resources: capabilities.allRows.map(\.resource), relations: capabilities.relations),
             usage: recentCapabilityStats
         ).presentationSummary
-        revokePresentationCache()
+        // A classification correction changes the category carried by every
+        // cached ranking row. Keep the current seven-day projection visible,
+        // but discard the thirty-day set until the isolated Home query has
+        // rebuilt it from the corrected catalog. Clearing the permit prevents
+        // account-only writers from publishing against the old revision while
+        // the Home-only upgrade remains read-only with respect to source data.
+        presentationHomeSummary = rebuiltHomeSummary
+        presentationCachePermit = nil
+        scheduleHomeRankingUpgradeIfNeeded()
     }
 
     /// Re-runs indexing when source sessions were modified after the last refresh.
@@ -2369,6 +2476,8 @@ public final class DirectorAppModel: ObservableObject {
         hasComputedStatistics = snapshot.quota != nil
         if let quota = snapshot.quota {
             recentCapabilityStats = []
+            folderUsagePeriods = nil
+            folderUsageWindow = nil
             quotaSourceID = quotaSourceID ?? quota.sources.first?.id
         }
         lastIndexCompletedAt = snapshot.lastIndexCompletedAt
@@ -2400,6 +2509,8 @@ public final class DirectorAppModel: ObservableObject {
         accountUsageError = nil
         presentationHomeSummary = nil
         recentCapabilityStats = []
+        folderUsagePeriods = nil
+        folderUsageWindow = nil
         statisticsWindow = nil
         hasComputedStatistics = false
         quotaSourceID = nil
@@ -2488,8 +2599,7 @@ public final class DirectorAppModel: ObservableObject {
                     if let schedule = snapshot.refreshSchedule {
                         scheduler.restoreScheduleState(schedule)
                         homeRankingRetryPending = snapshot.home.map {
-                            $0.rankingCapacity < PresentationHomeSummary.currentRankingCapacity &&
-                            schedule.projectionRetryDate != nil
+                            $0.needsRankingUpgrade && schedule.projectionRetryDate != nil
                         } ?? false
                     } else if let sourceCheck = snapshot.lastSourceCheckAt {
                         scheduler.restoreSuccessfulCheck(at: sourceCheck)
@@ -2534,15 +2644,13 @@ public final class DirectorAppModel: ObservableObject {
                         scheduleHomeRankingUpgradeIfNeeded()
                         return true
                     }
-                    let legacyHomeNeedsUpgrade = snapshot.home.map {
-                        $0.rankingCapacity < PresentationHomeSummary.currentRankingCapacity
-                    } ?? false
+                    let legacyHomeNeedsUpgrade = snapshot.home?.needsRankingUpgrade ?? false
                     if !visibleWindowIDs.isEmpty, !isSystemSleeping, !legacyHomeNeedsUpgrade {
                         scheduler.scheduleStartup(domains: [.quota, .directory])
                     } else if legacyHomeNeedsUpgrade {
-                        // The expired cache still has usable legacy Home rows.
-                        // Defer the normal broad refresh until the isolated
-                        // Top10 upgrade has completed, so queued startup work
+                        // The expired cache still has usable Home rows. Defer
+                        // the normal broad refresh until the isolated ranking
+                        // upgrade has completed, so queued startup work
                         // cannot merge into the Home-only batch.
                         normalPresentationRefreshDeferred = true
                     }
@@ -2691,8 +2799,13 @@ public final class DirectorAppModel: ObservableObject {
         let provenance = directory.provenance
         let quota = startup.quota
         let recentUsage = startup.recentUsage
+        let recentUsageThirtyDay = startup.recentUsagePeriods.compactMap(\.thirtyDay)
         let immutableCatalog = classifiedCatalog(resources: resources, relations: relations)
-        let homeSummary = await buildHomeSummary(catalog: immutableCatalog, usage: recentUsage)
+        let homeSummary = await buildHomeSummary(
+            catalog: immutableCatalog,
+            usage: recentUsage,
+            thirtyDayUsage: recentUsageThirtyDay
+        )
         try await presentationProjectionTestHook?()
         try Task.checkCancellation()
         let currentIdentity = try await readStore.presentationIdentity()
@@ -2719,6 +2832,8 @@ public final class DirectorAppModel: ObservableObject {
         applyClassificationOverrides()
         let catalog = CapabilityCatalog(resources: capabilities.allRows.map(\.resource), relations: capabilities.relations).entries
         recentCapabilityStats = recentUsage
+        folderUsagePeriods = Dictionary(uniqueKeysWithValues: startup.recentUsagePeriods.map { ($0.resourceID, $0) })
+        folderUsageWindow = window
         quotaOverviewSnapshot = quota
         presentationHomeSummary = homeSummary
         for library in libraryModels {
@@ -2727,7 +2842,9 @@ public final class DirectorAppModel: ObservableObject {
             library.setData(catalog: catalog, categoryStats: recentUsage,
                             browseStats: library.browseStats,
                             browseHistory: library.browseHistory,
-                            usageProjects: library.usageProjects)
+                            usageProjects: library.usageProjects,
+                            category30DayStats: recentUsageThirtyDay,
+                            browse30DayStats: library.browse30StatsReady ? library.browse30DayStats : nil)
             library.setProjects(projects)
         }
         hasIndexedData = !resources.isEmpty || directory.indexedSessionCount > 0
@@ -2840,7 +2957,7 @@ public final class DirectorAppModel: ObservableObject {
               let snapshotStore = presentationSnapshotStore,
               let window = statisticsWindow,
               let currentHome = presentationHomeSummary,
-              currentHome.rankingCapacity < PresentationHomeSummary.currentRankingCapacity,
+              currentHome.needsRankingUpgrade,
               !isDeletingDerivedData,
               !visibleWindowIDs.isEmpty,
               selection == .home,
@@ -2853,7 +2970,11 @@ public final class DirectorAppModel: ObservableObject {
             resources: projection.directory.resources,
             relations: projection.directory.relations
         )
-        let upgraded = await buildHomeSummary(catalog: catalog, usage: projection.recentUsage)
+        let upgraded = await buildHomeSummary(
+            catalog: catalog,
+            usage: projection.recentUsage,
+            thirtyDayUsage: projection.recentUsagePeriods.compactMap(\.thirtyDay)
+        )
         try await presentationProjectionTestHook?()
         try Task.checkCancellation()
         let currentIdentity = try await readStore.presentationIdentity()
@@ -2861,7 +2982,7 @@ public final class DirectorAppModel: ObservableObject {
               isCurrent(ticket),
               currentIdentity == ticket.identity,
               statisticsWindow == window,
-              presentationHomeSummary.map { $0.rankingCapacity < PresentationHomeSummary.currentRankingCapacity } == true,
+              presentationHomeSummary?.needsRankingUpgrade == true,
               upgradeGeneration == homeRankingUpgradeGeneration,
               selection == .home,
               !visibleWindowIDs.isEmpty,
@@ -2870,14 +2991,13 @@ public final class DirectorAppModel: ObservableObject {
         }
         guard let permit = ticket.permit,
               let existing = try await snapshotStore.read(expectedIdentity: ticket.identity),
-              existing.window == window,
-              existing.classificationRevision == ticket.classificationRevision else {
+              existing.window == window else {
             throw CancellationError()
         }
         let merged = PresentationSnapshot(
             schemaVersion: existing.schemaVersion,
             identity: existing.identity,
-            classificationRevision: existing.classificationRevision,
+            classificationRevision: ticket.classificationRevision,
             window: existing.window,
             generatedAt: existing.generatedAt,
             lastSourceCheckAt: existing.lastSourceCheckAt,
@@ -2885,6 +3005,7 @@ public final class DirectorAppModel: ObservableObject {
             statisticsThrough: existing.statisticsThrough,
             quota: existing.quota,
             home: upgraded,
+            accountUsage: existing.accountUsage,
             failureCount: existing.failureCount,
             nextRetryAt: existing.nextRetryAt,
             refreshSchedule: existing.refreshSchedule
@@ -2913,10 +3034,11 @@ public final class DirectorAppModel: ObservableObject {
 
     private func buildHomeSummary(
         catalog: CapabilityCatalog,
-        usage: [CapabilityUsageStats]
+        usage: [CapabilityUsageStats],
+        thirtyDayUsage: [CapabilityUsageStats]? = nil
     ) async -> PresentationHomeSummary {
         let task = Task.detached(priority: .utility) {
-            HomeOverviewModel(catalog: catalog, usage: usage).presentationSummary
+            HomeOverviewModel(catalog: catalog, usage: usage, thirtyDayUsage: thirtyDayUsage).presentationSummary
         }
         return await withTaskCancellationHandler(operation: {
             await task.value
@@ -3054,6 +3176,9 @@ public final class DirectorAppModel: ObservableObject {
         usage = UsageViewModel(quotaSnapshots: [], tokenSnapshots: [], now: nowProvider())
         review = ReviewViewModel(findings: [])
         recentCapabilityStats = []
+        folderUsagePeriods = nil
+        folderUsageWindow = nil
+        folderUsageLoadTask?.cancel()
         quotaOverviewSnapshot = nil
         accountUsageSnapshot = nil
         accountUsageRefreshScheduler?.updateSnapshot(nil)
@@ -3075,6 +3200,8 @@ public final class DirectorAppModel: ObservableObject {
         hasCompletedIndexPass = false
         hasIndexedData = false
         directoryLoaded = false
+        pluginInventoryAvailable = nil
+        pluginPackagesAvailable = nil
         statisticsWindow = nil
         hasComputedStatistics = false
         hasLoadedInitialData = false
@@ -3099,6 +3226,9 @@ public final class DirectorAppModel: ObservableObject {
         accountUsageError = nil
         presentationHomeSummary = nil
         recentCapabilityStats = []
+        folderUsagePeriods = nil
+        folderUsageWindow = nil
+        folderUsageLoadTask?.cancel()
         quotaSourceID = nil
         lastRefresh = nil
         lastIndexCompletedAt = nil

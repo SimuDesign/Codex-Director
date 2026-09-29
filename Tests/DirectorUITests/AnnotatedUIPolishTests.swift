@@ -85,14 +85,48 @@ final class AnnotatedUIPolishTests: XCTestCase {
 
     func testCapabilityProjectGroupsHaveSpacingAndProminentProjectHeaders() throws {
         let library = try source("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift")
-        let shared = try source("Sources/DirectorUI/DesignSystem/DirectorSharedComponents.swift")
 
-        XCTAssertTrue(library.contains("groupRowInsets"))
-        XCTAssertTrue(library.contains("bottom: closesGroup ? DirectorSpacing.space5 : base.bottom"))
-        XCTAssertTrue(library.contains("symbolName: group.id == \"__global__\""))
-        XCTAssertTrue(library.contains("CapabilityGroupHeaderBorder().fill"))
-        XCTAssertTrue(shared.contains("public let symbolName: String?"))
-        XCTAssertTrue(shared.contains(".title3.weight(.semibold)"))
+        XCTAssertTrue(library.contains("hasPrecedingGroup: group.id != groups.first?.id"))
+        XCTAssertTrue(library.contains("group.id == \"__global__\" ? \"globe\" : \"folder.fill\""))
+        XCTAssertTrue(library.contains("CapabilityGroupHeaderBorder(isCollapsed: isCollapsed).fill"))
+        XCTAssertTrue(library.contains(".title3.weight(.semibold)"))
+        XCTAssertTrue(library.contains("Text(groupCount)"))
+        XCTAssertTrue(library.contains("Spacer(minLength: DirectorSpacing.space3)"))
+        XCTAssertTrue(library.contains("return Button {\n            if groupDisclosure.toggle(group.id)"))
+    }
+
+    func testCapabilityGroupDisclosureDefaultsExpandedAndTracksGroupsIndependently() {
+        var disclosure = CapabilityLibraryDisclosureState()
+        XCTAssertFalse(disclosure.isCollapsed("__global__"))
+        XCTAssertFalse(disclosure.isCollapsed("project-a"))
+        XCTAssertTrue(disclosure.toggle("__global__"))
+        XCTAssertTrue(disclosure.isCollapsed("__global__"))
+        XCTAssertFalse(disclosure.isCollapsed("project-a"))
+        XCTAssertTrue(disclosure.toggle("project-a"))
+        XCTAssertFalse(disclosure.toggle("__global__"))
+        XCTAssertFalse(disclosure.isCollapsed("__global__"))
+        XCTAssertTrue(disclosure.isCollapsed("project-a"))
+        disclosure.revealAll()
+        XCTAssertFalse(disclosure.isCollapsed("project-a"))
+    }
+
+    func testCapabilityGroupDisclosureKeepsListSelectionAndSearchContracts() throws {
+        let library = try source("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift")
+        let english = try source("Sources/DirectorUI/Resources/en.lproj/Localizable.strings")
+        let chinese = try source("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings")
+
+        XCTAssertTrue(library.contains("List(selection: $model.selectedID)"))
+        XCTAssertTrue(library.contains("if !groupDisclosure.isCollapsed(group.id)"))
+        XCTAssertTrue(library.contains(".onChange(of: model.context.search) { _, _ in groupDisclosure.revealAll() }"))
+        XCTAssertTrue(library.contains("group.rows.contains(where: { $0.id == model.selectedID })"))
+        XCTAssertTrue(library.contains(".selectionDisabled()"))
+        XCTAssertTrue(library.contains(".accessibilityLabel(actionLabel)"))
+        XCTAssertTrue(library.contains(".accessibilityValue("))
+        for localization in [english, chinese] {
+            for key in ["library.group.expand", "library.group.collapse", "library.group.expanded", "library.group.collapsed", "library.groupCount.singular"] {
+                XCTAssertTrue(localization.contains("\"\(key)\""))
+            }
+        }
     }
 
     func testCapabilityProjectGroupsUseTwentyPointInterGroupSpacing() throws {
@@ -100,8 +134,11 @@ final class AnnotatedUIPolishTests: XCTestCase {
         let spacing = try source("Sources/DirectorUI/DesignSystem/DirectorSpacing.swift")
         let design = try source(".design/codex-director/DESIGN_SYSTEM_V1.md")
 
-        XCTAssertTrue(library.contains("bottom: closesGroup ? DirectorSpacing.space5 : base.bottom"))
-        XCTAssertTrue(library.contains("Only the final row owns the inter-group gap"))
+        XCTAssertTrue(library.contains(".padding(.top, hasPrecedingGroup ? DirectorSpacing.space5 : 0)"))
+        XCTAssertTrue(library.contains("hasPrecedingGroup: group.id != groups.first?.id"))
+        XCTAssertFalse(library.contains("interGroupSpace"))
+        XCTAssertTrue(library.contains(".listRowInsets(rowInsets)"))
+        XCTAssertFalse(library.contains("groupRowInsets"))
         XCTAssertTrue(spacing.contains("public static let space5: CGFloat = 20"))
         XCTAssertTrue(design.contains("exactly 20pt") || design.contains("exactly 20 pt"))
     }

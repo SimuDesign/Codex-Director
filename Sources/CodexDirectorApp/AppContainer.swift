@@ -82,6 +82,7 @@ struct AppContainer: Sendable {
         let runtimeDiscovery = runtimeStatus.isUsable ? runtimeStatus.executableURL.map { executable in
             CodexRuntimeDiscovery(
                 commandClient: ProcessRuntimeCommandClient(executableURL: executable),
+                installedPluginReading: CodexInstalledPluginReading(executableURL: executable),
                 codexExecutableURL: executable,
                 approvedSourceRoots: approvedSourceRoots
             )
@@ -145,7 +146,7 @@ struct AppContainer: Sendable {
         let pluginProvider: any CapabilityPluginInventoryProviding
         if let executable {
             pluginProvider = RuntimeCapabilityPluginInventoryProvider(
-                commandClient: ProcessRuntimeCommandClient(executableURL: executable)
+                installedPluginReading: CodexInstalledPluginReading(executableURL: executable)
             )
         } else {
             pluginProvider = UnavailableCapabilityPluginInventoryProvider()

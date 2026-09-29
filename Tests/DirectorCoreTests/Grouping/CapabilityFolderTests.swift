@@ -209,6 +209,48 @@ final class CapabilityFolderTests: XCTestCase {
         XCTAssertEqual(projection.companionRelations.first?.pairID, "agent:pair|skill:pair")
     }
 
+    func testIndexedCompanionsKeepMultiFolderPreviewAndReverseLinksStable() {
+        let agent = resource(id: "agent:pair", name: "Agent", kind: .agent, ownership: .userOwned)
+        let first = resource(id: "skill:first", name: "Alpha", kind: .skill, ownership: .userOwned)
+        let second = resource(id: "skill:second", name: "Beta", kind: .skill, ownership: .userOwned)
+        let otherAgent = resource(id: "agent:other", name: "Other", kind: .agent, ownership: .userOwned)
+        let folders = [
+            CapabilityFolderDefinition(id: "first", source: .custom, customName: "First"),
+            CapabilityFolderDefinition(id: "second", source: .custom, customName: "Second")
+        ]
+        let preferences = CapabilityFolderPreferencesV1(
+            customFolders: folders,
+            memberships: [
+                .init(folderID: "first", resourceID: agent.id),
+                .init(folderID: "first", resourceID: first.id),
+                .init(folderID: "second", resourceID: agent.id),
+                .init(folderID: "second", resourceID: second.id)
+            ]
+        )
+        let relations = [
+            ResourceRelation(sourceResourceID: agent.id, targetResourceID: second.id, relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue, confidence: .exact, evidenceSummary: CapabilityCompanionDeclarationSource.agentBrief.rawValue),
+            ResourceRelation(sourceResourceID: agent.id, targetResourceID: first.id, relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue, confidence: .exact, evidenceSummary: CapabilityCompanionDeclarationSource.projectRegistry.rawValue),
+            ResourceRelation(sourceResourceID: otherAgent.id, targetResourceID: first.id, relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue, confidence: .exact, evidenceSummary: CapabilityCompanionDeclarationSource.skillDescription.rawValue)
+        ]
+        let projection = CapabilityFolderProjection(resources: [agent, first, second, otherAgent], preferences: preferences, relations: relations)
+
+        for _ in 0..<10 {
+            let firstLinks = projection.companionSkills(for: agent.id, in: "first")
+            XCTAssertEqual(firstLinks.map(\.resource.id), [first.id, second.id])
+            XCTAssertEqual(firstLinks.map(\.isPreview), [false, true])
+            XCTAssertEqual(firstLinks.map(\.relation.declarationSource), [.projectRegistry, .agentBrief])
+            let secondLinks = projection.companionSkills(for: agent.id, in: "second")
+            XCTAssertEqual(secondLinks.map(\.isPreview), [true, false])
+            XCTAssertEqual(projection.relatedAgents(for: first.id, in: "first").map(\.resource.id), [agent.id, otherAgent.id])
+            XCTAssertEqual(projection.relatedAgents(for: first.id, in: "first").map(\.isPreview), [false, true])
+            XCTAssertEqual(projection.relatedAgentCount(for: first.id), 2)
+            XCTAssertEqual(projection.relatedAgentCount(for: second.id), 1)
+            XCTAssertTrue(projection.companionSkills(for: "absent", in: "first").isEmpty)
+            XCTAssertTrue(projection.relatedAgents(for: "absent", in: "first").isEmpty)
+            XCTAssertEqual(projection.relatedAgentCount(for: "absent"), 0)
+        }
+    }
+
     func testPreferencesRejectDuplicateNamesAndUnknownMembershipFolders() throws {
         let duplicateName = CapabilityFolderPreferencesV1(
             customFolders: [

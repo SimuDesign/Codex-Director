@@ -72,6 +72,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
     private var loadTask: Task<Void, Never>?
     private var findingsTask: Task<Void, Never>?
     private var findingsGeneration: Int = 0
+    private var evaluationRevision = 0
     private var observedProjectIDs = Set<String>()
 
     public init(
@@ -99,10 +100,15 @@ public final class CapabilityDetailViewModel: ObservableObject {
         self.findingsState = self.findings.isEmpty ? .idle : .loaded
         self.onEvaluationChange = onEvaluationChange; self.onClassify = onClassify
         self.onResetClassification = onResetClassification
-        if let evaluationStore { self.evaluations = evaluationStore.all() }
+        // Evidence is an explicit disclosure. Do not decode every saved
+        // evaluation synchronously merely to open the metadata sheet.
     }
 
     public var recent7Count: Int? { row.recent7Count }
+    /// Optional thirty-day context is populated by the library projection and
+    /// Home ranking deep links. Folder and legacy callers keep this nil, so
+    /// their existing seven-day detail contract remains unchanged.
+    public var recent30Count: Int? { row.recent30Count }
     public var inferredCount: Int { row.inferredCount }
     public var usageProjectNames: [String] {
         let ids = !usageProjectIDs.isEmpty ? usageProjectIDs : observedProjectIDs
@@ -197,6 +203,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
             return
         }
         do {
+            let requestedEvaluationRevision = evaluationRevision
             let window = CapabilityQueryWindow(start: Calendar.current.date(byAdding: .day, value: -36500, to: now) ?? .distantPast, end: now)
             let result: CapabilityDetailInvocationPage
             if let invocationLoader {
@@ -217,7 +224,18 @@ public final class CapabilityDetailViewModel: ObservableObject {
             } else {
                 result = CapabilityDetailInvocationPage(items: [], nextCursor: nil)
             }
+            let loadedEvaluations: [String: InvocationEvaluation]?
+            if !append, let evaluationStore {
+                loadedEvaluations = await Task.detached(priority: .utility) {
+                    evaluationStore.all()
+                }.value
+            } else {
+                loadedEvaluations = nil
+            }
             guard !Task.isCancelled, token == generation else { return }
+            if let loadedEvaluations, requestedEvaluationRevision == evaluationRevision {
+                evaluations = loadedEvaluations
+            }
             let uniqueIncoming = result.items.reduce(into: [CapabilityDetailInvocation]()) { values, item in
                 if !values.contains(where: { $0.id == item.id }) { values.append(item) }
             }
@@ -324,7 +342,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
         invocations = invocations.map { invocation in
             CapabilityDetailInvocation(event: invocation.event, projectID: invocation.projectID, projectName: invocation.projectID.flatMap { id in projects.first { $0.id == id }?.name }, confidence: invocation.confidence)
         }
-        if let evaluationStore { evaluations = evaluationStore.all() }
+        if evidenceRequested, let evaluationStore { evaluations = evaluationStore.all() }
     }
 
     @discardableResult
@@ -332,6 +350,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
         guard let evaluationStore else { persistenceError = "detail.evaluationUnavailable"; return false }
         let value = InvocationEvaluation(invocationID: invocation.event.id, sessionID: invocation.event.sessionID, resourceID: invocation.event.resourceID, label: label, updatedAt: date)
         guard evaluationStore.set(value) else { persistenceError = "detail.evaluationSaveFailed"; return false }
+        evaluationRevision &+= 1
         evaluations[value.invocationID] = value; persistenceError = nil; onEvaluationChange?(value); return true
     }
 
@@ -340,6 +359,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
         guard evaluations[invocation.id] != nil else { return true }
         guard let evaluationStore else { persistenceError = "detail.evaluationUnavailable"; return false }
         guard evaluationStore.remove(for: invocation.id) else { persistenceError = "detail.evaluationClearFailed"; return false }
+        evaluationRevision &+= 1
         evaluations.removeValue(forKey: invocation.id); persistenceError = nil; onEvaluationChange?(nil); return true
     }
 }

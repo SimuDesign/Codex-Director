@@ -98,6 +98,8 @@ final class PresentationDirectoryTests: XCTestCase {
         XCTAssertEqual(snapshot.directory.resources.map(\.id), [resource.id])
         XCTAssertEqual(snapshot.recentUsage.first?.resourceID, resource.id)
         XCTAssertEqual(snapshot.recentUsage.first?.callCount, 1)
+        XCTAssertEqual(snapshot.recentUsagePeriods.first?.sevenDay?.callCount, 1)
+        XCTAssertEqual(snapshot.recentUsagePeriods.first?.thirtyDay?.callCount, 1)
         XCTAssertEqual(snapshot.quota.window, window)
         XCTAssertEqual(snapshot.quota.sources.first?.current?.usedPercent, 25)
         XCTAssertEqual(snapshot.directory.metadata.identity, snapshot.quota.identity)

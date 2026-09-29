@@ -13,6 +13,11 @@ final class CapabilityPackageTests: XCTestCase {
         }
     }
 
+    private struct InstalledReader: CodexInstalledPluginInventoryReading {
+        let result: CodexInstalledPluginInventory
+        func read() async throws -> CodexInstalledPluginInventory { result }
+    }
+
     private struct PluginProvider: CapabilityPluginInventoryProviding {
         let status: CapabilityPluginInventoryStatus
 
@@ -260,6 +265,40 @@ final class CapabilityPackageTests: XCTestCase {
         XCTAssertFalse(inventory.plugins[0].enabled)
         let encoded = try JSONEncoder().encode(inventory)
         XCTAssertFalse(String(decoding: encoded, as: UTF8.self).contains("/Users/"))
+    }
+
+    func testRuntimePluginListWithStderrIsMarkedIncompleteDespiteSuccessExit() async {
+        let json = #"{"installed":[{"name":"partial","installed":true,"enabled":true}],"available":[]}"#
+        let provider = RuntimeCapabilityPluginInventoryProvider(commandClient: CommandClient(
+            result: RuntimeCommandResult(stdout: json, exitCode: 0, timedOut: false, hadStderrOutput: true)
+        ))
+        let inventory = await provider.inventory(at: Date(timeIntervalSince1970: 1_800_000_000))
+        XCTAssertEqual(inventory.status, .incomplete)
+        XCTAssertTrue(inventory.plugins.isEmpty)
+        XCTAssertEqual(inventory.issue, "plugin_query_failed")
+    }
+
+    func testAppServerPluginInventoryUsesSameCompletenessGateAndDropsSourcePath() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let installed = CodexInstalledPlugin(
+            id: "figma@remote-catalog", name: "figma", marketplace: "remote-catalog",
+            version: "3.0.0", enabled: true, sourcePath: "/synthetic/private-package"
+        )
+        let completeProvider = RuntimeCapabilityPluginInventoryProvider(installedPluginReading:
+            InstalledReader(result: .init(plugins: [installed], isComplete: true))
+        )
+        let complete = await completeProvider.inventory(at: date)
+        XCTAssertEqual(complete.status, .complete)
+        XCTAssertEqual(complete.plugins.map(\.identifier), ["figma@remote-catalog"])
+        XCTAssertFalse(String(decoding: try JSONEncoder().encode(complete), as: UTF8.self).contains("/synthetic/private-package"))
+
+        let partialProvider = RuntimeCapabilityPluginInventoryProvider(installedPluginReading:
+            InstalledReader(result: .init(plugins: [installed], isComplete: false, issue: "plugin_remote_unverified"))
+        )
+        let partial = await partialProvider.inventory(at: date)
+        XCTAssertEqual(partial.status, .incomplete)
+        XCTAssertEqual(partial.issue, "plugin_remote_unverified")
+        XCTAssertEqual(partial.plugins.map(\.identifier), ["figma@remote-catalog"])
     }
 
     func testConcurrentPrepareIsRejected() async throws {

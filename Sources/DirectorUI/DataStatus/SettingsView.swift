@@ -175,7 +175,8 @@ public struct SettingsView: View {
             CapabilityRestoreSheet(model: model)
                 .environmentObject(languageStore)
         }
-        .task { await model.loadDiagnosticsIfNeeded() }
+        // Refresh diagnostics if an index pass finishes while Settings stays open.
+        .task(id: model.lastIndexCompletedAt) { await model.loadDiagnosticsIfNeeded(force: true) }
     }
 
     private var languagePicker: some View {
@@ -215,7 +216,7 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "1.3.1"
+        return version ?? "1.4.0"
     }
 
     private func section<Content: View>(ordinal: String, titleKey: String, fallback: String, tone: DirectorAccentTone, @ViewBuilder content: () -> Content) -> some View {

@@ -60,6 +60,9 @@ public struct CapabilityDetailView: View {
     private var usage: some View { VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
         HStack(alignment: .top, spacing: DirectorSpacing.space3) {
             detailStat(copy("detail.metric.recent", "Past 7 days"), recentUsageValue)
+            if let recent30Count = model.recent30Count {
+                detailStat(copy("detail.metric.recent30", "Past 30 days"), localizer.plural("detail.callCount", count: recent30Count, fallback: "%lld calls"))
+            }
             detailStat(copy("detail.metric.inferred", "Inferred"), String(model.inferredCount))
         }
         if !model.usageProjectNames.isEmpty {

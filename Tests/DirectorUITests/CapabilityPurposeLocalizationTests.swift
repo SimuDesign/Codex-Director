@@ -184,7 +184,7 @@ final class CapabilityPurposeLocalizationTests: XCTestCase {
 
     func testCurrentCatalogContractIsUniqueAndNonempty() {
         let entries = CapabilityPurposeLocalization.entries
-        XCTAssertEqual(entries.count, 176)
+        XCTAssertEqual(entries.count, 267)
         XCTAssertEqual(Set(entries.map(\.resourceID)).count, entries.count)
         XCTAssertTrue(entries.allSatisfy { !$0.resourceID.isEmpty })
         XCTAssertTrue(entries.allSatisfy { !$0.sourceName.isEmpty })
@@ -192,6 +192,65 @@ final class CapabilityPurposeLocalizationTests: XCTestCase {
         XCTAssertTrue(entries.allSatisfy { !$0.chinesePurpose.isEmpty })
         XCTAssertTrue(entries.allSatisfy { $0.kind == .agent || $0.kind == .skill })
         XCTAssertTrue(entries.allSatisfy { $0.chinesePurpose.range(of: #"[\u{4E00}-\u{9FFF}]"#, options: .regularExpression) != nil })
+    }
+
+    func testUpdatedAgentDeclarationMatchesCurrentSourceButNotPreviousCopy() {
+        let id = "agent:global:global-agents:fafe06c492e25001"
+        let current = "Own logo and core visual identity work through evidence-backed discovery, proposal approval, controlled vector production, and logo-system QA."
+        let subject = resource(id: id, kind: .agent, name: "Brand Designer", summary: current)
+        XCTAssertEqual(
+            CapabilityPurposeLocalization.localizedSummary(for: subject, language: .simplifiedChinese),
+            "负责 Logo 与核心视觉识别系统：通过有证据支持的调研、提案批准、受控矢量制作和 Logo 系统质检完成交付。"
+        )
+        XCTAssertEqual(CapabilityPurposeLocalization.localizedSummary(for: subject, language: .english), current)
+        let changed = "A new purpose that has not been reviewed."
+        XCTAssertEqual(
+            CapabilityPurposeLocalization.localizedSummary(
+                for: resource(id: id, kind: .agent, name: "Brand Designer", summary: changed),
+                language: .simplifiedChinese
+            ), changed
+        )
+    }
+
+    func testNewGlobalAgentHasChinesePurposeAndBilingualSearchTerms() throws {
+        let source = "Approved Figma write execution owner. Apply scoped text, typography, layout, component, and asset changes while preserving editable structure and verifying the result."
+        let subject = resource(
+            id: "agent:global:global-agents:2ef039a98ebf83f8", kind: .agent,
+            name: "Figma Editor", summary: source
+        )
+        let translated = try XCTUnwrap(CapabilityPurposeLocalization.localizedSummary(for: subject, language: .simplifiedChinese))
+        XCTAssertTrue(translated.contains("保留可编辑结构"))
+        XCTAssertEqual(CapabilityPurposeLocalization.searchTerms(for: subject, language: .simplifiedChinese), ["Figma Editor", source, translated])
+    }
+
+    func testPluginSkillTranslationStaysBoundToIdentityAndDeclaration() throws {
+        let source = "Read, create or edit PowerPoint or Google Slides decks. Use for presentation, slide deck, PowerPoint, PPT, PPTX, or Google Slides requests."
+        let subject = resource(
+            id: "skill:plugin:plugin-cache:b57fd4dd8dcbb1c7", kind: .skill,
+            name: "Presentations", summary: source
+        )
+        let translated = try XCTUnwrap(CapabilityPurposeLocalization.localizedSummary(for: subject, language: .simplifiedChinese))
+        XCTAssertTrue(translated.contains("演示文稿"))
+        XCTAssertEqual(CapabilityPurposeLocalization.localizedSummary(for: subject, language: .english), source)
+        XCTAssertEqual(
+            CapabilityPurposeLocalization.localizedSummary(
+                for: resource(id: "skill:plugin:unreviewed", kind: .skill, name: "Presentations", summary: source),
+                language: .simplifiedChinese
+            ), source
+        )
+    }
+
+    func testSameNamedPluginVersionsRetainTheirDistinctDeclaredPurposes() {
+        let legacy = resource(
+            id: "skill:plugin:plugin-cache:32c7499791444f37", kind: .skill,
+            name: "remotion-best-practices", summary: "Best practices for Remotion - Video creation in React"
+        )
+        let router = resource(
+            id: "skill:plugin:plugin-cache:5d91bd7c641cc2d0", kind: .skill,
+            name: "remotion-best-practices", summary: "Router for all Remotion skills"
+        )
+        XCTAssertEqual(CapabilityPurposeLocalization.localizedSummary(for: legacy, language: .simplifiedChinese), "提供使用 React 制作 Remotion 视频的最佳实践。")
+        XCTAssertEqual(CapabilityPurposeLocalization.localizedSummary(for: router, language: .simplifiedChinese), "为所有 Remotion Skill 选择适用工作流。")
     }
 
     private func assertCatalog(kind: ResourceKind, expectedIDs: Set<String>) {
@@ -208,6 +267,8 @@ final class CapabilityPurposeLocalizationTests: XCTestCase {
 
     private var expectedCurrentAgentIDs: Set<String> {
         ids(#"""
+        agent:global:global-agents:2ef039a98ebf83f8
+        agent:project:project-381f0830eb8e7e1c:1aacbc47b7a1f0ba
         agent:global:global-agents:005fe8b42f8d78be
         agent:global:global-agents:0f56ad5024229d8c
         agent:global:global-agents:34eb03cdfce4f098

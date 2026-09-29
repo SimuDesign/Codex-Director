@@ -7,11 +7,16 @@ public struct RuntimeCommandResult: Sendable, Equatable {
     /// True only when the watchdog actually terminated the process because
     /// it exceeded the execution deadline.
     public let timedOut: Bool
+    /// Only the presence of stderr is exposed. The diagnostic bytes are never
+    /// returned, logged, or persisted; plugin list can exit 0 with a partial
+    /// JSON inventory while reporting a marketplace failure on stderr.
+    public let hadStderrOutput: Bool
 
-    public init(stdout: String, exitCode: Int32, timedOut: Bool) {
+    public init(stdout: String, exitCode: Int32, timedOut: Bool, hadStderrOutput: Bool = false) {
         self.stdout = stdout
         self.exitCode = exitCode
         self.timedOut = timedOut
+        self.hadStderrOutput = hadStderrOutput
     }
 }
 
@@ -23,7 +28,8 @@ public protocol RuntimeCommandClient: Sendable {
 /// Production implementation: executes the Codex executable directly with an
 /// argument array (never a shell), reads stdout incrementally while the
 /// process runs (so a full pipe can never block the process), caps captured
-/// output size and execution duration, discards stderr without persisting it,
+/// output size and execution duration, drains and discards stderr without
+/// persisting its contents,
 /// and independently records whether the watchdog fired.
 public struct ProcessRuntimeCommandClient: RuntimeCommandClient, @unchecked Sendable {
     public let executableURL: URL
@@ -46,8 +52,9 @@ public struct ProcessRuntimeCommandClient: RuntimeCommandClient, @unchecked Send
             process.executableURL = executableURL
             process.arguments = arguments
             let outPipe = Pipe()
+            let errPipe = Pipe()
             process.standardOutput = outPipe
-            process.standardError = FileHandle.nullDevice
+            process.standardError = errPipe
 
             do {
                 try process.run()
@@ -58,9 +65,11 @@ public struct ProcessRuntimeCommandClient: RuntimeCommandClient, @unchecked Send
 
             let handle = ProcessHandle(process)
             let watchdogFired = LockedFlag()
+            let stderrObserved = LockedFlag()
             let state = OutputState(maxBytes: maxOutputBytes)
             let group = DispatchGroup()
             let ioQueue = DispatchQueue(label: "codex-director.runtime-io", qos: .userInitiated)
+            let errQueue = DispatchQueue(label: "codex-director.runtime-stderr", qos: .userInitiated)
             let waitQueue = DispatchQueue(label: "codex-director.runtime-wait", qos: .userInitiated)
 
             // Watchdog on its own queue so it fires even while the read loop
@@ -92,6 +101,15 @@ public struct ProcessRuntimeCommandClient: RuntimeCommandClient, @unchecked Send
             }
 
             group.enter()
+            errQueue.async {
+                let readHandle = errPipe.fileHandleForReading
+                while let chunk = try? readHandle.read(upToCount: 16_384), !chunk.isEmpty {
+                    stderrObserved.set()
+                }
+                group.leave()
+            }
+
+            group.enter()
             waitQueue.async {
                 process.waitUntilExit()
                 group.leave()
@@ -101,7 +119,8 @@ public struct ProcessRuntimeCommandClient: RuntimeCommandClient, @unchecked Send
                 continuation.resume(returning: RuntimeCommandResult(
                     stdout: state.text,
                     exitCode: handle.process.terminationStatus,
-                    timedOut: watchdogFired.get()
+                    timedOut: watchdogFired.get(),
+                    hadStderrOutput: stderrObserved.get()
                 ))
             }
         }

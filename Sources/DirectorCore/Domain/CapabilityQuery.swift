@@ -1,8 +1,9 @@
 import Foundation
 
 /// The four user-facing capability categories. Runtime resources are kept out
-/// of these categories unless they are represented as an installed plugin or
-/// a Skill provided by one.
+/// of these categories unless they are represented as an installed plugin.
+/// Plugin-provided Skills remain resources with parent attribution, but are
+/// not independent installed Skills.
 public enum CapabilityCategory: String, Codable, Sendable, CaseIterable, Hashable {
     case customAgents
     case customSkills
@@ -12,6 +13,7 @@ public enum CapabilityCategory: String, Codable, Sendable, CaseIterable, Hashabl
 
 public enum CapabilitySort: String, Codable, Sendable, CaseIterable, Hashable {
     case recentUsageDescending
+    case thirtyDayUsageDescending
     case usageAscending
     case usageDescending
     case recentUsageAscending
@@ -144,6 +146,30 @@ public struct CapabilityUsageStats: Sendable, Equatable {
     }
 }
 
+/// Independent bounded usage projections for the Home ranking windows.
+///
+/// A missing period is different from a completed period with zero calls. The
+/// former means that the bounded aggregate was not available for that period;
+/// the latter is represented by a non-nil snapshot whose stats can be absent
+/// because no calls were observed for the resource.
+public struct CapabilityUsagePeriodSnapshot: Sendable, Equatable, Identifiable {
+    public let resourceID: String
+    public let sevenDay: CapabilityUsageStats?
+    public let thirtyDay: CapabilityUsageStats?
+
+    public var id: String { resourceID }
+
+    public init(
+        resourceID: String,
+        sevenDay: CapabilityUsageStats?,
+        thirtyDay: CapabilityUsageStats?
+    ) {
+        self.resourceID = resourceID
+        self.sevenDay = sevenDay
+        self.thirtyDay = thirtyDay
+    }
+}
+
 public struct CapabilityInvocationPage: Sendable, Equatable {
     public let items: [InvocationEvent]
     public let nextCursor: String?
@@ -183,9 +209,10 @@ public struct CapabilityCatalog: Sendable, Equatable {
             switch resource.kind {
             case .agent where resource.ownership == .userOwned: category = .customAgents
             case .skill where resource.ownership == .userOwned: category = .customSkills
-            case .skill where resource.ownership == .installed: category = .installedSkills
-            case .skill where resource.ownership == .pluginProvided && parentByChild[resource.id] != nil: category = .installedSkills
-            case .plugin where resource.scope == .runtime && resource.sourceRootID != "last-known-runtime" && (resource.origin == .runtime || resource.origin == .plugin): category = .installedPlugins
+            case .skill where resource.ownership == .installed && (resource.scope == .global || resource.scope == .project): category = .installedSkills
+            // An unverified last-known package remains browsable, but is not
+            // a current owner for Skill attribution (see currentPlugins).
+            case .plugin where resource.scope == .runtime && (resource.origin == .runtime || resource.origin == .plugin): category = .installedPlugins
             default: category = nil
             }
             return CapabilityCatalogEntry(resource: resource, category: category, parentPluginID: parentByChild[resource.id])

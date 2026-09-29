@@ -7,7 +7,7 @@ import XCTest
 /// `.app.json` object shape; array-shaped plugin responses are rejected.
 final class CodexRuntimeDiscoveryTests: XCTestCase {
 
-    private let epoch = Date(timeIntervalSince1970: 1_700_000_000)
+    private static let epoch = Date(timeIntervalSince1970: 1_700_000_000)
 
     private struct FakeClient: RuntimeCommandClient {
         let handler: @Sendable (String) -> RuntimeCommandResult
@@ -22,12 +22,25 @@ final class CodexRuntimeDiscoveryTests: XCTestCase {
         }
     }
 
+    private struct InstalledReader: CodexInstalledPluginInventoryReading {
+        let inventory: CodexInstalledPluginInventory
+        func read() async throws -> CodexInstalledPluginInventory { inventory }
+    }
+
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current: Date
+        init(_ date: Date) { current = date }
+        func read() -> Date { lock.lock(); defer { lock.unlock() }; return current }
+        func set(_ date: Date) { lock.lock(); defer { lock.unlock() }; current = date }
+    }
+
     private func makeDiscovery(client: RuntimeCommandClient, approvedSourceRoots: [URL]) -> CodexRuntimeDiscovery {
         CodexRuntimeDiscovery(
             commandClient: client,
             codexExecutableURL: URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
             approvedSourceRoots: approvedSourceRoots,
-            now: epoch
+            nowProvider: { Self.epoch }
         )
     }
 
@@ -69,6 +82,21 @@ final class CodexRuntimeDiscoveryTests: XCTestCase {
         // Transport details are never persisted.
         XCTAssertFalse(mcps.contains { $0.summary?.contains("stdio") ?? false || $0.summary?.contains("sse") ?? false })
         assertHonestPartialCoverage(result)
+    }
+
+    func testRepeatedDiscoveryUsesCurrentObservationTime() async {
+        let clock = TestClock(Self.epoch)
+        let discovery = CodexRuntimeDiscovery(
+            commandClient: fakeClient(),
+            codexExecutableURL: URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            approvedSourceRoots: [],
+            nowProvider: { clock.read() }
+        )
+        let first = await discovery.discover()
+        clock.set(Self.epoch.addingTimeInterval(3600))
+        let second = await discovery.discover()
+        XCTAssertEqual(first.resources.first?.lastSeenAt, Self.epoch)
+        XCTAssertEqual(second.resources.first?.lastSeenAt, Self.epoch.addingTimeInterval(3600))
     }
 
     func testDisabledRuntimeEntryIsNotReportedAsAvailable() async throws {
@@ -179,6 +207,93 @@ final class CodexRuntimeDiscoveryTests: XCTestCase {
         XCTAssertFalse(result.resources.contains { $0.kind == .plugin })
         XCTAssertTrue(result.unsupportedCategories.contains("plugin"))
         XCTAssertEqual(result.coverage, .partial)
+    }
+
+    func testPluginEnumerationUsesDedicatedCommandClient() async throws {
+        let quickClient = FakeClient { command in
+            switch command {
+            case "--version": return RuntimeCommandResult(stdout: "0.158.0\n", exitCode: 0, timedOut: false)
+            case "mcp": return RuntimeCommandResult(stdout: "[]", exitCode: 0, timedOut: false)
+            default: return RuntimeCommandResult(stdout: "", exitCode: 1, timedOut: true)
+            }
+        }
+        let pluginClient = FakeClient { command in
+            RuntimeCommandResult(
+                stdout: command == "plugin" ? #"{"installed":[{"name":"synthetic","installed":true,"enabled":true}],"available":[]}"# : "",
+                exitCode: command == "plugin" ? 0 : 1,
+                timedOut: false
+            )
+        }
+        let result = await CodexRuntimeDiscovery(
+            commandClient: quickClient,
+            pluginCommandClient: pluginClient,
+            codexExecutableURL: URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            approvedSourceRoots: [],
+            nowProvider: { Self.epoch }
+        ).discover()
+        XCTAssertTrue(result.resources.contains { $0.kind == .plugin && $0.name == "synthetic" })
+        XCTAssertFalse(result.unsupportedCategories.contains("plugin"))
+    }
+
+    func testPluginSuccessExitWithStderrIsNotAuthoritative() async throws {
+        let quickClient = fakeClient()
+        let pluginClient = FakeClient { _ in
+            RuntimeCommandResult(
+                stdout: #"{"installed":[{"name":"partial","installed":true}],"available":[]}"#,
+                exitCode: 0,
+                timedOut: false,
+                hadStderrOutput: true
+            )
+        }
+        let result = await CodexRuntimeDiscovery(
+            commandClient: quickClient,
+            pluginCommandClient: pluginClient,
+            codexExecutableURL: URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            approvedSourceRoots: [],
+            nowProvider: { Self.epoch }
+        ).discover()
+        XCTAssertFalse(result.resources.contains { $0.kind == .plugin })
+        XCTAssertTrue(result.unsupportedCategories.contains("plugin"))
+    }
+
+    func testInstalledReaderKeepsSameNameDifferentMarketplacesDistinct() async {
+        let entries = [
+            CodexInstalledPlugin(id: "shared@market-one", name: "shared", marketplace: "market-one", version: "1", enabled: true, sourcePath: nil),
+            CodexInstalledPlugin(id: "shared@market-two", name: "shared", marketplace: "market-two", version: "2", enabled: false, sourcePath: nil)
+        ]
+        let discovery = CodexRuntimeDiscovery(
+            commandClient: fakeClient(),
+            installedPluginReading: InstalledReader(inventory: .init(plugins: entries, isComplete: true)),
+            codexExecutableURL: URL(fileURLWithPath: "/synthetic/codex"),
+            approvedSourceRoots: [],
+            nowProvider: { Self.epoch }
+        )
+        let result = await discovery.discover()
+        let plugins = result.resources.filter { $0.kind == .plugin }
+        XCTAssertEqual(plugins.count, 2)
+        XCTAssertEqual(Set(plugins.map(\.id)).count, 2)
+        XCTAssertEqual(Set(plugins.compactMap(\.relativeSourcePath)), ["plugins/shared@market-one", "plugins/shared@market-two"])
+        XCTAssertEqual(plugins.filter { $0.status == .blocked }.count, 1)
+        XCTAssertEqual(result.pluginPackagesAvailable, false)
+        XCTAssertFalse(result.unsupportedCategories.contains("plugin"))
+    }
+
+    func testIncompleteInstalledReaderDoesNotPublishPartialRows() async {
+        let partial = CodexInstalledPluginInventory(
+            plugins: [CodexInstalledPlugin(id: "partial@remote", name: "partial", marketplace: "remote", version: nil, enabled: true, sourcePath: nil)],
+            isComplete: false,
+            issue: "plugin_remote_unverified"
+        )
+        let result = await CodexRuntimeDiscovery(
+            commandClient: fakeClient(),
+            installedPluginReading: InstalledReader(inventory: partial),
+            codexExecutableURL: URL(fileURLWithPath: "/synthetic/codex"),
+            approvedSourceRoots: [],
+            nowProvider: { Self.epoch }
+        ).discover()
+        XCTAssertFalse(result.resources.contains { $0.kind == .plugin })
+        XCTAssertTrue(result.unsupportedCategories.contains("plugin"))
+        XCTAssertNil(result.pluginPackagesAvailable)
     }
 
     func testTransportArgumentsEnvironmentAndSourcePathAreNeverPersisted() async throws {

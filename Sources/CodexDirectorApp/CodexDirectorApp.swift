@@ -37,6 +37,9 @@ private final class AppLaunchState: ObservableObject {
         } else {
             resolvedMenuBarPreferences = MenuBarPreferences(defaults: .standard)
         }
+        let homeUsageRankingPreferences = useMemoryPreferences
+            ? HomeUsageRankingPreferences(memoryPeriod: .sevenDays)
+            : HomeUsageRankingPreferences(defaults: .standard)
 
         // This model is deliberately service-less but not synthetic. It lets
         // the main window and all seven destinations render immediately while
@@ -57,6 +60,7 @@ private final class AppLaunchState: ObservableObject {
                 previewMode: false,
                 bootstrapPending: true,
                 menuBarPreferences: resolvedMenuBarPreferences,
+                homeUsageRankingPreferences: homeUsageRankingPreferences,
                 capabilityFolderStore: CapabilityFolderStore.makeMemory()
             )
         } else {
@@ -64,6 +68,7 @@ private final class AppLaunchState: ObservableObject {
                 previewMode: false,
                 bootstrapPending: true,
                 menuBarPreferences: resolvedMenuBarPreferences,
+                homeUsageRankingPreferences: homeUsageRankingPreferences,
                 capabilityFolderStore: CapabilityFolderStore(defaults: .standard)
             )
         }
@@ -97,35 +102,84 @@ private final class AppLaunchState: ObservableObject {
 @main
 struct CodexDirectorApp: App {
     private let validationMode: Bool
+#if DIRECTOR_INTERACTION_PERFORMANCE
+    private let interactionPerformanceMode: Bool
+#endif
     @StateObject private var languageStore: AppLanguageStore
     @StateObject private var themeStore: AppThemeStore
     @StateObject private var menuBarPreferences: MenuBarPreferences
     @StateObject private var launchState: AppLaunchState
 
     init() {
-#if DEBUG
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        // Two independent gates are required so a diagnostic build can never
+        // enter the synthetic path from a stray environment variable alone.
+        let interactionPerformanceRequested =
+            Bundle.main.object(forInfoDictionaryKey: "DirectorInteractionPerformanceMode") as? Bool == true &&
+            ProcessInfo.processInfo.environment["CODEX_DIRECTOR_INTERACTION_PERFORMANCE_RUNTIME"] == "1" &&
+            Bundle.main.bundleIdentifier == "com.peiweitang.CodexDirector.InteractionPerformance"
+        if interactionPerformanceRequested {
+            validationMode = false
+            interactionPerformanceMode = true
+            let reviewEnvironment = ProcessInfo.processInfo.environment
+            _languageStore = StateObject(wrappedValue: AppLanguageStore(memoryLanguage: reviewEnvironment["CODEX_DIRECTOR_INTERACTION_LANGUAGE"] == "en" ? .english : .simplifiedChinese))
+            _themeStore = StateObject(wrappedValue: AppThemeStore(memoryTheme: reviewEnvironment["CODEX_DIRECTOR_INTERACTION_APPEARANCE"] == "light" ? .light : .dark))
+            let isolatedMenuBarPreferences = MenuBarPreferences(memoryEnabled: false)
+            _menuBarPreferences = StateObject(wrappedValue: isolatedMenuBarPreferences)
+            _launchState = StateObject(wrappedValue: AppLaunchState(useMemoryPreferences: true, menuBarPreferences: isolatedMenuBarPreferences))
+            return
+        }
+
+        // A performance-flagged binary must never fall through to the normal
+        // bootstrap. If either gate is absent, fail closed before any
+        // production store or source-root factory can be invoked.
+        validationMode = false
+        interactionPerformanceMode = false
+        _languageStore = StateObject(wrappedValue: AppLanguageStore(memoryLanguage: .simplifiedChinese))
+        _themeStore = StateObject(wrappedValue: AppThemeStore(memoryTheme: .dark))
+        let failedGateMenuBarPreferences = MenuBarPreferences(memoryEnabled: false)
+        _menuBarPreferences = StateObject(wrappedValue: failedGateMenuBarPreferences)
+        _launchState = StateObject(wrappedValue: AppLaunchState(useMemoryPreferences: true, menuBarPreferences: failedGateMenuBarPreferences))
+        fatalError("Interaction performance binary failed its isolated runtime gates")
+#endif
+#if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
         if Bundle.main.object(forInfoDictionaryKey: "DirectorUIValidationMode") as? Bool == true {
             validationMode = true
+#if DIRECTOR_INTERACTION_PERFORMANCE
+            interactionPerformanceMode = false
+#endif
             _languageStore = StateObject(wrappedValue: AppLanguageStore(memoryLanguage: .simplifiedChinese))
             _themeStore = StateObject(wrappedValue: AppThemeStore(memoryTheme: .dark))
-            let menuBarPreferences = MenuBarPreferences(memoryEnabled: true)
-            _menuBarPreferences = StateObject(wrappedValue: menuBarPreferences)
-            _launchState = StateObject(wrappedValue: AppLaunchState(useMemoryPreferences: true, menuBarPreferences: menuBarPreferences))
+            let validationMenuBarPreferences = MenuBarPreferences(memoryEnabled: true)
+            _menuBarPreferences = StateObject(wrappedValue: validationMenuBarPreferences)
+            _launchState = StateObject(wrappedValue: AppLaunchState(useMemoryPreferences: true, menuBarPreferences: validationMenuBarPreferences))
             return
         }
 #endif
         validationMode = false
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        interactionPerformanceMode = false
+#endif
         _languageStore = StateObject(wrappedValue: AppLanguageStore(defaults: .standard))
         _themeStore = StateObject(wrappedValue: AppThemeStore(defaults: .standard))
-        let menuBarPreferences = MenuBarPreferences(defaults: .standard)
-        _menuBarPreferences = StateObject(wrappedValue: menuBarPreferences)
-        _launchState = StateObject(wrappedValue: AppLaunchState(menuBarPreferences: menuBarPreferences))
+        let persistentMenuBarPreferences = MenuBarPreferences(defaults: .standard)
+        _menuBarPreferences = StateObject(wrappedValue: persistentMenuBarPreferences)
+        _launchState = StateObject(wrappedValue: AppLaunchState(menuBarPreferences: persistentMenuBarPreferences))
     }
 
     var body: some Scene {
         WindowGroup(validationMode ? "Codex Director Validation" : DirectorUI.productName, id: "main") {
             Group {
-#if DEBUG
+#if DIRECTOR_INTERACTION_PERFORMANCE
+            if interactionPerformanceMode {
+                InteractionPerformanceHost(languageStore: languageStore, themeStore: themeStore)
+            } else if validationMode {
+                UIValidationHost(languageStore: languageStore, themeStore: themeStore)
+            } else {
+                DirectorRootView(model: launchState.model)
+                    .preferredColorScheme(themeStore.theme.colorScheme)
+            }
+#elseif DEBUG
             if validationMode {
                 UIValidationHost(languageStore: languageStore, themeStore: themeStore)
             } else {
@@ -138,7 +192,7 @@ struct CodexDirectorApp: App {
 #endif
             }
             .task {
-                if !validationMode { launchState.bootstrap() }
+                if shouldBootstrap { launchState.bootstrap() }
             }
         }
         .environmentObject(languageStore)
@@ -161,6 +215,14 @@ struct CodexDirectorApp: App {
 
     private var menuBarBinding: Binding<Bool> {
         MenuBarInsertionBinding.make(preferences: menuBarPreferences, model: launchState.model)
+    }
+
+    private var shouldBootstrap: Bool {
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        return !validationMode && !interactionPerformanceMode
+#else
+        return !validationMode
+#endif
     }
 
     private func openMainWindow() {

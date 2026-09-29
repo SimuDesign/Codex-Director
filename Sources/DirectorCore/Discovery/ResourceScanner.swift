@@ -1094,29 +1094,57 @@ public struct ResourceScanner: Sendable {
 }
 
 /// Minimal YAML-ish frontmatter parser for `SKILL.md`-style manifests.
-/// Handles `key: value` pairs between `---` fences and a JSON `metadata` value.
+/// Handles top-level scalar fields, description block scalars and JSON metadata.
+/// This is not a general YAML interpreter and never evaluates manifest content.
 private struct Frontmatter {
     var fields: [String: String] = [:]
     var metadata: [String: Any] = [:]
 
     static func parse(_ text: String) -> Frontmatter {
         var result = Frontmatter()
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else { return result }
-
-        var body: [String] = []
-        for line in lines.dropFirst() {
-            if line.trimmingCharacters(in: .whitespaces) == "---" { break }
-            body.append(String(line))
+        let lines = text.components(separatedBy: .newlines)
+        guard lines.first?.trimmingCharacters(in: .whitespaces) == "---" else {
+            result.fields["description"] = leadingPurpose(in: lines)
+            return result
         }
-
-        for line in body {
+        guard let end = lines.indices.dropFirst().first(where: {
+            lines[$0].trimmingCharacters(in: .whitespaces) == "---"
+        }) else { return result }
+        let body = Array(lines[1..<end])
+        var index = 0
+        while index < body.count {
+            let line = body[index]
+            index += 1
+            guard let first = line.first, !first.isWhitespace, first != "#" else { continue }
             guard let colon = line.firstIndex(of: ":") else { continue }
             let key = String(line[..<colon]).trimmingCharacters(in: .whitespaces)
             let value = String(line[line.index(after: colon)...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
             guard !key.isEmpty else { continue }
+            if [">", ">-", ">+", "|", "|-", "|+"].contains(value) {
+                var block: [String] = []
+                while index < body.count {
+                    let next = body[index]
+                    guard next.trimmingCharacters(in: .whitespaces).isEmpty || next.first?.isWhitespace == true else { break }
+                    block.append(next)
+                    index += 1
+                }
+                // Only descriptions support block syntax. Do not let a nested
+                // `name:` or `description:` become a top-level identity field.
+                if key == "description" {
+                    let indentation = block.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+                        .map { $0.prefix(while: { $0.isWhitespace }).count }.min() ?? 0
+                    let content = block.map { String($0.dropFirst(min(indentation, $0.count))) }
+                    let summary = content.joined(separator: value.hasPrefix(">") ? " " : "\n")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !summary.isEmpty, summary.utf8.count <= 16_384,
+                       !PersistenceAllowlist.containsForbiddenValue(summary) {
+                        result.fields[key] = summary
+                    }
+                }
+                continue
+            }
             result.fields[key] = value
         }
 
@@ -1126,5 +1154,29 @@ private struct Frontmatter {
             result.metadata = json
         }
         return result
+    }
+
+    /// Some independently installed Skills declare their purpose directly
+    /// after the Markdown title instead of in frontmatter. Read only that
+    /// opening prose paragraph, never later sections, lists or code fences.
+    private static func leadingPurpose(in lines: [String]) -> String? {
+        guard let first = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }),
+              lines[first].hasPrefix("# ") else { return nil }
+        var paragraph: [String] = []
+        for line in lines.dropFirst(first + 1) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                if paragraph.isEmpty { continue }
+                break
+            }
+            guard !trimmed.hasPrefix("#"), !trimmed.hasPrefix("```"), !trimmed.hasPrefix("~~~"),
+                  !trimmed.hasPrefix("- "), !trimmed.hasPrefix("* "), !trimmed.hasPrefix(">"),
+                  !trimmed.hasPrefix("|"), trimmed.range(of: #"^\d+[.)]\s"#, options: .regularExpression) == nil else { break }
+            paragraph.append(trimmed)
+        }
+        let summary = paragraph.joined(separator: " ")
+        guard !summary.isEmpty, summary.count <= 320,
+              !PersistenceAllowlist.containsForbiddenValue(summary) else { return nil }
+        return summary
     }
 }

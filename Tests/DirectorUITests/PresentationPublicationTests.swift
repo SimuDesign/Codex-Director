@@ -24,6 +24,29 @@ final class PresentationPublicationTests: XCTestCase {
         }
     }
 
+    private final class QueryOperationCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [PresentationQueryOperation] = []
+
+        func append(_ value: PresentationQueryOperation) {
+            lock.lock()
+            values.append(value)
+            lock.unlock()
+        }
+
+        func reset() {
+            lock.lock()
+            values.removeAll()
+            lock.unlock()
+        }
+
+        func snapshot() -> [PresentationQueryOperation] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+    }
+
     private func preferenceStores() -> (ResourceClassificationOverrideStore, InvocationEvaluationStore) {
         let classifications = MemoryData()
         let evaluations = MemoryData()
@@ -161,6 +184,117 @@ final class PresentationPublicationTests: XCTestCase {
         XCTAssertEqual(model.cacheStatus, .stale)
         let retained = try await cache.read()
         XCTAssertNotNil(retained)
+    }
+
+    func testClassificationInvalidatesThirtyDayRankingAndRebuildsHomeOnly() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("director-publication-classification-home-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("derived.sqlite")
+        let queryOperations = QueryOperationCounter()
+        let database = try DatabaseStore(url: databaseURL)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let skill = CapabilityResource(
+            id: "skill:publication-home-local",
+            name: "Publication Home Local Skill",
+            kind: .skill,
+            status: .success,
+            scope: .global,
+            projectID: nil,
+            confidence: .exact,
+            summary: "Synthetic local skill",
+            sourceRootID: "publication-test",
+            relativeSourcePath: "skill/SKILL.md",
+            sourcePathHash: nil,
+            lastSeenAt: now,
+            ownership: .userOwned,
+            origin: .local
+        )
+        try await database.insertResources([skill])
+        let session = TaskSummary(
+            id: "publication-home-session",
+            projectID: nil,
+            startedAt: now.addingTimeInterval(-3_600),
+            endedAt: now,
+            status: .completed,
+            coverage: .complete,
+            parserVersion: "test",
+            sourceFileID: "publication-home-source",
+            title: nil
+        )
+        let call = InvocationEvent(
+            id: "publication-home-call",
+            sessionID: session.id,
+            parentCallID: nil,
+            ordinal: 0,
+            timestamp: now.addingTimeInterval(-1_800),
+            actorName: nil,
+            resourceID: skill.id,
+            kind: .skill,
+            status: .completed,
+            durationMs: nil,
+            confidence: .exact,
+            errorCategory: nil
+        )
+        try await database.replaceSession(PersistedSessionBatch(
+            session: session,
+            calls: [call],
+            tokenSnapshots: [],
+            quotaSnapshots: [],
+            findings: []
+        ))
+        let readStore = try DatabaseStore(
+            url: databaseURL,
+            readOnly: true,
+            queryObserver: { queryOperations.append($0) }
+        )
+        let cache = PresentationSnapshotStore(url: cacheURL(in: root))
+        let (classifications, evaluations) = preferenceStores()
+        let model = DirectorAppModel(
+            store: database,
+            readStore: readStore,
+            classificationOverrides: classifications,
+            evaluationStore: evaluations,
+            nowProvider: { now },
+            previewMode: false,
+            presentationSnapshotStore: cache
+        )
+        let windowID = UUID()
+        model.setWindowVisibility(windowID, visible: true)
+        defer { model.stopSourceDataMonitor(); model.removeWindow(windowID) }
+        try await model.refresh()
+
+        // Keep the classification regression focused on the post-change work;
+        // the initial projection is allowed to use its normal startup reads.
+        queryOperations.reset()
+
+        XCTAssertEqual(model.presentationHomeSummary?.customSkillsTop.first?.category, .customSkills)
+        XCTAssertEqual(model.presentationHomeSummary?.thirtyDayRankings?.customSkillsTop.first?.category, .customSkills)
+
+        let legacyCache = try await cache.read()
+        XCTAssertEqual(legacyCache?.classificationRevision, PresentationClassificationRevision.make([:]))
+        XCTAssertNotNil(legacyCache?.home?.thirtyDayRankings)
+
+        model.classify(resourceID: skill.id, ownership: .installed)
+        XCTAssertEqual(model.presentationHomeSummary?.installedSkillsTop.first?.category, .installedSkills)
+        XCTAssertNil(model.presentationHomeSummary?.thirtyDayRankings)
+
+        // The classification revision changes before the delayed Home-only
+        // query starts, so the old disk payload cannot be restored into this
+        // model even though it remains available for the upgrade writer.
+        let restoredDuringPendingUpgrade = await model.restoreCachedPresentation()
+        XCTAssertFalse(restoredDuringPendingUpgrade)
+        XCTAssertEqual(model.cacheStatus, .stale)
+
+        let rebuilt = await waitUntil(timeout: .seconds(8)) {
+            model.presentationHomeSummary?.thirtyDayRankings?.installedSkillsTop.first?.category == .installedSkills
+        }
+        XCTAssertTrue(rebuilt)
+        XCTAssertFalse(model.isIndexing)
+        XCTAssertEqual(model.presentationHomeSummary?.customSkillsTop.count, 0)
+        XCTAssertEqual(model.presentationHomeSummary?.installedSkillsTop.count, 1)
+        let postClassificationQueries = queryOperations.snapshot()
+        XCTAssertTrue(postClassificationQueries.allSatisfy { $0 == .directory || $0 == .identity })
     }
 
     func testClassificationDuringProjectionRejectsLateResultAndKeepsOverride() async throws {
@@ -396,5 +530,18 @@ final class PresentationPublicationTests: XCTestCase {
             waiters.removeAll()
             pending.forEach { $0.resume() }
         }
+    }
+
+    private func waitUntil(
+        timeout: Duration,
+        _ condition: @escaping @MainActor () -> Bool
+    ) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition() {
+            if clock.now >= deadline { return false }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return true
     }
 }

@@ -441,6 +441,69 @@ public struct DirectorControlField<Content: View>: View {
     }
 }
 
+/// One native editor, with the entire painted field forwarding focus. The
+/// simultaneous gesture leaves native caret placement and text selection intact.
+public struct DirectorSearchField: View {
+    private let title: String
+    @Binding private var text: String
+    private let height: CGFloat
+    private let clearLabel: String?
+    @FocusState private var editorFocused: Bool
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    public init(_ title: String, text: Binding<String>, height: CGFloat = DirectorSpacing.controlMinHeight, clearLabel: String? = nil) {
+        self.title = title
+        self._text = text
+        self.height = height
+        self.clearLabel = clearLabel
+    }
+
+    public var body: some View {
+        HStack(spacing: DirectorSpacing.space2) {
+            Image(systemName: DirectorSymbol.search)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .accessibilityHidden(true)
+            TextField(title, text: $text)
+                .textFieldStyle(.plain)
+                .focused($editorFocused)
+                .frame(maxWidth: .infinity, minHeight: height)
+                .accessibilityLabel(title)
+            if let clearLabel, !text.isEmpty {
+                Button {
+                    text = ""
+                    if isEnabled { editorFocused = true }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .frame(width: 24, height: height)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .accessibilityLabel(clearLabel)
+            }
+        }
+        .padding(.horizontal, DirectorSpacing.space3)
+        .frame(maxWidth: .infinity, minHeight: height)
+        .background {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .fill(reduceTransparency ? DirectorColor.inset : DirectorColor.controlField)
+                .accessibilityHidden(true)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
+                .stroke(editorFocused ? DirectorColor.focus : DirectorColor.controlBoundary,
+                        lineWidth: editorFocused || contrast == .increased ? 2 : 1)
+                .accessibilityHidden(true)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
+        .simultaneousGesture(TapGesture().onEnded {
+            if isEnabled { editorFocused = true }
+        })
+    }
+}
+
 /// A real native single-choice control with local Scheme A drawing. AppKit
 /// owns the three actionable accessibility children, selection, keyboard
 /// navigation and focus; there is no hidden accessibility-only replica.
@@ -499,20 +562,15 @@ private struct DirectorNativeSegmentedControlBridge: NSViewRepresentable {
     }
 
     func updateNSView(_ control: DirectorNativeOutlinedSegmentedControl, context: Context) {
-        if control.segmentCount != titles.count { control.segmentCount = titles.count }
-        for (index, title) in titles.enumerated() {
-            control.setLabel(title, forSegment: index)
-            control.setToolTip(title, forSegment: index)
-        }
-        control.selectedSegment = selectedIndex
-        control.isEnabled = isEnabled
-        control.increasedContrast = increasedContrast
-        control.reduceTransparency = reduceTransparency
         control.selectionChanged = selectionChanged
-        control.setAccessibilityLabel(label)
-        control.invalidateIntrinsicContentSize()
-        control.needsLayout = true
-        control.needsDisplay = true
+        control.applyConfiguration(
+            label: label,
+            titles: titles,
+            selectedIndex: selectedIndex,
+            isEnabled: isEnabled,
+            increasedContrast: increasedContrast,
+            reduceTransparency: reduceTransparency
+        )
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: DirectorNativeOutlinedSegmentedControl, context: Context) -> CGSize? {
@@ -524,9 +582,16 @@ private struct DirectorNativeSegmentedControlBridge: NSViewRepresentable {
 /// source of truth. Only this instance's painting is replaced; no window-wide
 /// control discovery, appearance mutation, private APIs or swizzling.
 final class DirectorNativeOutlinedSegmentedControl: NSSegmentedControl {
+    struct ConfigurationChanges: Equatable {
+        let intrinsicSize: Bool
+        let layout: Bool
+        let display: Bool
+    }
+
     var increasedContrast = false
     var reduceTransparency = false
     var selectionChanged: ((Int) -> Void)?
+    private var appliedAccessibilityLabel: String?
     private var hoveredSegment: Int?
     private var pressedSegment: Int?
     private var hoverTrackingArea: NSTrackingArea?
@@ -551,11 +616,58 @@ final class DirectorNativeOutlinedSegmentedControl: NSSegmentedControl {
         selectionChanged?(selectedSegment)
     }
 
+    @discardableResult
+    func applyConfiguration(
+        label: String,
+        titles: [String],
+        selectedIndex: Int,
+        isEnabled: Bool,
+        increasedContrast: Bool,
+        reduceTransparency: Bool
+    ) -> ConfigurationChanges {
+        let countChanged = segmentCount != titles.count
+        if countChanged { segmentCount = titles.count }
+        var titlesChanged = countChanged
+        for (index, title) in titles.enumerated() {
+            if self.label(forSegment: index) != title {
+                setLabel(title, forSegment: index)
+                titlesChanged = true
+            }
+            if toolTip(forSegment: index) != title {
+                setToolTip(title, forSegment: index)
+            }
+        }
+        let selectionChanged = selectedSegment != selectedIndex
+        if selectionChanged { selectedSegment = selectedIndex }
+        let enabledChanged = self.isEnabled != isEnabled
+        if enabledChanged { self.isEnabled = isEnabled }
+        let appearanceChanged = self.increasedContrast != increasedContrast
+            || self.reduceTransparency != reduceTransparency
+        if appearanceChanged {
+            self.increasedContrast = increasedContrast
+            self.reduceTransparency = reduceTransparency
+        }
+        if appliedAccessibilityLabel != label {
+            setAccessibilityLabel(label)
+            appliedAccessibilityLabel = label
+        }
+        if titlesChanged {
+            invalidateIntrinsicContentSize()
+            needsLayout = true
+        }
+        let repaint = titlesChanged || selectionChanged || enabledChanged || appearanceChanged
+        if repaint { needsDisplay = true }
+        return ConfigurationChanges(intrinsicSize: titlesChanged, layout: titlesChanged, display: repaint)
+    }
+
     override func layout() {
         super.layout()
         guard segmentCount > 0 else { return }
+        let targetWidth = bounds.width / CGFloat(segmentCount)
         for index in 0..<segmentCount {
-            setWidth(bounds.width / CGFloat(segmentCount), forSegment: index)
+            if abs(width(forSegment: index) - targetWidth) > 0.5 {
+                setWidth(targetWidth, forSegment: index)
+            }
         }
     }
 
@@ -721,13 +833,15 @@ public struct DirectorOutlinedIconMenu<Content: View>: View {
 /// outside Menu so AppKit cannot collapse it to a small pill.
 public struct DirectorOutlinedMenuField<Content: View>: View {
     private let title: String
+    private let height: CGFloat
     private let content: Content
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    public init(_ title: String, @ViewBuilder content: () -> Content) {
+    public init(_ title: String, height: CGFloat = DirectorCapabilityFolderLayout.controlHeight, @ViewBuilder content: () -> Content) {
         self.title = title
+        self.height = height
         self.content = content()
     }
 
@@ -744,7 +858,7 @@ public struct DirectorOutlinedMenuField<Content: View>: View {
             }
             .font(DirectorTypography.segmentedControl)
             .padding(.horizontal, DirectorSpacing.space3)
-            .frame(maxWidth: .infinity, minHeight: DirectorCapabilityFolderLayout.controlHeight, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: height, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
         }
         .menuStyle(.button)
@@ -752,7 +866,7 @@ public struct DirectorOutlinedMenuField<Content: View>: View {
         .menuIndicator(.hidden)
         .foregroundStyle(DirectorColor.textPrimary)
         .opacity(isEnabled ? 1 : 0.52)
-        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
+        .frame(minHeight: height)
         .background {
             RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous)
                 .fill(reduceTransparency ? DirectorColor.inset : DirectorColor.controlField)
@@ -766,7 +880,7 @@ public struct DirectorOutlinedMenuField<Content: View>: View {
                 )
                 .accessibilityHidden(true)
         }
-        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight)
+        .frame(minHeight: height)
         .contentShape(RoundedRectangle(cornerRadius: DirectorRadius.control, style: .continuous))
     }
 }

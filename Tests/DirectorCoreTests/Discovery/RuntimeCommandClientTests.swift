@@ -66,4 +66,19 @@ final class RuntimeCommandClientTests: XCTestCase {
         XCTAssertLessThanOrEqual(result.stdout.count, 1024)
         XCTAssertNotEqual(result.exitCode, 0) // terminated by the cap
     }
+
+    func testStderrPresenceIsReportedWithoutReturningDiagnosticContent() async throws {
+        let client = ProcessRuntimeCommandClient(
+            executableURL: URL(fileURLWithPath: "/usr/bin/awk"),
+            timeoutSeconds: 5,
+            maxOutputBytes: 1024
+        )
+        let result = try await client.run(arguments: [
+            "BEGIN { print \"synthetic diagnostic\" > \"/dev/stderr\"; print \"{}\" }",
+        ])
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "{}")
+        XCTAssertTrue(result.hadStderrOutput)
+        XCTAssertFalse(result.stdout.contains("synthetic diagnostic"))
+    }
 }

@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
@@ -235,6 +235,12 @@ private struct ValidationWorkspace: View {
                     }
                 }
                 .pickerStyle(.menu)
+
+                Menu("Usage ranking period") {
+                    Button("Last 7 days") { session.model.setHomeUsageRankingPeriod(.sevenDays) }
+                    Button("Last 30 days") { session.model.setHomeUsageRankingPeriod(.thirtyDays) }
+                }
+                .accessibilityValue(session.model.homeUsageRankingPeriod.rawValue)
 
                 Picker("Appearance", selection: $appearance) {
                     ForEach(UIValidationHost.Appearance.allCases) { value in Text(value.title).tag(value) }

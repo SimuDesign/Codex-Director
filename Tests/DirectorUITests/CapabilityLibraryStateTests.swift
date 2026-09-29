@@ -4,6 +4,102 @@ import XCTest
 
 @MainActor
 final class CapabilityLibraryStateTests: XCTestCase {
+    func testThirtyDaySortUsesItsOwnCountsAndPreservesSevenDayRows() {
+        let entries = ["a", "b"].map { CapabilityCatalogEntry(resource: resource($0, project: nil), category: .customAgents, parentPluginID: nil) }
+        let model = CapabilityLibraryViewModel(category: .customAgents)
+        let seven = [CapabilityUsageStats(resourceID: "a", callCount: 5, inferredCount: 0, lastUsedAt: date(0), coverage: .complete)]
+        let thirty = [CapabilityUsageStats(resourceID: "a", callCount: 5, inferredCount: 0, lastUsedAt: date(0), coverage: .complete), CapabilityUsageStats(resourceID: "b", callCount: 20, inferredCount: 0, lastUsedAt: date(-864000), coverage: .complete)]
+        model.setData(catalog: entries, categoryStats: seven, browseHistory: [], category30DayStats: thirty, browse30DayStats: thirty)
+        XCTAssertEqual(model.rows.map(\.id), ["a", "b"])
+        model.context = model.context.updated(sort: .thirtyDayUsageDescending)
+        XCTAssertEqual(model.rows.map(\.id), ["b", "a"])
+        XCTAssertEqual(model.displayedUsageCount(for: model.rows[0]), 20)
+        XCTAssertEqual(model.rows[0].recent7Count, 0)
+        model.context = model.context.updated(sort: .recentUsageDescending)
+        XCTAssertEqual(model.rows.map(\.id), ["a", "b"])
+        XCTAssertEqual(model.displayedUsageCount(for: model.rows[0]), 5)
+    }
+
+    func testRowProjectionIsSharedByListAndSelectionAndInvalidatesOnChanges() {
+        let a = CapabilityCatalogEntry(resource: resource("a", project: nil), category: .customAgents, parentPluginID: nil)
+        let b = CapabilityCatalogEntry(resource: resource("b", project: nil), category: .customAgents, parentPluginID: nil)
+        let model = CapabilityLibraryViewModel(category: .customAgents)
+        model.setData(catalog: [a, b], categoryStats: [], browseHistory: [])
+        #if DEBUG
+        XCTAssertEqual(model.rowProjectionBuildCount, 0)
+        #endif
+        XCTAssertEqual(model.rows(for: .global).map(\.id), ["a", "b"])
+        XCTAssertEqual(model.groupedRows(for: .global).flatMap(\.rows).map(\.id), ["a", "b"])
+        XCTAssertEqual(model.row(withID: "b", in: .global)?.id, "b")
+        #if DEBUG
+        XCTAssertEqual(model.rowProjectionBuildCount, 1)
+        #endif
+
+        model.context = model.context.updated(sort: .nameAscending)
+        XCTAssertEqual(model.rows(for: .global).map(\.id), ["a", "b"])
+        #if DEBUG
+        XCTAssertEqual(model.rowProjectionBuildCount, 2)
+        #endif
+
+        model.setData(catalog: [a], categoryStats: [], browseHistory: [])
+        XCTAssertEqual(model.rows(for: .global).map(\.id), ["a"])
+        XCTAssertNil(model.row(withID: "b", in: .global))
+        #if DEBUG
+        XCTAssertEqual(model.rowProjectionBuildCount, 3)
+        #endif
+    }
+
+    func testWarmFourLibrarySwitchPreservesEachProjectionSearchSortAndSelection() {
+        let categories: [CapabilityCategory] = [.customAgents, .customSkills, .installedSkills, .installedPlugins]
+        let models = categories.enumerated().map { offset, category in
+            let entry = CapabilityCatalogEntry(
+                resource: resource("item-\(offset)", project: nil),
+                category: category,
+                parentPluginID: nil
+            )
+            let model = CapabilityLibraryViewModel(category: category)
+            model.setData(catalog: [entry], categoryStats: [], browseHistory: [])
+            model.context = CapabilityBrowseContext(search: "item-\(offset)", sort: .nameAscending)
+            model.selectedID = entry.resource.id
+            return model
+        }
+        for model in models + Array(models.reversed()) {
+            XCTAssertEqual(model.rows.map(\.id), [model.selectedID])
+            XCTAssertEqual(model.context.sort, .nameAscending)
+            XCTAssertEqual(model.context.search, model.selectedID)
+            #if DEBUG
+            XCTAssertEqual(model.rowProjectionBuildCount, 1)
+            #endif
+        }
+    }
+
+    func testThirtyDayUnavailableDoesNotFallBackToSevenDayCount() {
+        let entry = CapabilityCatalogEntry(resource: resource("a", project: nil), category: .customAgents, parentPluginID: nil)
+        let model = CapabilityLibraryViewModel(category: .customAgents)
+        model.setData(catalog: [entry], categoryStats: [CapabilityUsageStats(resourceID: "a", callCount: 5, inferredCount: 0, lastUsedAt: date(0), coverage: .complete)], browseHistory: [])
+        model.context = model.context.updated(sort: .thirtyDayUsageDescending)
+        XCTAssertNil(model.displayedUsageCount(for: model.rows[0]))
+        XCTAssertFalse(model.displayedUsageReady)
+        model.setData(catalog: [entry], categoryStats: [], browseHistory: [], category30DayStats: [], browse30DayStats: [])
+        XCTAssertEqual(model.displayedUsageCount(for: model.rows[0]), 0)
+        XCTAssertTrue(model.displayedUsageReady)
+    }
+
+    func testThirtyDayPluginSortKeepsUnknownAfterExplicitZero() {
+        let entries = ["a", "b", "c"].map { CapabilityCatalogEntry(resource: resource($0, project: nil), category: .installedPlugins, parentPluginID: nil) }
+        let model = CapabilityLibraryViewModel(category: .installedPlugins, catalog: entries)
+        let thirty = [PluginUsageResult(pluginID: "a", callCount: nil), PluginUsageResult(pluginID: "b", callCount: 0), PluginUsageResult(pluginID: "c", callCount: 8)]
+        model.setPluginData([PluginUsageResult(pluginID: "a", callCount: 100)], category30DayStats: thirty, browse30DayStats: thirty)
+        model.context = model.context.updated(sort: .thirtyDayUsageDescending)
+        XCTAssertEqual(model.rows.map(\.id), ["c", "b", "a"])
+        XCTAssertEqual(model.rows.map { model.displayedUsageCount(for: $0) }, [8, 0, nil])
+    }
+
+    func testFolderSortOffersBothPeriodsAndLocalizedCurrentValue() {
+        XCTAssertEqual(CapabilityFolderSort.allCases.map(\.rawValue), ["recentUsageDescending", "thirtyDayUsageDescending", "usageAscending", "nameAscending"])
+        XCTAssertEqual(CapabilityFolderSort.thirtyDayUsageDescending.title(.simplifiedChinese), "近 30 天调用 ↓")
+        XCTAssertEqual(CapabilityFolderSort.thirtyDayUsageDescending.title(.english), "Past 30 days ↓")
+    }
     func testDefaultSortUsesSevenDayCountBeforeHistoryDate() {
         let a = CapabilityCatalogEntry(resource: resource("a", project: nil), category: .customAgents, parentPluginID: nil)
         let b = CapabilityCatalogEntry(resource: resource("b", project: nil), category: .customAgents, parentPluginID: nil)

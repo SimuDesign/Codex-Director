@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
 import Foundation
 import SwiftUI
 import DirectorCore
@@ -12,6 +12,8 @@ public final class UIValidationSession: ObservableObject {
         case representative
         case empty
         case stress
+        case interactionStress
+        case interactionRepresentative
         case homeVisual
         case fiveHourOnly
 
@@ -22,6 +24,8 @@ public final class UIValidationSession: ObservableObject {
             case .representative: return "Representative"
             case .empty: return "Empty"
             case .stress: return "Stress"
+            case .interactionStress: return "Interaction stress · 1,000 capabilities"
+            case .interactionRepresentative: return "Interaction representative · 283 capabilities"
             case .homeVisual: return "Home visual edges"
             case .fiveHourOnly: return "Five-hour quota only"
             }
@@ -56,9 +60,24 @@ public final class UIValidationSession: ObservableObject {
     private var resetGeneration = 0
     private let databaseFactory: () throws -> (URL, URL)
     private let seedOperation: (@Sendable (Dataset, DatabaseStore, InvocationEvaluationStore) async throws -> Void)?
+    private let performanceQueryObserver: (@Sendable (PresentationQueryOperation) -> Void)?
 
     public convenience init(dataset: Dataset = .representative) throws {
         try self.init(dataset: dataset, databaseFactory: { try Self.makeTemporaryDatabase() })
+    }
+
+    /// Performance-only initializer. Observers receive enum operation names
+    /// and never resource IDs, text, paths, or database payloads.
+    public convenience init(
+        dataset: Dataset = .representative,
+        queryObserver: (@Sendable (PresentationQueryOperation) -> Void)? = nil
+    ) throws {
+        try self.init(
+            dataset: dataset,
+            databaseFactory: { try Self.makeTemporaryDatabase() },
+            seedOperation: nil,
+            queryObserver: queryObserver
+        )
     }
 
     /// Internal factory injection is used only to exercise reset failure and
@@ -66,10 +85,12 @@ public final class UIValidationSession: ObservableObject {
     init(
         dataset: Dataset,
         databaseFactory: @escaping () throws -> (URL, URL),
-        seedOperation: (@Sendable (Dataset, DatabaseStore, InvocationEvaluationStore) async throws -> Void)? = nil
+        seedOperation: (@Sendable (Dataset, DatabaseStore, InvocationEvaluationStore) async throws -> Void)? = nil,
+        queryObserver: (@Sendable (PresentationQueryOperation) -> Void)? = nil,
     ) throws {
         self.databaseFactory = databaseFactory
         self.seedOperation = seedOperation
+        self.performanceQueryObserver = queryObserver
         let (directoryURL, databaseURL) = try databaseFactory()
         self.directoryURL = directoryURL
         self.databaseURL = databaseURL
@@ -89,7 +110,7 @@ public final class UIValidationSession: ObservableObject {
         let folderStore = CapabilityFolderStore.makeMemory()
         let store: DatabaseStore
         do {
-            store = try DatabaseStore(url: databaseURL)
+            store = try DatabaseStore(url: databaseURL, queryObserver: queryObserver)
         } catch {
             DatabaseStore.destroy(at: databaseURL)
             try? FileManager.default.removeItem(at: directoryURL)
@@ -154,7 +175,7 @@ public final class UIValidationSession: ObservableObject {
                 removeData: { [newPreferences] in newPreferences.removeObject(forKey: InvocationEvaluationStore.defaultsKey); return true }
             )
             let folderStore = CapabilityFolderStore.makeMemory()
-            let newStore = try DatabaseStore(url: newURL)
+            let newStore = try DatabaseStore(url: newURL, queryObserver: performanceQueryObserver)
             let newModel = DirectorAppModel(
                 store: newStore,
                 coordinator: nil,
@@ -210,6 +231,25 @@ public final class UIValidationSession: ObservableObject {
     }
 
     private static func makeTemporaryDatabase() throws -> (URL, URL) {
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        if let configuredRoot = ProcessInfo.processInfo.environment["CODEX_DIRECTOR_INTERACTION_TEMP_ROOT"],
+           configuredRoot.hasPrefix("/tmp/codex-director-interaction-perf/"),
+           !configuredRoot.contains("..") {
+            let root = URL(fileURLWithPath: configuredRoot, isDirectory: true)
+            let manager = FileManager.default
+            // The app creates this UUID-scoped root, while the parent runner
+            // removes the exact path from its signal trap. Refuse any
+            // pre-existing path so a stale or symlinked location cannot be
+            // followed.
+            guard !manager.fileExists(atPath: root.path) else {
+                throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: root.path])
+            }
+            try manager.createDirectory(at: root, withIntermediateDirectories: false)
+            let directory = root.appendingPathComponent("fixture-\(UUID().uuidString)", isDirectory: true)
+            try manager.createDirectory(at: directory, withIntermediateDirectories: false)
+            return (directory, directory.appendingPathComponent("validation.sqlite"))
+        }
+#endif
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("codex-director-ui-validation-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -258,6 +298,8 @@ public final class UIValidationSession: ObservableObject {
         case .representative: return FixtureCounts(resources: 14, sessions: 4, invocations: 20, findings: 2)
         case .empty: return FixtureCounts(resources: 0, sessions: 0, invocations: 0, findings: 0)
         case .stress: return FixtureCounts(resources: 165, sessions: 4, invocations: 520, findings: 4)
+        case .interactionStress: return FixtureCounts(resources: 1_000, sessions: 4, invocations: 520, findings: 4)
+        case .interactionRepresentative: return FixtureCounts(resources: 283, sessions: 4, invocations: 80, findings: 4)
         case .homeVisual: return FixtureCounts(resources: 36, sessions: 4, invocations: 240, findings: 4)
         case .fiveHourOnly: return FixtureCounts(resources: 14, sessions: 4, invocations: 20, findings: 2)
         }
@@ -360,6 +402,10 @@ private struct Fixture {
             self = Self.representative()
         case .stress:
             self = Self.stress()
+        case .interactionStress:
+            self = Self.interactionStress()
+        case .interactionRepresentative:
+            self = Self.interactionRepresentative()
         case .homeVisual:
             self = Self.homeVisual()
         case .fiveHourOnly:
@@ -396,9 +442,17 @@ private struct Fixture {
             if (kind == .plugin || ownership == .pluginProvided) && scope == .runtime { return "runtime-plugins" }
             return "validation-\(scope.rawValue)"
         }()
+        var reviewName = name
+        var reviewSummary = summary
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        if ProcessInfo.processInfo.environment["CODEX_DIRECTOR_INTERACTION_LONG_TEXT"] == "1" {
+            reviewName = "长名称验证 Long Synthetic Capability — " + name + " — " + String(repeating: "跨窗口协作能力 Long Name ", count: 5)
+            reviewSummary = String(repeating: "合成用途说明：验证长文本换行、键盘焦点与内容边界，不读取真实能力。 Synthetic purpose verifies wrapping and accessible navigation without private data. ", count: 4)
+        }
+#endif
         return CapabilityResource(
-            id: id, name: name, kind: kind, status: status, scope: scope,
-            projectID: projectID, confidence: confidence, summary: summary,
+            id: id, name: reviewName, kind: kind, status: status, scope: scope,
+            projectID: projectID, confidence: confidence, summary: reviewSummary,
             sourceRootID: rootID, relativeSourcePath: "synthetic/\(name).md",
             sourcePathHash: "hash-\(name)", lastSeenAt: epoch, ownership: ownership, origin: origin,
             classificationConfidence: confidence, contentFingerprint: "fingerprint-\(name)",
@@ -440,6 +494,128 @@ private struct Fixture {
             ))
         }
         return build(resources: resources, sessionCount: 4, invocationCount: 520, findingCount: 4)
+    }
+
+    private static func interactionStress() -> Fixture {
+        let agents = (0..<500).map { index in
+            resource(id: "agent:interaction-\(index)", name: "Synthetic Agent \(index)", kind: .agent,
+                     scope: .global, ownership: .userOwned, origin: .local)
+        }
+        let skills = (0..<500).map { index in
+            resource(id: "skill:interaction-\(index)", name: "Synthetic Skill \(index)", kind: .skill,
+                     scope: .global, ownership: .userOwned, origin: .local)
+        }
+        let base = build(resources: agents + skills, sessionCount: 4, invocationCount: 520, findingCount: 4)
+        let declarations = (0..<500).flatMap { agent in
+            (0..<8).map { offset in
+                ResourceRelation(
+                    sourceResourceID: "agent:interaction-\(agent)",
+                    targetResourceID: "skill:interaction-\((agent * 8 + offset) % 500)",
+                    relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                    confidence: .exact,
+                    evidenceSummary: CapabilityCompanionDeclarationSource.agentBrief.rawValue
+                )
+            }
+        }
+        return Fixture(resources: base.resources, projects: base.projects, provenance: base.provenance,
+                       relations: base.relations + declarations, batches: base.batches, evaluations: base.evaluations)
+    }
+
+    /// Medium interaction fixture: one global folder with 47 Agents and 44
+    /// Skills, plus one project folder with 19 Agents and 173 Skills. The
+    /// final global Skills include installed and plugin-provided entries so
+    /// the folder projection exercises source-boundary and preview semantics;
+    /// the project members remain user-owned and project-scoped.
+    private static func interactionRepresentative() -> Fixture {
+        let globalAgents = (0..<47).map { index in
+            resource(
+                id: "agent:interaction-representative-global-\(index)",
+                name: "Synthetic Global Agent \(index)",
+                kind: .agent,
+                scope: .global,
+                ownership: .userOwned,
+                origin: .local,
+                confidence: index.isMultiple(of: 13) ? .unknown : .exact,
+                status: index.isMultiple(of: 17) ? .unknown : .idle
+            )
+        }
+        let globalSkills = (0..<44).map { index in
+            let ownership: ResourceOwnership = index >= 42 ? .pluginProvided : (index >= 40 ? .installed : .userOwned)
+            let origin: ResourceOrigin = index >= 42 ? .plugin : (index >= 40 ? .github : .local)
+            let scope: ResourceScope = index >= 42 ? .runtime : .global
+            return resource(
+                id: "skill:interaction-representative-global-\(index)",
+                name: "Synthetic Global Skill \(index)",
+                kind: .skill,
+                scope: scope,
+                ownership: ownership,
+                origin: origin,
+                confidence: index.isMultiple(of: 11) ? .unknown : .exact,
+                status: index.isMultiple(of: 19) ? .unknown : .idle
+            )
+        }
+        let projectAgents = (0..<19).map { index in
+            resource(
+                id: "agent:interaction-representative-project-\(index)",
+                name: "Synthetic Project Agent \(index)",
+                kind: .agent,
+                scope: .project,
+                projectID: projectA,
+                ownership: .userOwned,
+                origin: .local,
+                confidence: index.isMultiple(of: 7) ? .unknown : .exact,
+                status: index.isMultiple(of: 5) ? .unknown : .idle
+            )
+        }
+        let projectSkills = (0..<173).map { index in
+            resource(
+                id: "skill:interaction-representative-project-\(index)",
+                name: "Synthetic Project Skill \(index)",
+                kind: .skill,
+                scope: .project,
+                projectID: projectA,
+                ownership: .userOwned,
+                origin: .local,
+                confidence: index.isMultiple(of: 17) ? .unknown : .exact,
+                status: index.isMultiple(of: 23) ? .unknown : .idle
+            )
+        }
+        let resources = globalAgents + globalSkills + projectAgents + projectSkills
+        let base = build(resources: resources, sessionCount: 4, invocationCount: 80, findingCount: 4)
+        func companion(_ agentID: String, _ skillID: String, source: CapabilityCompanionDeclarationSource) -> ResourceRelation {
+            ResourceRelation(
+                sourceResourceID: agentID,
+                targetResourceID: skillID,
+                relationKind: CapabilityCompanionRelationKind.companionSkill.rawValue,
+                confidence: .exact,
+                evidenceSummary: source.rawValue
+            )
+        }
+        let globalSkillIDs = globalSkills.map(\.id)
+        let projectSkillIDs = projectSkills.map(\.id)
+        var declarations: [ResourceRelation] = []
+        for (index, agent) in globalAgents.enumerated() {
+            declarations.append(companion(agent.id, globalSkillIDs[index % globalSkillIDs.count], source: .agentBrief))
+            declarations.append(companion(agent.id, globalSkillIDs[(index + 1) % globalSkillIDs.count], source: .skillDescription))
+        }
+        for (index, agent) in projectAgents.enumerated() {
+            declarations.append(companion(agent.id, projectSkillIDs[index % projectSkillIDs.count], source: .projectRegistry))
+            declarations.append(companion(agent.id, projectSkillIDs[(index + 1) % projectSkillIDs.count], source: .agentBrief))
+        }
+        // The first project Agents explicitly preview one global Skill. This
+        // remains outside project membership and exercises the folder-boundary
+        // presentation without changing counts.
+        for agent in projectAgents.prefix(3) {
+            declarations.append(companion(agent.id, globalSkillIDs[0], source: .projectRegistry))
+        }
+        return Fixture(
+            resources: base.resources,
+            projects: base.projects,
+            provenance: base.provenance,
+            relations: base.relations + declarations,
+            batches: base.batches,
+            evaluations: base.evaluations
+        )
     }
 
     private static func homeVisual() -> Fixture {
@@ -497,7 +673,12 @@ private struct Fixture {
                     "plugin:validation-enabled", "tool:validation-tool", "agent:validation-project-a", "skill:validation-installed",
                     "plugin:validation-disabled", "plugin:validation-unsupported", "tool:validation-tool", "skill:validation-custom"
                 ]
-                resourceID = representativeIDs[index]
+                // The medium interaction fixture deliberately records more
+                // synthetic calls than the small representative list has
+                // distinct entries. Reuse the deterministic sequence instead
+                // of indexing past its end; this keeps project fixture calls
+                // zero while preserving the existing small-fixture order.
+                resourceID = representativeIDs[index % representativeIDs.count]
             } else {
                 resourceID = resources[index % resources.count].id
             }

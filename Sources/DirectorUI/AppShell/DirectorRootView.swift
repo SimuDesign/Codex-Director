@@ -12,10 +12,20 @@ public struct DirectorRootView: View {
     @State private var windowPresenceID = UUID()
     @State private var sidebarSelectionEmphasized = false
     @Environment(\.colorSchemeContrast) private var contrast
+#if DIRECTOR_INTERACTION_PERFORMANCE
+    private let interactionPerformanceDriver: InteractionPerformanceDriver?
+#endif
 
+#if DIRECTOR_INTERACTION_PERFORMANCE
+    public init(model: DirectorAppModel = DirectorAppModel(), interactionPerformanceDriver: InteractionPerformanceDriver? = nil) {
+        _model = StateObject(wrappedValue: model)
+        self.interactionPerformanceDriver = interactionPerformanceDriver
+    }
+#else
     public init(model: DirectorAppModel = DirectorAppModel()) {
         _model = StateObject(wrappedValue: model)
     }
+#endif
 
     public var body: some View {
         NavigationSplitView {
@@ -101,7 +111,7 @@ public struct DirectorRootView: View {
     private var detailView: some View {
         switch model.selection {
         case .home:
-            HomeOverviewView(model: homeOverviewModel, quotaModel: model.quotaOverviewSnapshot.map { QuotaOverviewModel(snapshot: $0, accountUsage: model.accountUsageSnapshot, now: model.presentationNow, calendar: model.statisticsCalendar, selectedSourceID: model.quotaSourceID) } ?? QuotaOverviewModel(snapshots: [], now: model.presentationNow, calendar: model.statisticsCalendar, selectedSourceID: model.quotaSourceID), presentationState: model.presentationState, directoryLoaded: model.directoryLoaded, hasComputedStatistics: model.hasComputedStatistics, hasCachedHomeSummary: model.presentationHomeSummary != nil, lastUpdatedAt: model.homeLastUpdatedAt, onQuotaSourceChange: { model.setQuotaSourceID($0) }, onOpenCategory: { category in
+            HomeOverviewView(model: homeOverviewModel, quotaModel: model.quotaOverviewSnapshot.map { QuotaOverviewModel(snapshot: $0, accountUsage: model.accountUsageSnapshot, now: model.presentationNow, calendar: model.statisticsCalendar, selectedSourceID: model.quotaSourceID) } ?? QuotaOverviewModel(snapshots: [], now: model.presentationNow, calendar: model.statisticsCalendar, selectedSourceID: model.quotaSourceID), presentationState: model.presentationState, directoryLoaded: model.directoryLoaded, hasComputedStatistics: model.hasComputedStatistics, hasCachedHomeSummary: model.presentationHomeSummary != nil, pluginInventoryAvailable: model.pluginInventoryAvailable, lastUpdatedAt: model.homeLastUpdatedAt, homeUsageRankingPeriod: model.homeUsageRankingPeriod, onHomeUsageRankingPeriodChange: { model.setHomeUsageRankingPeriod($0) }, onQuotaSourceChange: { model.setQuotaSourceID($0) }, onOpenCategory: { category in
                 model.selection = sidebarItem(for: category)
                 if let library = model.libraryModels.first(where: { $0.category == category }) {
                     library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending)
@@ -112,9 +122,17 @@ public struct DirectorRootView: View {
                 if let library = model.libraryModels.first(where: { $0.category == category }) { library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending); library.selectedID = id }
             })
         case .capabilityFolders:
+#if DIRECTOR_INTERACTION_PERFORMANCE
+            CapabilityFoldersView(
+                model: model,
+                detailContext: { resource in capabilityDetailModel(for: resource) },
+                performanceDriver: interactionPerformanceDriver ?? .noop
+            )
+#else
             CapabilityFoldersView(model: model) { resource in
                 capabilityDetailModel(for: resource)
             }
+#endif
         case .customAgents:
             filteredCapabilities(category: .myAgents, model: model.libraryModels[0], titleKey: "nav.customAgents", fallback: "Custom Agents")
         case .customSkills:
@@ -215,6 +233,7 @@ public struct DirectorRootView: View {
             title: languageStore.localizer.text(titleKey, fallback: fallback),
             subtitle: languageStore.localizer.text("library.subtitle", fallback: "Browse indexed capabilities and their recent evidence."),
             presentationState: self.model.presentationState,
+            pluginInventoryAvailable: self.model.pluginInventoryAvailable,
             queryStatus: self.model.libraryQueryStatus[libraryModel.category],
             resultContext: self.model.libraryResultContext[libraryModel.category],
             queryTrigger: "\(self.model.directoryLoaded)-\(self.model.statisticsWindow?.start.timeIntervalSinceReferenceDate ?? -1)-\(self.model.statisticsWindow?.end.timeIntervalSinceReferenceDate ?? -1)",

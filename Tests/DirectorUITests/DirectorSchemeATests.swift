@@ -57,7 +57,8 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(library.contains("DirectorFilterRibbon"))
         XCTAssertTrue(library.contains("DirectorSideSheet"))
         XCTAssertFalse(library.contains("DirectorInspectorPanel"))
-        XCTAssertTrue(library.contains("DirectorGroupHeader"))
+        XCTAssertTrue(library.contains("CapabilityGroupHeaderBorder(isCollapsed: isCollapsed)"))
+        XCTAssertTrue(library.contains("DirectorColor.accent(pageTone)"))
         XCTAssertTrue(library.contains("case .customAgents: return .blue"))
         XCTAssertTrue(library.contains("case .customSkills: return .ice"))
         XCTAssertTrue(library.contains("case .installedSkills: return .mint"))
@@ -309,6 +310,22 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertEqual(activatedIndex, 2)
         XCTAssertTrue(control.isSelected(forSegment: 2))
         XCTAssertFalse(control.isSelected(forSegment: 0))
+    }
+
+    func testNativeOutlinedSegmentsSkipUnchangedLayoutWork() {
+        let control = DirectorNativeOutlinedSegmentedControl(frame: .zero)
+        let titles = ["Agent & Companion Skills", "Agent", "Skill"]
+        let initial = control.applyConfiguration(label: "Capability view", titles: titles, selectedIndex: 0, isEnabled: true, increasedContrast: false, reduceTransparency: false)
+        XCTAssertEqual(initial, .init(intrinsicSize: true, layout: true, display: true))
+        XCTAssertEqual(control.applyConfiguration(label: "Capability view", titles: titles, selectedIndex: 0, isEnabled: true, increasedContrast: false, reduceTransparency: false),
+                       .init(intrinsicSize: false, layout: false, display: false))
+        XCTAssertEqual(control.applyConfiguration(label: "Capability view", titles: titles, selectedIndex: 1, isEnabled: true, increasedContrast: false, reduceTransparency: false),
+                       .init(intrinsicSize: false, layout: false, display: true))
+        XCTAssertTrue(control.isSelected(forSegment: 1))
+        XCTAssertEqual(control.applyConfiguration(label: "Capability view", titles: titles, selectedIndex: 1, isEnabled: true, increasedContrast: true, reduceTransparency: false),
+                       .init(intrinsicSize: false, layout: false, display: true))
+        XCTAssertEqual(control.applyConfiguration(label: "Capability view", titles: ["Agent 与配套 Skill", "Agent", "Skill"], selectedIndex: 1, isEnabled: true, increasedContrast: true, reduceTransparency: false),
+                       .init(intrinsicSize: true, layout: true, display: true))
     }
 
     func testNativeOutlinedThemeSegmentsReserveUnconstrainedTextTolerance() {
@@ -586,8 +603,8 @@ final class DirectorSchemeATests: XCTestCase {
         XCTAssertTrue(settings.contains("settings.about.title"))
         XCTAssertTrue(settings.contains("settings.author"))
         XCTAssertTrue(settings.contains("七木 Simu"))
-        XCTAssertTrue(settings.contains("return version ?? \"1.3.1\""))
-        XCTAssertFalse(settings.contains("1.3.1 (26)"))
+        XCTAssertTrue(settings.contains("return version ?? \"1.4.0\""))
+        XCTAssertFalse(settings.contains("1.4.0 (27)"))
         XCTAssertTrue(settings.contains("eyebrow: nil"))
         XCTAssertTrue(settings.contains("DirectorPageContentFrame(workspaceWidth: viewport.size.width)"))
         XCTAssertTrue(settings.contains("DirectorSecondaryActionButtonStyle(size: .settings, destructive: true)"))
@@ -682,10 +699,10 @@ final class DirectorSchemeATests: XCTestCase {
         let buildScript = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/build-local-app.sh"), encoding: .utf8)
         let appVerifier = try String(contentsOf: sourceRoot.appendingPathComponent("scripts/verify-app-bundle.sh"), encoding: .utf8)
         let harness = try String(contentsOf: sourceRoot.appendingPathComponent("Tests/StartupPerformanceHarness/project.yml"), encoding: .utf8)
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.1"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 26"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.1").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 26").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.4.0"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 27"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.4.0").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 27").count - 1, 2)
         XCTAssertTrue(buildScript.contains("verify-app-bundle.sh"))
         XCTAssertTrue(appVerifier.contains("read-project-version.sh"))
         XCTAssertTrue(appVerifier.contains("short_version\" == \"$expected_marketing_version\""))
@@ -707,19 +724,19 @@ final class DirectorSchemeATests: XCTestCase {
         let readme = try String(contentsOf: sourceRoot.appendingPathComponent("README.md"), encoding: .utf8)
         let readmeChinese = try String(contentsOf: sourceRoot.appendingPathComponent("README.zh-CN.md"), encoding: .utf8)
 
-        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.3.1"))
-        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 26"))
-        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.3.1").count - 1, 2)
-        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 26").count - 1, 2)
+        XCTAssertTrue(project.contains("MARKETING_VERSION: 1.4.0"))
+        XCTAssertTrue(project.contains("CURRENT_PROJECT_VERSION: 27"))
+        XCTAssertEqual(pbxproj.components(separatedBy: "MARKETING_VERSION = 1.4.0").count - 1, 2)
+        XCTAssertEqual(pbxproj.components(separatedBy: "CURRENT_PROJECT_VERSION = 27").count - 1, 2)
         XCTAssertTrue(readClient.contains("requestPayload(version: \"1.2.0\")"))
         XCTAssertTrue(validation.contains("CapabilityPackageProducer(version: \"1.2.0\", build: \"24\")"))
         XCTAssertTrue(changelog.contains("## 1.1.1"))
         XCTAssertTrue(changelog.contains("## 1.1.0"))
         XCTAssertTrue(changelog.contains("## 1.0.0"))
-        XCTAssertTrue(readme.contains("1.3.1"))
-        XCTAssertTrue(readmeChinese.contains("1.3.1"))
-        XCTAssertFalse(readme.contains("1.3.1 (26)"))
-        XCTAssertFalse(readmeChinese.contains("1.3.1 (26)"))
+        XCTAssertTrue(readme.contains("1.4.0"))
+        XCTAssertTrue(readmeChinese.contains("1.4.0"))
+        XCTAssertFalse(readme.contains("1.4.0 (27)"))
+        XCTAssertFalse(readmeChinese.contains("1.4.0 (27)"))
 
         for relativePath in [
             "Sources/DirectorUI/Resources/en.lproj/Localizable.strings",

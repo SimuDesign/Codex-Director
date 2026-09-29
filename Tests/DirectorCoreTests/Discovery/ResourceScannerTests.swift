@@ -3,6 +3,39 @@ import XCTest
 
 final class ResourceScannerTests: XCTestCase {
 
+    func testSkillPurposeSupportsBlockScalarsAndOpeningProseWithoutChangingSources() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("director-purpose-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let privatePath = ["", "Users", "fixture-user", "Documents", "work"].joined(separator: "/")
+        let examples: [(String, String, String?)] = [
+            ("folded", "---\nname: folded\ndescription: >-\n  Inspect local assets.\n  Preserve their sources.\nmetadata: {\"schema\": 1}\n---\n# Instructions\nDo not persist this body.\n", "Inspect local assets. Preserve their sources."),
+            ("literal", "---\nname: literal\ndescription: |\n  第一行用途。\n  第二行说明。\n---\nIgnored body.\n", "第一行用途。\n第二行说明。"),
+            ("colon", "---\nname: colon\ndescription: >\n  Use when: examining assets.\n  name: is description text, not a resource rename.\nmetadata:\n  name: nested-name\n  description: nested-description\n---\n", "Use when: examining assets. name: is description text, not a resource rename."),
+            ("prose", "# prose\n\nInspect and test local changes.\n\n## Commands\nNever index this section.\n", "Inspect and test local changes."),
+            ("undeclared", "# undeclared\n\n## Commands\nDo not treat later instructions as a purpose.\n", nil),
+            ("code-first", "# code-first\n\n```sh\nrun-something\n```\n", nil),
+            ("broken", "---\nname: broken\ndescription: >\n  Unterminated header.\n", nil),
+            ("empty-block", "---\nname: empty-block\ndescription: >-\n\nversion: 1\n---\n", nil),
+            ("private-prose", "# private-prose\n\nRead \(privatePath).\n", nil),
+            ("private-block", "---\nname: private-block\ndescription: |\n  Read \(privatePath).\n---\n", nil),
+            ("oversized-block", "---\nname: oversized-block\ndescription: >\n  \(String(repeating: "x", count: 16_385))\n---\n", nil),
+        ]
+        for (name, text, _) in examples {
+            let folder = directory.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try text.write(to: folder.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        }
+        let root = ScanRoot(id: "purpose-fixture", url: directory, scope: .global, kind: .skills)
+        let output = ResourceScanner(roots: [root]).scan()
+        XCTAssertEqual(output.resources.count, examples.count)
+        for (name, text, expected) in examples {
+            let resource = try XCTUnwrap(output.resources.first { $0.name == name }, name)
+            XCTAssertEqual(resource.summary, expected, name)
+            XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent(name).appendingPathComponent("SKILL.md"), encoding: .utf8), text)
+        }
+    }
+
     private var fixturesRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

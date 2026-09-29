@@ -89,15 +89,55 @@ public struct PresentationHomeTopRow: Codable, Equatable, Sendable, Identifiable
     }
 }
 
+/// The three Home ranking lists for one bounded usage period.
+public struct PresentationHomeRankingSet: Codable, Equatable, Sendable {
+    public let customAgentsTop: [PresentationHomeTopRow]
+    public let customSkillsTop: [PresentationHomeTopRow]
+    public let installedSkillsTop: [PresentationHomeTopRow]
+
+    public init(
+        customAgentsTop: [PresentationHomeTopRow] = [],
+        customSkillsTop: [PresentationHomeTopRow] = [],
+        installedSkillsTop: [PresentationHomeTopRow] = []
+    ) {
+        self.customAgentsTop = customAgentsTop
+        self.customSkillsTop = customSkillsTop
+        self.installedSkillsTop = installedSkillsTop
+    }
+
+    public func rows(for category: CapabilityCategory) -> [PresentationHomeTopRow] {
+        switch category {
+        case .customAgents: return customAgentsTop
+        case .customSkills: return customSkillsTop
+        case .installedSkills: return installedSkillsTop
+        case .installedPlugins: return []
+        }
+    }
+}
+
 public struct PresentationHomeSummary: Codable, Equatable, Sendable {
     public static let currentRankingCapacity = 10
+    public static let currentInstalledSkillRankingScopeVersion = 2
 
     public let customAgents, customAgentsGlobal, customAgentsProject: Int
     public let customSkills, customSkillsGlobal, customSkillsProject: Int
     public let installedSkills, installedSkillsIndependent, installedSkillsPluginProvided: Int
+    /// Version 1 included plugin-provided Skills in installed-Skill rankings.
+    /// Version 2 contains only independently installed Skills. Missing means
+    /// an older cache and needs a bounded Home-ranking upgrade.
+    public let installedSkillRankingScopeVersion: Int
     public let installedPlugins, enabledPlugins: Int
     public let rankingCapacity: Int
     public let customAgentsTop, customSkillsTop, installedSkillsTop: [PresentationHomeTopRow]
+    /// Nil means the thirty-day projection has not been computed. A non-nil
+    /// empty set is a completed query with no calls in that window.
+    public let thirtyDayRankings: PresentationHomeRankingSet?
+
+    public var needsRankingUpgrade: Bool {
+        rankingCapacity < Self.currentRankingCapacity
+            || thirtyDayRankings == nil
+            || installedSkillRankingScopeVersion != Self.currentInstalledSkillRankingScopeVersion
+    }
 
     /// Compatibility views for callers that still need to inspect a legacy
     /// Top5 payload. They are intentionally not Codable keys.
@@ -105,13 +145,41 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
     public var customSkillsTop5: [PresentationHomeTopRow] { Array(customSkillsTop.prefix(5)) }
     public var installedSkillsTop5: [PresentationHomeTopRow] { Array(installedSkillsTop.prefix(5)) }
 
-    public init(customAgents: Int, customAgentsGlobal: Int, customAgentsProject: Int, customSkills: Int, customSkillsGlobal: Int, customSkillsProject: Int, installedSkills: Int, installedSkillsIndependent: Int, installedSkillsPluginProvided: Int, installedPlugins: Int, enabledPlugins: Int, rankingCapacity: Int = currentRankingCapacity, customAgentsTop: [PresentationHomeTopRow] = [], customSkillsTop: [PresentationHomeTopRow] = [], installedSkillsTop: [PresentationHomeTopRow] = []) {
+    /// Rebuilds only the optional thirty-day projection while preserving all
+    /// inventory and seven-day compatibility fields. Classification changes
+    /// can therefore refresh the visible seven-day rows without discarding a
+    /// completed thirty-day cache or causing an avoidable upgrade read.
+    public func replacingThirtyDayRankings(_ rankings: PresentationHomeRankingSet?) -> Self {
+        Self(
+            customAgents: customAgents,
+            customAgentsGlobal: customAgentsGlobal,
+            customAgentsProject: customAgentsProject,
+            customSkills: customSkills,
+            customSkillsGlobal: customSkillsGlobal,
+            customSkillsProject: customSkillsProject,
+            installedSkills: installedSkills,
+            installedSkillsIndependent: installedSkillsIndependent,
+            installedSkillsPluginProvided: installedSkillsPluginProvided,
+            installedPlugins: installedPlugins,
+            enabledPlugins: enabledPlugins,
+            rankingCapacity: rankingCapacity,
+            customAgentsTop: customAgentsTop,
+            customSkillsTop: customSkillsTop,
+            installedSkillsTop: installedSkillsTop,
+            thirtyDayRankings: rankings,
+            installedSkillRankingScopeVersion: installedSkillRankingScopeVersion
+        )
+    }
+
+    public init(customAgents: Int, customAgentsGlobal: Int, customAgentsProject: Int, customSkills: Int, customSkillsGlobal: Int, customSkillsProject: Int, installedSkills: Int, installedSkillsIndependent: Int, installedSkillsPluginProvided: Int, installedPlugins: Int, enabledPlugins: Int, rankingCapacity: Int = currentRankingCapacity, customAgentsTop: [PresentationHomeTopRow] = [], customSkillsTop: [PresentationHomeTopRow] = [], installedSkillsTop: [PresentationHomeTopRow] = [], thirtyDayRankings: PresentationHomeRankingSet? = nil, installedSkillRankingScopeVersion: Int = currentInstalledSkillRankingScopeVersion) {
         self.customAgents = customAgents; self.customAgentsGlobal = customAgentsGlobal; self.customAgentsProject = customAgentsProject
         self.customSkills = customSkills; self.customSkillsGlobal = customSkillsGlobal; self.customSkillsProject = customSkillsProject
         self.installedSkills = installedSkills; self.installedSkillsIndependent = installedSkillsIndependent; self.installedSkillsPluginProvided = installedSkillsPluginProvided
+        self.installedSkillRankingScopeVersion = installedSkillRankingScopeVersion
         self.installedPlugins = installedPlugins; self.enabledPlugins = enabledPlugins
         self.rankingCapacity = rankingCapacity
         self.customAgentsTop = customAgentsTop; self.customSkillsTop = customSkillsTop; self.installedSkillsTop = installedSkillsTop
+        self.thirtyDayRankings = thirtyDayRankings
     }
 
     /// Source compatibility for callers that constructed the pre-0.2.2
@@ -123,7 +191,8 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
             installedSkills: installedSkills, installedSkillsIndependent: installedSkillsIndependent,
             installedSkillsPluginProvided: installedSkillsPluginProvided, installedPlugins: installedPlugins,
             enabledPlugins: enabledPlugins, rankingCapacity: 5,
-            customAgentsTop: customAgentsTop5, customSkillsTop: customSkillsTop5, installedSkillsTop: installedSkillsTop5
+            customAgentsTop: customAgentsTop5, customSkillsTop: customSkillsTop5, installedSkillsTop: installedSkillsTop5,
+            thirtyDayRankings: nil
         )
     }
 
@@ -134,6 +203,8 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
         case installedPlugins, enabledPlugins
         case rankingCapacity, customAgentsTop, customSkillsTop, installedSkillsTop
         case customAgentsTop5, customSkillsTop5, installedSkillsTop5
+        case thirtyDayRankings
+        case installedSkillRankingScopeVersion
     }
 
     public init(from decoder: Decoder) throws {
@@ -147,6 +218,7 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
         installedSkills = try values.decode(Int.self, forKey: .installedSkills)
         installedSkillsIndependent = try values.decode(Int.self, forKey: .installedSkillsIndependent)
         installedSkillsPluginProvided = try values.decode(Int.self, forKey: .installedSkillsPluginProvided)
+        installedSkillRankingScopeVersion = try values.decodeIfPresent(Int.self, forKey: .installedSkillRankingScopeVersion) ?? 1
         installedPlugins = try values.decode(Int.self, forKey: .installedPlugins)
         enabledPlugins = try values.decode(Int.self, forKey: .enabledPlugins)
 
@@ -156,6 +228,7 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
             customAgentsTop = try values.decode([PresentationHomeTopRow].self, forKey: .customAgentsTop)
             customSkillsTop = try values.decode([PresentationHomeTopRow].self, forKey: .customSkillsTop)
             installedSkillsTop = try values.decode([PresentationHomeTopRow].self, forKey: .installedSkillsTop)
+            thirtyDayRankings = try values.decodeIfPresent(PresentationHomeRankingSet.self, forKey: .thirtyDayRankings)
         } else {
             guard !values.contains(.customAgentsTop),
                   !values.contains(.customSkillsTop),
@@ -166,10 +239,16 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
             customAgentsTop = try values.decodeIfPresent([PresentationHomeTopRow].self, forKey: .customAgentsTop5) ?? []
             customSkillsTop = try values.decodeIfPresent([PresentationHomeTopRow].self, forKey: .customSkillsTop5) ?? []
             installedSkillsTop = try values.decodeIfPresent([PresentationHomeTopRow].self, forKey: .installedSkillsTop5) ?? []
+            thirtyDayRankings = nil
         }
         guard customAgentsTop.count <= rankingCapacity,
               customSkillsTop.count <= rankingCapacity,
-              installedSkillsTop.count <= rankingCapacity else {
+              installedSkillsTop.count <= rankingCapacity,
+              thirtyDayRankings.map({
+                  $0.customAgentsTop.count <= rankingCapacity &&
+                  $0.customSkillsTop.count <= rankingCapacity &&
+                  $0.installedSkillsTop.count <= rankingCapacity
+              }) ?? true else {
             throw DecodingError.dataCorruptedError(forKey: .rankingCapacity, in: values, debugDescription: "Home ranking exceeds declared capacity")
         }
     }
@@ -185,12 +264,14 @@ public struct PresentationHomeSummary: Codable, Equatable, Sendable {
         try values.encode(installedSkills, forKey: .installedSkills)
         try values.encode(installedSkillsIndependent, forKey: .installedSkillsIndependent)
         try values.encode(installedSkillsPluginProvided, forKey: .installedSkillsPluginProvided)
+        try values.encode(installedSkillRankingScopeVersion, forKey: .installedSkillRankingScopeVersion)
         try values.encode(installedPlugins, forKey: .installedPlugins)
         try values.encode(enabledPlugins, forKey: .enabledPlugins)
         try values.encode(rankingCapacity, forKey: .rankingCapacity)
         try values.encode(customAgentsTop, forKey: .customAgentsTop)
         try values.encode(customSkillsTop, forKey: .customSkillsTop)
         try values.encode(installedSkillsTop, forKey: .installedSkillsTop)
+        try values.encodeIfPresent(thirtyDayRankings, forKey: .thirtyDayRankings)
     }
 }
 
@@ -261,9 +342,10 @@ public struct PresentationRefreshSchedule: Codable, Equatable, Sendable {
 public struct StartupPresentationSnapshot: Sendable, Equatable {
     public let directory: PresentationDirectorySnapshot
     public let recentUsage: [CapabilityUsageStats]
+    public let recentUsagePeriods: [CapabilityUsagePeriodSnapshot]
     public let quota: QuotaOverviewSnapshot
-    public init(directory: PresentationDirectorySnapshot, recentUsage: [CapabilityUsageStats], quota: QuotaOverviewSnapshot) {
-        self.directory = directory; self.recentUsage = recentUsage; self.quota = quota
+    public init(directory: PresentationDirectorySnapshot, recentUsage: [CapabilityUsageStats], quota: QuotaOverviewSnapshot, recentUsagePeriods: [CapabilityUsagePeriodSnapshot] = []) {
+        self.directory = directory; self.recentUsage = recentUsage; self.recentUsagePeriods = recentUsagePeriods; self.quota = quota
     }
 }
 
@@ -272,10 +354,12 @@ public struct StartupPresentationSnapshot: Sendable, Equatable {
 public struct HomeRankingPresentationSnapshot: Sendable, Equatable {
     public let directory: PresentationDirectorySnapshot
     public let recentUsage: [CapabilityUsageStats]
+    public let recentUsagePeriods: [CapabilityUsagePeriodSnapshot]
 
-    public init(directory: PresentationDirectorySnapshot, recentUsage: [CapabilityUsageStats]) {
+    public init(directory: PresentationDirectorySnapshot, recentUsage: [CapabilityUsageStats], recentUsagePeriods: [CapabilityUsagePeriodSnapshot] = []) {
         self.directory = directory
         self.recentUsage = recentUsage
+        self.recentUsagePeriods = recentUsagePeriods
     }
 }
 

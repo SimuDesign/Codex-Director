@@ -96,8 +96,10 @@ final class CapabilitiesLayoutTests: XCTestCase {
         let scheme = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DesignSystem/DirectorSchemeA.swift"), encoding: .utf8)
         let typography = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/DesignSystem/DirectorTypography.swift"), encoding: .utf8)
 
-        XCTAssertTrue(library.contains("DirectorControlField"))
-        XCTAssertTrue(scheme.contains("public struct DirectorControlField"))
+        XCTAssertTrue(library.contains("DirectorSearchField"))
+        XCTAssertTrue(library.contains("DirectorOutlinedMenuField"))
+        XCTAssertTrue(scheme.contains("public struct DirectorSearchField"))
+        XCTAssertTrue(scheme.contains("public struct DirectorOutlinedMenuField"))
         XCTAssertTrue(library.contains(".padding(.bottom, compact ? DirectorSpacing.space3 : DirectorSpacing.space4)"))
         XCTAssertTrue(library.contains(".padding(.bottom, DirectorSpacing.space6)"))
         XCTAssertTrue(library.contains("DirectorTypography.pageHeroSymbol"))

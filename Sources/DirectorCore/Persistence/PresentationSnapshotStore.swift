@@ -117,7 +117,12 @@ public actor PresentationSnapshotStore {
            !(1...PresentationHomeSummary.currentRankingCapacity).contains(home.rankingCapacity) ||
            home.customAgentsTop.count > home.rankingCapacity ||
            home.customSkillsTop.count > home.rankingCapacity ||
-           home.installedSkillsTop.count > home.rankingCapacity { throw StoreError.corrupt }
+           home.installedSkillsTop.count > home.rankingCapacity ||
+           home.thirtyDayRankings.map({
+               $0.customAgentsTop.count <= home.rankingCapacity &&
+               $0.customSkillsTop.count <= home.rankingCapacity &&
+               $0.installedSkillsTop.count <= home.rankingCapacity
+           }) == false { throw StoreError.corrupt }
     }
 
     public func merge(_ snapshot: PresentationSnapshot, expectedIdentity: PresentationIdentity? = nil, generation: Int64? = nil) throws {

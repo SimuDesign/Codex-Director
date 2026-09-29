@@ -110,6 +110,70 @@ final class HomeRankingUpgradeIntegrationTests: XCTestCase {
         XCTAssertEqual(cached?.statisticsThrough, fixture.snapshot.statisticsThrough)
     }
 
+    func testLegacyPluginInclusiveRankingUsesBoundedUpgradeWithoutSourceIndex() async throws {
+        let fixture = try await makeFixture(capacity: 10, legacyInstalledSkillRow: true)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = makeModel(fixture)
+        let windowID = UUID()
+        model.setWindowVisibility(windowID, visible: true)
+        defer { model.stopSourceDataMonitor(); model.removeWindow(windowID) }
+        let controller = makeController(fixture, model: model)
+        controller.start(model: model)
+
+        let restored = await waitUntil { model.presentationHomeSummary?.installedSkillRankingScopeVersion == 1 }
+        XCTAssertTrue(restored)
+        XCTAssertFalse(HomeOverviewModel(summary: try XCTUnwrap(model.presentationHomeSummary)).installedSkillRankingsVerified)
+        let upgraded = await waitUntil(timeout: .seconds(8)) {
+            model.presentationHomeSummary?.installedSkillRankingScopeVersion == PresentationHomeSummary.currentInstalledSkillRankingScopeVersion
+        }
+        XCTAssertTrue(upgraded)
+        XCTAssertTrue(model.presentationHomeSummary?.installedSkillsTop.isEmpty == true)
+        XCTAssertEqual(fixture.counter.count(.startup), 0)
+        XCTAssertEqual(fixture.counter.count(.quota), 0)
+        XCTAssertEqual(fixture.sourceCounter.count(.started), 0)
+    }
+
+    func testHomeRankingUpgradePreservesCachedAccountUsageProjection() async throws {
+        let fixture = try await makeFixture(capacity: 5)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let accountUsage = try CodexAccountUsageSnapshot(
+            fiveHourRemainingPercent: 82,
+            fiveHourResetsAt: fixture.now.addingTimeInterval(5 * 60 * 60),
+            weeklyRemainingPercent: 74,
+            weeklyResetsAt: fixture.now.addingTimeInterval(7 * 24 * 60 * 60),
+            resetCreditCount: 2,
+            capturedAt: fixture.now
+        )
+        let legacy = PresentationSnapshot(
+            identity: fixture.snapshot.identity,
+            classificationRevision: fixture.snapshot.classificationRevision,
+            window: fixture.snapshot.window,
+            generatedAt: fixture.snapshot.generatedAt,
+            lastSourceCheckAt: fixture.snapshot.lastSourceCheckAt,
+            lastIndexCompletedAt: fixture.snapshot.lastIndexCompletedAt,
+            statisticsThrough: fixture.snapshot.statisticsThrough,
+            quota: fixture.snapshot.quota,
+            home: fixture.snapshot.home,
+            accountUsage: accountUsage
+        )
+        let permit = await fixture.cache.activate(identity: fixture.snapshot.identity)
+        try await fixture.cache.write(legacy, permit: permit)
+
+        let model = makeModel(fixture)
+        let windowID = UUID()
+        model.setWindowVisibility(windowID, visible: true)
+        defer { model.stopSourceDataMonitor(); model.removeWindow(windowID) }
+        let controller = makeController(fixture, model: model)
+        controller.start(model: model)
+
+        let upgraded = await waitUntil(timeout: .seconds(8)) {
+            model.presentationHomeSummary?.rankingCapacity == PresentationHomeSummary.currentRankingCapacity
+        }
+        XCTAssertTrue(upgraded)
+        let cached = try await fixture.cache.read(expectedIdentity: fixture.snapshot.identity)
+        XCTAssertEqual(cached?.accountUsage, accountUsage)
+    }
+
     func testCapacityTenCacheDoesNotScheduleUpgradeOrAggregate() async throws {
         let fixture = try await makeFixture(capacity: 10)
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -327,6 +391,50 @@ final class HomeRankingUpgradeIntegrationTests: XCTestCase {
         )
     }
 
+    func testFolderPeriodsLoadFromWarmCacheAndRemainSharedWithoutSortQueries() async throws {
+        let fixture = try await makeFixture(capacity: 10)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let model = makeModel(fixture)
+        defer { model.stopSourceDataMonitor() }
+        let controller = makeController(fixture, model: model)
+        controller.start(model: model)
+        let loaded = await waitUntil { model.directoryLoaded }
+        XCTAssertTrue(loaded)
+        XCTAssertNil(model.capabilityFolderUsageCount(for: "home-agent-0", thirtyDays: true))
+        async let first: Void = model.loadCapabilityFolderUsageIfNeeded()
+        async let second: Void = model.loadCapabilityFolderUsageIfNeeded()
+        _ = await (first, second)
+        XCTAssertEqual(model.capabilityFolderUsageCount(for: "home-agent-0", thirtyDays: true), 1)
+        XCTAssertEqual(model.capabilityFolderUsageCount(for: "home-agent-0", thirtyDays: false), 1)
+        XCTAssertEqual(model.capabilityFolderUsageCount(for: "unused", thirtyDays: true), 0)
+        let afterLoad = fixture.counter.snapshot()
+        await model.loadCapabilityFolderUsageIfNeeded()
+        XCTAssertEqual(fixture.counter.snapshot(), afterLoad)
+        XCTAssertEqual(fixture.sourceCounter.count(.started), 0)
+        try await model.deleteDerivedData()
+        XCTAssertNil(model.folderUsagePeriods)
+        XCTAssertNil(model.capabilityFolderUsageCount(for: "home-agent-0", thirtyDays: true))
+    }
+
+    func testFolderThirtyDayOnlyUsageIsZeroInSevenDayPeriod() async throws {
+        let fixture = try await makeFixture(capacity: 10)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let older = fixture.now.addingTimeInterval(-15 * 86400)
+        try await fixture.writer.replaceSession(PersistedSessionBatch(
+            session: TaskSummary(id: "older", projectID: nil, startedAt: older, endedAt: older, status: .completed, coverage: .complete, parserVersion: "synthetic", sourceFileID: "older", title: nil),
+            calls: [InvocationEvent(id: "older-call", sessionID: "older", parentCallID: nil, ordinal: 0, timestamp: older, actorName: nil, resourceID: "older-agent", kind: .agent, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil)],
+            tokenSnapshots: [], quotaSnapshots: [], findings: []
+        ))
+        let model = makeModel(fixture)
+        defer { model.stopSourceDataMonitor() }
+        try await model.refresh()
+        XCTAssertEqual(model.capabilityFolderUsageCount(for: "older-agent", thirtyDays: true), 1)
+        XCTAssertEqual(model.capabilityFolderUsageCount(for: "older-agent", thirtyDays: false), 0)
+        let operations = fixture.counter.snapshot()
+        await model.loadCapabilityFolderUsageIfNeeded()
+        XCTAssertEqual(fixture.counter.snapshot(), operations)
+    }
+
     private func makeController(_ fixture: Fixture, model: DirectorAppModel) -> DirectorStartupController {
         DirectorStartupController(
             cacheFactory: { fixture.cache },
@@ -340,7 +448,7 @@ final class HomeRankingUpgradeIntegrationTests: XCTestCase {
         )
     }
 
-    private func makeFixture(capacity: Int) async throws -> Fixture {
+    private func makeFixture(capacity: Int, legacyInstalledSkillRow: Bool = false) async throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("home-ranking-integration-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -401,7 +509,14 @@ final class HomeRankingUpgradeIntegrationTests: XCTestCase {
             customSkills: 0, customSkillsGlobal: 0, customSkillsProject: 0,
             installedSkills: 0, installedSkillsIndependent: 0, installedSkillsPluginProvided: 0,
             installedPlugins: 0, enabledPlugins: 0, rankingCapacity: capacity,
-            customAgentsTop: rows
+            customAgentsTop: rows,
+            installedSkillsTop: legacyInstalledSkillRow
+                ? [PresentationHomeTopRow(resourceID: "plugin-child", name: "Plugin Skill", category: .installedSkills, count: 8, inferredCount: 0, lastUsedAt: now)]
+                : [],
+            thirtyDayRankings: capacity == PresentationHomeSummary.currentRankingCapacity
+                ? PresentationHomeRankingSet()
+                : nil,
+            installedSkillRankingScopeVersion: legacyInstalledSkillRow ? 1 : PresentationHomeSummary.currentInstalledSkillRankingScopeVersion
         )
         let snapshot = PresentationSnapshot(
             identity: identity, classificationRevision: PresentationClassificationRevision.make([:]),

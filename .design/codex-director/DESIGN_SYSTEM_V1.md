@@ -1,9 +1,9 @@
 # Codex Director Design System v1
 
-Version: `1.3.1` (visible marketing version; internal build `26`)  
+Version: `1.4.0` (visible marketing version; internal build `27`)  
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-09-17
+Last updated: 2026-09-23
 
 ## 1. Purpose
 
@@ -77,7 +77,7 @@ Compact and ambient surfaces must not expose prompts, tool arguments, tokens, ra
 | 首页 / Home | How much quota remains, how many capabilities, what was used? | Three Card Atlas outline modules: quota ring + annotated daily bars; continuous four-metric strip; three-column Top10 comparison ledger |
 | 自定义 Agent / Custom Agents | What Agents have I developed and used? | Category totals; visible scope/search/sort; purpose-first list; invocation detail |
 | 自定义 Skill / Custom Skills | What Skills have I developed and used? | Same shared browsing contract |
-| 安装 Skill / Installed Skills | What installed Skills do I use? | Independent and current plugin-provided Skills, explicit source |
+| 安装 Skill / Installed Skills | Which independently installed Skills do I use? | Independent installed Skills only; plugin-provided Skills remain labeled in capability folders but do not enter this total, list, or ranking |
 | 安装插件 / Installed Plugins | Which installed packages are enabled and observed? | Current package inventory, incl disabled; attribution limitations visible |
 | 设置 / Settings | Is my data current and private? | Language and app appearance, indexing/status/diagnostics, capability migration, confirmed derived-data deletion, privacy, author and version |
 
@@ -327,8 +327,9 @@ below the folder header. The companion tab expands Agent rows with explicitly
 declared Skills and separately labels outside-folder previews; the Agent and
 Skill tabs remain complete lists. Custom folders expose an Add existing
 capabilities sheet with search, checkbox selection and one confirm action. The
-entry page uses one title and purpose line, an inline wide/stacked narrow
-search field, two aligned folder sections without a thick divider, and opaque
+entry page uses the shared 52/36pt rounded editorial title with the 24pt
+decorative folder symbol and one purpose line, an inline wide/stacked narrow
+folder-name search field, two aligned folder sections without a thick divider, and opaque
 folder cards. Folder interiors use breadcrumb, compact 32/28pt title, counts,
 three tabs and unboxed search/sort controls. Agent companions share one
 continuous bordered group; list rows omit zero/noisy usage evidence and keep
@@ -343,6 +344,14 @@ binding inside ViewThatFits candidates. Related-preview counts are labelled
 separately from real member counts; a preview-only Agent must not claim that
 no relationship is recorded.
 
+Entry search filters custom, Global and Project folder display names, preserving
+card order/actions/counts; it never substitutes an Agent/Skill result list.
+Folder interiors and Add existing retain capability search. Search fields use
+one native editor: the whole painted field, including icon and padding, forwards
+focus without replacing native caret/selection behavior. Filter Menu labels
+include their full height, padding and chevron inside the actionable bounds.
+Keep 32pt library and 36pt folder control heights and native keyboard/AX behavior.
+
 - Present name/purpose/ownership or source; recent-seven-day summary and usage projects; paginated calls with time/project/execution result/evidence and human evaluation.
 - Evaluation supports effective/ineffective/uncertain, edit and clear. A successful execution never preselects “effective”.
 - Missing declared purpose or modification time is shown as missing, not inferred from the name.
@@ -355,7 +364,7 @@ no relationship is recorded.
 - Use Swift Charts with native dynamic colors. Content charts are not glass panels.
 - Quota: a weekly outer ring (216pt / 20pt) and, when a valid same-source five-hour window exists, a concentric inner ring (154pt / 12pt). The center presents five-hour then weekly values with a 40pt divider; a single valid window uses one appropriately sized ring, and an expired/missing window is hidden independently. Reset time(s) sit below the centered ring. The quota-column heading aligns to the leading content edge; the ring and reset group remain centered. Recorded time and an extra evidence heading are omitted. If a current observation expired, show “waiting for a new quota record”, not a newly full allowance. Multiple sources use an outlined segmented switch whose selected border uses the shared brand gradient; no system-blue selected fill is allowed.
 - Daily weekly-quota usage bars: seven local calendar dates, each containing the reset-aware percentage-point increase observed from consecutive same-source weekly allowance reports. Retain use observed before and after a reported reset within one day. A day without an observation, an adjacent-day baseline, or sufficient reset evidence is unavailable rather than zero; only a confirmed flat sequence displays 0%. The current day ends at its latest report. Use the shared vertical brand gradient, a data-dependent percentage axis with annotation headroom, horizontal grid lines only, and centered date/bar columns whose labels and marks share the exact categorical center. If only a five-hour window is available, show “weekly quota history unavailable” rather than creating bars from the short window. Do not add ambiguous per-day reset text.
-- Rankings: current category resources with positive recent-seven-day calls only, descending count, up to ten, proportional bars and explicit inferred labels.
+- Rankings: current category resources with positive calls in the selected local natural-day window only, descending count, up to ten, proportional bars and explicit inferred labels. The Home ledger exposes a two-choice outlined Scheme A control for `Last 7 days` and `Last 30 days`; a fresh or invalid preference defaults to seven days and a valid user choice is restored on the next launch. The selected value remains visible at all widths. The control stays inline with the module title at wide widths and wraps below it at compact widths. A missing thirty-day projection is a pending state, never an empty or seven-day fallback; a successfully computed empty window is a separate confirmed-empty state. Switching the period is an in-memory projection over the cached Home snapshot and must not start indexing, SQLite reads, account reads or refresh work. Home ranking row labels and VoiceOver values include the full selected period name, and capability details reached from Home may show both seven-day and thirty-day counts.
 - Provide accessible labels and textual counts/time/missing states without hover. Do not use decorative symbols as extra AX content.
 - Distinguish loading, unindexed, no inventory, filter empty, not observed, attribution unavailable and update failure.
 
@@ -596,6 +605,11 @@ the brand gradient while the toolbar title remains native; page titles move to
 two overview subtitles; the quota source uses a segmented switch and reset time
 sits below the centered ring; project groups gain exactly 20pt inter-group
 spacing with tinted icon-led headers; group-internal row spacing is unchanged;
+the filtered capability count sits immediately after each group title, and a
+right-aligned chevron toggles that group without changing its count or the
+20pt inter-group gap. Groups open by default; disclosure is window-local,
+and editing the search reveals matching groups. The whole header is one
+keyboard/VoiceOver-actionable disclosure target with a localized state;
 dark teal data text uses `#5FD7EE`; and Settings
 uses balanced section padding with equal compact index actions.
 
@@ -773,3 +787,28 @@ remain unchanged. New Folder, Back, Add Existing and empty-state actions
 retain real native controls and their existing Scheme A appearance. No
 hidden duplicate, virtual action or clickable aggregate is allowed. Fresh
 native action and scroll-restoration evidence is required.
+
+### 1.4.0 capability sorting extension
+
+All capability-library sort menus and the three folder tabs offer an explicit
+"Past 30 days ↓ / 近 30 天调用 ↓" option immediately after the seven-day option.
+Reuse the current outlined menu, current-value label, sizing and keyboard
+behavior. Library counts show the selected period, with a "calls · 30 days"
+caption for thirty-day sorting. Summary metrics and companion shared-session
+evidence retain their explicitly labeled seven-day meaning. Unknown results
+remain unavailable and sort after known values; changing sort uses memory.
+
+### Pending proposal — four-library renderer experiment (not approved)
+
+The diagnostic-only AppKit table under `Sources/DirectorUI/Validation/` is a
+performance comparison, **not** an exception to §22 or §23. The four production
+libraries continue to use native SwiftUI `List(selection:)`. If a later
+Product Designer/UI Designer decision approves a renderer change, amend this
+contract explicitly before integration: preserve the existing 40/16pt gutters,
+20pt project-group spacing, outlined group grammar, contained selected-row
+wash, visible current filter values, keyboard/Shift/arrow behavior, row and
+action accessibility, context-menu membership action, scroll restoration and
+the viewport-pinned detail Sheet. Compare actual input-to-first-correct-paint,
+memory, scroll smoothness, Light/Dark, Increase Contrast, Reduce Motion and
+actual VoiceOver reading on the complete page. A faster stripped-down table
+alone does not satisfy these conditions or authorize production replacement.

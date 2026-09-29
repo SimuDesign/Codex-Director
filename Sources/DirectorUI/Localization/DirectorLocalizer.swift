@@ -6,7 +6,7 @@ public struct DirectorLocalizer {
     public let language: AppLanguage
     public let locale: Locale
 
-    private let bundle: Bundle
+    private let localizedBundle: Bundle?
 
     public init(language: AppLanguage) {
         self.init(language: language, bundle: .module)
@@ -15,7 +15,7 @@ public struct DirectorLocalizer {
     public init(language: AppLanguage, bundle: Bundle) {
         self.language = language
         locale = language.locale
-        self.bundle = bundle
+        localizedBundle = Self.localizedBundle(for: language, in: bundle)
     }
 
     public func text(_ key: String, fallback: String) -> String {
@@ -66,7 +66,7 @@ public struct DirectorLocalizer {
         return Array(Set(LocalizedSearch.aliases(for: key) + aliases.split(separator: "|").map(String.init)))
     }
 
-    private var localizedBundle: Bundle? {
+    private static func localizedBundle(for language: AppLanguage, in bundle: Bundle) -> Bundle? {
         for candidate in [language.rawValue, language.rawValue.lowercased()] {
             if let path = bundle.path(forResource: candidate, ofType: "lproj"),
                let localizedBundle = Bundle(path: path) {
@@ -76,10 +76,6 @@ public struct DirectorLocalizer {
         // Never fall through to the host's preferred language when a
         // requested localization directory is absent. English is the
         // deterministic source fallback for an incomplete bundle.
-        return englishBundle
-    }
-
-    private var englishBundle: Bundle? {
         for candidate in [AppLanguage.english.rawValue, AppLanguage.english.rawValue.lowercased()] {
             if let path = bundle.path(forResource: candidate, ofType: "lproj"),
                let englishBundle = Bundle(path: path) {

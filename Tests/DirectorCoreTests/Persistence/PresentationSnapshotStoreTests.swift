@@ -16,6 +16,34 @@ final class PresentationSnapshotStoreTests: XCTestCase {
         XCTAssertEqual(loaded, snapshot)
     }
 
+    func testHomeThirtyDayRankingRoundTripDistinguishesEmptyFromUnavailable() async throws {
+        let file = url(); defer { try? FileManager.default.removeItem(at: file) }
+        let identity = PresentationIdentity(databaseEpoch: "dual", dataGeneration: 1)
+        let row = PresentationHomeTopRow(resourceID: "agent", name: "Agent", category: .customAgents, count: 1, inferredCount: 0, lastUsedAt: nil)
+        let summary = PresentationHomeSummary(
+            customAgents: 1, customAgentsGlobal: 1, customAgentsProject: 0,
+            customSkills: 0, customSkillsGlobal: 0, customSkillsProject: 0,
+            installedSkills: 0, installedSkillsIndependent: 0, installedSkillsPluginProvided: 0,
+            installedPlugins: 0, enabledPlugins: 0,
+            customAgentsTop: [row],
+            thirtyDayRankings: PresentationHomeRankingSet()
+        )
+        let snapshot = makeSnapshot(identity: identity, home: summary)
+        let store = PresentationSnapshotStore(url: file)
+        try await store.write(snapshot)
+        let loaded = try await store.read()
+        XCTAssertEqual(loaded?.home?.thirtyDayRankings, PresentationHomeRankingSet())
+
+        let legacySummary = PresentationHomeSummary(
+            customAgents: 1, customAgentsGlobal: 1, customAgentsProject: 0,
+            customSkills: 0, customSkillsGlobal: 0, customSkillsProject: 0,
+            installedSkills: 0, installedSkillsIndependent: 0, installedSkillsPluginProvided: 0,
+            installedPlugins: 0, enabledPlugins: 0,
+            customAgentsTop: [row]
+        )
+        XCTAssertNil(legacySummary.thirtyDayRankings)
+    }
+
     func testMergePreservesCompatibleModulesAndRejectsOldIdentity() async throws {
         let identity = PresentationIdentity(databaseEpoch: "e", dataGeneration: 2)
         let file = url(); defer { try? FileManager.default.removeItem(at: file) }; let store = PresentationSnapshotStore(url: file)

@@ -93,6 +93,43 @@ final class CapabilityLibraryPresentationTests: XCTestCase {
         XCTAssertEqual(model.pluginAttributionUnavailableCount, 1)
     }
 
+    func testUnverifiedPluginIsBrowsableButNotPresentedAsEnabled() throws {
+        let resource = CapabilityResource(
+            id: "plugin:last-observed", name: "Synthetic Plugin", kind: .plugin,
+            status: .warning, scope: .runtime, projectID: nil, confidence: .exact,
+            summary: nil, sourceRootID: "last-known-runtime",
+            relativeSourcePath: "plugins/synthetic", sourcePathHash: nil,
+            lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000),
+            ownership: .runtime, origin: .runtime
+        )
+        let entries = CapabilityCatalog(resources: [resource]).entries
+        let model = CapabilityLibraryViewModel(category: .installedPlugins, catalog: entries)
+        model.language = .english
+        let row = try XCTUnwrap(model.rows.first)
+        XCTAssertTrue(model.rowText(for: row, language: .english).metadata.contains("Last observed · unverified"))
+        model.context = model.context.updated(pluginStatusFilter: .enabled)
+        XCTAssertTrue(model.rows.isEmpty)
+        model.context = model.context.updated(pluginStatusFilter: .all)
+        XCTAssertEqual(model.rows.count, 1)
+    }
+
+    func testInstalledSkillListAndMetricsExcludePluginProvidedSkill() {
+        let independent = resource("independent", "Independent", .skill, .global, nil, .installed)
+        let child = resource("plugin-child", "Plugin Child", .skill, .plugin, nil, .pluginProvided)
+        let plugin = CapabilityResource(id: "plugin", name: "Plugin", kind: .plugin, status: .success, scope: .runtime, projectID: nil, confidence: .exact, summary: nil, sourceRootID: "synthetic", relativeSourcePath: nil, sourcePathHash: nil, lastSeenAt: Date(), ownership: .runtime, origin: .runtime)
+        let relation = ResourceRelation(sourceResourceID: plugin.id, targetResourceID: child.id, relationKind: "contains", confidence: .exact, evidenceSummary: nil)
+        let catalog = CapabilityCatalog(resources: [independent, child, plugin], relations: [relation]).entries
+        let model = CapabilityLibraryViewModel(category: .installedSkills, catalog: catalog)
+        model.setData(catalog: catalog, categoryStats: [
+            CapabilityUsageStats(resourceID: independent.id, callCount: 1, inferredCount: 0, lastUsedAt: nil, coverage: .complete),
+            CapabilityUsageStats(resourceID: child.id, callCount: 99, inferredCount: 0, lastUsedAt: nil, coverage: .complete)
+        ], browseHistory: [], category30DayStats: [], browse30DayStats: [])
+        XCTAssertEqual(model.categoryCount, 1)
+        XCTAssertEqual(model.usedCount, 1)
+        XCTAssertEqual(model.rows.map(\.id), [independent.id])
+        XCTAssertEqual(model.summaryCards.first?.value, 1)
+    }
+
     func testHomeUsesSharedVisualContracts() throws {
         XCTAssertEqual(DirectorAdaptiveGrid.columns(for: 800), 4)
         XCTAssertEqual(DirectorAdaptiveGrid.columns(for: 600), 2)
