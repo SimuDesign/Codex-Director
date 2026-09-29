@@ -6,6 +6,13 @@ import DirectorCore
 final class CapabilityDetailTests: XCTestCase {
     private var temporaryDirectories: [URL] = []
 
+    private final class ReadCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func increment() { lock.lock(); value += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
     private enum ScriptedInvocationError: Error { case failed }
 
     private actor ScriptedInvocationLoader {
@@ -109,12 +116,31 @@ final class CapabilityDetailTests: XCTestCase {
         return CapabilityDetailViewModel(row: row, findingsLoader: { resourceID in try await loader.call(resourceID) })
     }
 
-    private func makeInvocationModel(loader: ScriptedInvocationLoader) -> CapabilityDetailViewModel {
+    private func makeInvocationModel(loader: ScriptedInvocationLoader, evaluationStore: InvocationEvaluationStore? = nil) -> CapabilityDetailViewModel {
         let resource = CapabilityResource(id: "skill:evidence", name: "Evidence", kind: .skill, status: .idle, scope: .global, projectID: nil, confidence: .exact, summary: "Declared purpose", sourceRootID: "global", relativeSourcePath: "SKILL.md", sourcePathHash: nil, lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000))
         let row = CapabilityLibraryRow(entry: CapabilityCatalogEntry(resource: resource, category: .customSkills, parentPluginID: nil), recent7Count: 1, inferredCount: 0, lastUsedAt: Date(timeIntervalSince1970: 1_700_000_000), sourceModifiedAt: nil)
-        return CapabilityDetailViewModel(row: row, invocationLoader: { resourceID, projectID, window, pageSize, cursor in
+        return CapabilityDetailViewModel(row: row, evaluationStore: evaluationStore, invocationLoader: { resourceID, projectID, window, pageSize, cursor in
             try await loader.call(resourceID, projectID, window, pageSize, cursor)
         })
+    }
+
+    func testDetailDefersEvaluationDecodeUntilEvidenceIsRequested() async throws {
+        let existing = InvocationEvaluation(
+            invocationID: "evidence-call", sessionID: "evidence-session", resourceID: "skill:evidence",
+            label: .effective, updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let data = try JSONEncoder().encode([existing.id: existing])
+        let counter = ReadCounter()
+        let store = InvocationEvaluationStore(
+            readData: { counter.increment(); return data },
+            writeData: { _ in false },
+            removeData: { false }
+        )
+        let model = makeInvocationModel(loader: ScriptedInvocationLoader(page: makeInvocationPage()), evaluationStore: store)
+        XCTAssertEqual(counter.count, 0, "Opening metadata must not decode all saved evaluations")
+        await model.loadNow()
+        XCTAssertEqual(counter.count, 1)
+        XCTAssertEqual(model.evaluation(for: try XCTUnwrap(model.invocations.first)), existing)
     }
 
     private func makeInvocationPage() -> CapabilityDetailInvocationPage {

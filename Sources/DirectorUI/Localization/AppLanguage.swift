@@ -46,9 +46,10 @@ public final class AppLanguageStore: ObservableObject {
     @Published public private(set) var language: AppLanguage
 
     private let writePreference: (String) -> Void
+    private var cachedLocalizer: DirectorLocalizer
 
     public var locale: Locale { language.locale }
-    public var localizer: DirectorLocalizer { DirectorLocalizer(language: language) }
+    public var localizer: DirectorLocalizer { cachedLocalizer }
 
     /// Production storage. This dedicated key does not alter AppleLanguages
     /// or any other system/global preference.
@@ -57,7 +58,9 @@ public final class AppLanguageStore: ObservableObject {
     }
 
     public init(defaults: UserDefaults) {
-        language = AppLanguage.resolve(defaults.string(forKey: Self.preferenceKey))
+        let resolvedLanguage = AppLanguage.resolve(defaults.string(forKey: Self.preferenceKey))
+        language = resolvedLanguage
+        cachedLocalizer = DirectorLocalizer(language: resolvedLanguage)
         writePreference = { rawValue in
             defaults.set(rawValue, forKey: Self.preferenceKey)
         }
@@ -67,18 +70,22 @@ public final class AppLanguageStore: ObservableObject {
     /// host. It does not instantiate or consult a UserDefaults domain.
     public init(memoryLanguage: AppLanguage) {
         language = memoryLanguage
+        cachedLocalizer = DirectorLocalizer(language: memoryLanguage)
         writePreference = { _ in }
     }
 
     /// Injected persistence seam for isolated tests. The closures are the
     /// complete storage boundary and may be backed by memory only.
     public init(readPreference: @escaping () -> String?, writePreference: @escaping (String) -> Void) {
-        language = AppLanguage.resolve(readPreference())
+        let resolvedLanguage = AppLanguage.resolve(readPreference())
+        language = resolvedLanguage
+        cachedLocalizer = DirectorLocalizer(language: resolvedLanguage)
         self.writePreference = writePreference
     }
 
     public func setLanguage(_ language: AppLanguage) {
         guard self.language != language else { return }
+        cachedLocalizer = DirectorLocalizer(language: language)
         self.language = language
         writePreference(language.rawValue)
     }

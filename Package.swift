@@ -1,5 +1,13 @@
 // swift-tools-version: 6.3
+import Foundation
 import PackageDescription
+
+// The interaction harness is an opt-in, local Release-equivalent build. The
+// normal package graph does not compile the validation host or its driver.
+let interactionPerformanceEnabled = ProcessInfo.processInfo.environment["DIRECTOR_INTERACTION_PERFORMANCE"] == "1"
+let interactionPerformanceSettings: [SwiftSetting] = interactionPerformanceEnabled
+    ? [.define("DIRECTOR_INTERACTION_PERFORMANCE")]
+    : []
 
 let package = Package(
     name: "CodexDirector",
@@ -23,13 +31,18 @@ let package = Package(
         .target(
             name: "DirectorUI",
             dependencies: ["DirectorCore"],
-            resources: [.process("Resources")]
+            resources: [.process("Resources")],
+            swiftSettings: interactionPerformanceSettings
         ),
         .executableTarget(
             name: "CodexDirectorApp",
             dependencies: ["DirectorCore", "DirectorUI"]
         ),
         .testTarget(name: "DirectorCoreTests", dependencies: ["DirectorCore"]),
-        .testTarget(name: "DirectorUITests", dependencies: ["DirectorUI", "DirectorCore"])
+        .testTarget(
+            name: "DirectorUITests",
+            dependencies: ["DirectorUI", "DirectorCore"],
+            swiftSettings: interactionPerformanceSettings
+        )
     ]
 )

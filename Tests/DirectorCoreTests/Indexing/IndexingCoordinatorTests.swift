@@ -49,6 +49,10 @@ final class IndexingCoordinatorTests: XCTestCase {
         #"{"type":"event_msg","timestamp":"\#(timestamp)","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"total_tokens":\#(total)}}}}"#
     }
 
+    private func tokenUsageRecordLine(total: Int, timestamp: String = "2026-08-15T04:12:06.000Z") -> String {
+        #"{"type":"token_usage_record","timestamp":"\#(timestamp)","payload":{"usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"total_tokens":2},"thread_token_usage":{"input_tokens":1,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":1,"reasoning_output_tokens":0,"total_tokens":\#(total)}}}"#
+    }
+
     private func write(_ lines: [String], to url: URL) throws {
         let data = (lines.joined(separator: "\n") + "\n").data(using: .utf8)!
         try data.write(to: url)
@@ -198,6 +202,31 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(checkpoint?.parserVersion, RolloutEventDecoder.parserVersion)
     }
 
+    func testCurrentTokenUpgradeDefersUnchangedRolloutOlderThanThirtyDays() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("active")
+        let url = active.appendingPathComponent("session-old-token-format.jsonl")
+        try write([metaLine(id: "session:old-token-format")], to: url)
+        let oldDate = Date().addingTimeInterval(-40 * 86_400)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: url.path)
+        let coordinator = makeCoordinator(store: store)
+        _ = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attributes[.size] as? NSNumber)?.uint64Value ?? 0
+        let mtime = attributes[.modificationDate] as? Date ?? oldDate
+        try await store.upsertCheckpoint(IndexCheckpoint(
+            sourceFileID: url.lastPathComponent, sourceSize: size,
+            sourceMtime: mtime.timeIntervalSince1970, byteOffset: size,
+            parserVersion: "1.2.0", indexedAt: Date()
+        ))
+
+        let result = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        XCTAssertEqual(result.skippedFiles, 1)
+        XCTAssertEqual(result.indexedSessions, 0)
+        let checkpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        XCTAssertEqual(checkpoint?.parserVersion, "1.2.0")
+    }
+
     func testAppendedJSONL() async throws {
         let store = try makeStore()
         let active = try tempDirectory("active")
@@ -221,6 +250,24 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(count_calls_after_append, 2)
         let calls = try await store.fetchCalls(sessionID: "session:coord-1")
         XCTAssertEqual(calls.map(\.resourceID), ["tool:read", "tool:write"])
+    }
+
+    func testCurrentTokenRecordPersistsWithoutSummingLegacySnapshot() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("active")
+        let url = active.appendingPathComponent("session-new-token.jsonl")
+        try write([
+            metaLine(id: "session:new-token"),
+            tokenCountLine(total: 100),
+            tokenUsageRecordLine(total: 120),
+            tokenCountLine(total: 119, timestamp: "2026-08-15T04:12:07.000Z"),
+        ], to: url)
+        _ = try await makeCoordinator(store: store).run(configuration: configuration(activeRoots: [active]))
+        let snapshots = try await store.fetchTokenSnapshots(sessionID: "session:new-token")
+        XCTAssertEqual(snapshots.map(\.usage.totalTokens).sorted(), [100, 120])
+        XCTAssertEqual(TokenUsageParser.newestCumulative(from: snapshots)?.usage.totalTokens, 120)
+        let session = try await store.fetchAllSessions().first
+        XCTAssertEqual(session?.coverage, .complete)
     }
 
     func testAppendedTokenSnapshotsRestorePriorModelContext() async throws {
@@ -354,6 +401,142 @@ final class IndexingCoordinatorTests: XCTestCase {
                 return RuntimeCommandResult(stdout: "", exitCode: 1, timedOut: false)
             }
         }
+    }
+
+    private actor MutablePluginRuntimeClient: RuntimeCommandClient {
+        private var pluginResult: RuntimeCommandResult
+
+        init(pluginResult: RuntimeCommandResult) { self.pluginResult = pluginResult }
+
+        func setPluginResult(_ result: RuntimeCommandResult) { pluginResult = result }
+
+        func run(arguments: [String]) async throws -> RuntimeCommandResult {
+            switch arguments.first ?? "" {
+            case "--version": return RuntimeCommandResult(stdout: "0.158.0\n", exitCode: 0, timedOut: false)
+            case "mcp": return RuntimeCommandResult(stdout: "[]", exitCode: 0, timedOut: false)
+            case "plugin": return pluginResult
+            default: return RuntimeCommandResult(stdout: "", exitCode: 1, timedOut: false)
+            }
+        }
+    }
+
+    private actor MutableInstalledPluginReader: CodexInstalledPluginInventoryReading {
+        private var inventory: CodexInstalledPluginInventory
+        init(_ inventory: CodexInstalledPluginInventory) { self.inventory = inventory }
+        func set(_ value: CodexInstalledPluginInventory) { inventory = value }
+        func read() async throws -> CodexInstalledPluginInventory { inventory }
+    }
+
+    func testVerifiedRemotePluginWithoutLocalPackageRetainsOnlyLastKnownChildren() async throws {
+        let store = try makeStore()
+        let root = try tempDirectory("plugin-package-transition")
+        let package = root.appendingPathComponent("package", isDirectory: true)
+        let skill = package.appendingPathComponent("skills/synthetic-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        try "---\nname: synthetic-skill\ndescription: Synthetic fixture\n---\n".write(
+            to: skill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8
+        )
+        let reader = MutableInstalledPluginReader(.init(plugins: [
+            CodexInstalledPlugin(id: "synthetic-plugin@remote-market", name: "synthetic-plugin", marketplace: "remote-market", version: "1", enabled: true, sourcePath: package.path)
+        ], isComplete: true))
+        let runtime = CodexRuntimeDiscovery(
+            commandClient: FakeRuntimeClient(),
+            installedPluginReading: reader,
+            codexExecutableURL: URL(fileURLWithPath: "/synthetic/codex"),
+            approvedSourceRoots: [root]
+        )
+        let coordinator = IndexingCoordinator(store: store, runtimeDiscovery: runtime)
+        let config = configuration(activeRoots: [])
+        let first = try await coordinator.run(configuration: config)
+        XCTAssertEqual(first.runtimePluginInventoryAvailable, true)
+        XCTAssertEqual(first.runtimePluginPackagesAvailable, true)
+        let initialResources = try await store.fetchAllResources()
+        XCTAssertEqual(initialResources.filter { $0.kind == .skill && $0.ownership == .pluginProvided }.count, 1)
+
+        await reader.set(.init(plugins: [
+            CodexInstalledPlugin(id: "synthetic-plugin@remote-market", name: "synthetic-plugin", marketplace: "remote-market", version: "1", enabled: true, sourcePath: nil)
+        ], isComplete: true))
+        let second = try await coordinator.run(configuration: config)
+        XCTAssertEqual(second.runtimePluginInventoryAvailable, true)
+        XCTAssertEqual(second.runtimePluginPackagesAvailable, false)
+        let retained = try await store.fetchAllResources()
+        XCTAssertEqual(retained.filter { $0.kind == .plugin && $0.sourceRootID == "runtime-plugins" }.count, 1)
+        let retainedSkill = try XCTUnwrap(retained.first { $0.kind == .skill && $0.ownership == .pluginProvided })
+        XCTAssertEqual(retainedSkill.status, .warning)
+        XCTAssertEqual(retainedSkill.sourceRootID, "last-known-runtime")
+        let retainedRelations = try await store.fetchAllRelations()
+        XCTAssertTrue(retainedRelations.contains { $0.targetResourceID == retainedSkill.id && $0.relationKind == "contains" })
+
+        await reader.set(.init(plugins: [], isComplete: true))
+        let third = try await coordinator.run(configuration: config)
+        XCTAssertEqual(third.runtimePluginPackagesAvailable, true)
+        let removed = try await store.fetchAllResources()
+        XCTAssertFalse(removed.contains { $0.kind == .plugin || ($0.kind == .skill && $0.ownership == .pluginProvided) })
+    }
+
+    func testPluginTimeoutRetainsUnverifiedInventoryAndSuccessfulEmptyPrunesIt() async throws {
+        let store = try makeStore()
+        let root = try tempDirectory("plugin-source")
+        let skill = root.appendingPathComponent("package/skills/synthetic-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        try "---\nname: synthetic-skill\ndescription: Synthetic fixture\n---\n".write(
+            to: skill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8
+        )
+        let installed = RuntimeCommandResult(
+            stdout: #"{"installed":[{"name":"synthetic-plugin","installed":true,"enabled":true,"source":{"path":"\#(root.appendingPathComponent("package").path)"}}],"available":[]}"#,
+            exitCode: 0, timedOut: false
+        )
+        let client = MutablePluginRuntimeClient(pluginResult: installed)
+        let runtime = CodexRuntimeDiscovery(
+            commandClient: client,
+            codexExecutableURL: URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            approvedSourceRoots: [root]
+        )
+        let coordinator = IndexingCoordinator(store: store, runtimeDiscovery: runtime)
+        let config = configuration(activeRoots: [])
+
+        let first = try await coordinator.run(configuration: config)
+        XCTAssertEqual(first.runtimePluginInventoryAvailable, true)
+        let current = try await store.fetchAllResources()
+        XCTAssertEqual(current.filter { $0.kind == .plugin && $0.sourceRootID == "runtime-plugins" }.count, 1)
+        XCTAssertEqual(current.filter { $0.kind == .skill && $0.ownership == .pluginProvided }.count, 1)
+
+        await client.setPluginResult(RuntimeCommandResult(stdout: "", exitCode: 15, timedOut: true))
+        let failed = try await coordinator.run(configuration: config)
+        XCTAssertEqual(failed.runtimePluginInventoryAvailable, false)
+        let retained = try await store.fetchAllResources()
+        let plugin = try XCTUnwrap(retained.first { $0.kind == .plugin })
+        XCTAssertEqual(plugin.status, .warning)
+        XCTAssertEqual(plugin.sourceRootID, "last-known-runtime")
+        XCTAssertEqual(retained.filter { $0.kind == .skill && $0.ownership == .pluginProvided }.count, 1)
+        let retainedRelations = try await store.fetchAllRelations()
+        let catalog = CapabilityCatalog(resources: retained, relations: retainedRelations)
+        XCTAssertEqual(catalog.entries.first { $0.resource.id == plugin.id }?.category, .installedPlugins)
+        XCTAssertTrue(PluginUsage.mappings(resources: retained, relations: retainedRelations).isEmpty)
+
+        await client.setPluginResult(RuntimeCommandResult(stdout: #"{"installed":[],"available":[]}"#, exitCode: 0, timedOut: false))
+        let empty = try await coordinator.run(configuration: config)
+        XCTAssertEqual(empty.runtimePluginInventoryAvailable, true)
+        let emptyResources = try await store.fetchAllResources()
+        XCTAssertFalse(emptyResources.contains { $0.kind == .plugin })
+    }
+
+    func testFirstPluginQueryFailureIsUnavailableNotObservedEmpty() async throws {
+        let store = try makeStore()
+        let client = MutablePluginRuntimeClient(
+            pluginResult: RuntimeCommandResult(stdout: "", exitCode: 15, timedOut: true)
+        )
+        let runtime = CodexRuntimeDiscovery(
+            commandClient: client,
+            codexExecutableURL: URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+            approvedSourceRoots: []
+        )
+        let result = try await IndexingCoordinator(store: store, runtimeDiscovery: runtime)
+            .run(configuration: configuration(activeRoots: []))
+        XCTAssertEqual(result.runtimePluginInventoryAvailable, false)
+        XCTAssertEqual(result.runtimeCoverage, .partial)
+        let resources = try await store.fetchAllResources()
+        XCTAssertTrue(resources.filter { $0.kind == .plugin }.isEmpty)
     }
 
     func testRuntimeDiscoveryResourcesCombinedWithFileDiscovery() async throws {

@@ -60,6 +60,49 @@ final class HomeCardAtlasTests: XCTestCase {
         XCTAssertFalse(home.contains("DirectorEditorialFrame"))
     }
 
+    func testUsageRankingUsesPersistedPeriodControlAndResponsiveHeaderAccessory() throws {
+        let home = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Home/HomeOverviewView.swift"), encoding: .utf8)
+        let components = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Home/HomeCardAtlasComponents.swift"), encoding: .utf8)
+
+        XCTAssertTrue(home.contains("homeUsageRankingPeriod"))
+        XCTAssertTrue(home.contains("onHomeUsageRankingPeriodChange"))
+        XCTAssertTrue(home.contains("DirectorOutlinedSegmentedControl"))
+        XCTAssertTrue(home.contains("home.ranking.period.sevenDays"))
+        XCTAssertTrue(home.contains("home.ranking.period.thirtyDays"))
+        XCTAssertTrue(home.contains("headerAccessory: isCompact ? nil"))
+        XCTAssertTrue(home.contains("rankingPeriodSelector(compact: true)"))
+        XCTAssertTrue(home.contains("model.rankings(for: homeUsageRankingPeriod)"))
+        XCTAssertTrue(home.contains("rankingPreparingText"))
+        XCTAssertTrue(components.contains("public let headerAccessory: AnyView?"))
+        XCTAssertTrue(components.contains("if let headerAccessory"))
+        XCTAssertFalse(home.contains("Picker("), "Home ranking must use the Scheme A outlined segmented control")
+    }
+
+    func testDetailSurfaceCanShowBothRankingPeriodsWithoutChangingFolderContract() throws {
+        let model = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityDetailModel.swift"), encoding: .utf8)
+        let detail = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityDetailView.swift"), encoding: .utf8)
+
+        XCTAssertTrue(model.contains("public var recent30Count: Int?"))
+        XCTAssertTrue(detail.contains("model.recent30Count"))
+        XCTAssertTrue(detail.contains("detail.metric.recent30"))
+    }
+
+    func testDualPeriodCopyExistsInBothLocalizations() throws {
+        let english = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/en.lproj/Localizable.strings"), encoding: .utf8)
+        let chinese = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings"), encoding: .utf8)
+        for key in [
+            "home.ranking.period.accessibilityLabel",
+            "home.ranking.period.sevenDays",
+            "home.ranking.period.thirtyDays",
+            "home.overview.rankingPreparing",
+            "home.overview.noIndexedCallsForPeriod",
+            "detail.metric.recent30"
+        ] {
+            XCTAssertTrue(english.contains("\"\(key)\""), "English is missing \(key)")
+            XCTAssertTrue(chinese.contains("\"\(key)\""), "Chinese is missing \(key)")
+        }
+    }
+
     func testHomeUsesContinuousMetricsAndAComparisonLedger() throws {
         let home = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Home/HomeOverviewView.swift"), encoding: .utf8)
         let components = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Home/HomeCardAtlasComponents.swift"), encoding: .utf8)

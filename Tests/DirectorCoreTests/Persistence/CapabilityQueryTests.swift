@@ -81,6 +81,48 @@ final class CapabilityQueryTests: XCTestCase {
         XCTAssertEqual(Set(first.items.map(\.id)).intersection(second.items.map(\.id)).count, 0)
     }
 
+    func testCapabilityUsagePeriodStatsComputesIndependentWindowsInOneRead() async throws {
+        let store = try await makeStore()
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let sevenDayWindow = CapabilityQueryWindow(start: epoch.addingTimeInterval(10), end: epoch.addingTimeInterval(20), timeZone: utc)
+        let thirtyDayWindow = CapabilityQueryWindow(start: epoch, end: epoch.addingTimeInterval(20), timeZone: utc)
+
+        try await store.replaceSession(PersistedSessionBatch(
+            session: TaskSummary(id: "complete", projectID: "p1", startedAt: epoch, endedAt: nil, status: .completed, coverage: .complete, parserVersion: "1", sourceFileID: "complete", title: nil),
+            calls: [
+                InvocationEvent(id: "outside-seven", sessionID: "complete", parentCallID: nil, ordinal: 0, timestamp: epoch.addingTimeInterval(5), actorName: nil, resourceID: "skill:a", kind: .skill, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil),
+                InvocationEvent(id: "inside-seven", sessionID: "complete", parentCallID: nil, ordinal: 1, timestamp: epoch.addingTimeInterval(15), actorName: nil, resourceID: "skill:a", kind: .skill, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil),
+                InvocationEvent(id: "future", sessionID: "complete", parentCallID: nil, ordinal: 2, timestamp: epoch.addingTimeInterval(21), actorName: nil, resourceID: "skill:a", kind: .skill, status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil)
+            ], tokenSnapshots: [], quotaSnapshots: [], findings: []
+        ))
+        try await store.replaceSession(PersistedSessionBatch(
+            session: TaskSummary(id: "partial", projectID: "p2", startedAt: epoch, endedAt: nil, status: .completed, coverage: .partial, parserVersion: "1", sourceFileID: "partial", title: nil),
+            calls: [
+                InvocationEvent(id: "partial-call", sessionID: "partial", parentCallID: nil, ordinal: 0, timestamp: epoch.addingTimeInterval(16), actorName: nil, resourceID: "skill:b", kind: .skill, status: .completed, durationMs: nil, confidence: .inferred, errorCategory: nil)
+            ], tokenSnapshots: [], quotaSnapshots: [], findings: []
+        ))
+
+        let stats = try await store.fetchCapabilityUsagePeriodStats(
+            sevenDayWindow: sevenDayWindow,
+            thirtyDayWindow: thirtyDayWindow
+        )
+        let a = try XCTUnwrap(stats.first { $0.resourceID == "skill:a" })
+        XCTAssertEqual(a.sevenDay?.callCount, 1)
+        XCTAssertEqual(a.thirtyDay?.callCount, 2)
+        XCTAssertEqual(a.thirtyDay?.lastUsedAt, epoch.addingTimeInterval(15))
+        XCTAssertNil(stats.first { $0.resourceID == "future" })
+
+        let projectStats = try await store.fetchCapabilityUsagePeriodStats(
+            sevenDayWindow: sevenDayWindow,
+            thirtyDayWindow: thirtyDayWindow,
+            projectID: "p2"
+        )
+        let b = try XCTUnwrap(projectStats.first { $0.resourceID == "skill:b" })
+        XCTAssertEqual(b.sevenDay?.callCount, 1)
+        XCTAssertEqual(b.thirtyDay?.inferredCount, 1)
+        XCTAssertEqual(b.thirtyDay?.coverage, .partial)
+    }
+
     func testCatalogUsesCurrentRuntimeIdentityAndLeavesAmbiguousParentsUnlinked() {
         let now = Date()
         func resource(_ id: String, kind: ResourceKind, scope: ResourceScope, ownership: ResourceOwnership, origin: ResourceOrigin) -> CapabilityResource {
@@ -97,7 +139,7 @@ final class CapabilityQueryTests: XCTestCase {
         let catalog = CapabilityCatalog(resources: [currentPlugin, oldPlugin, child, staleChild], relations: relations)
         XCTAssertEqual(catalog.entries.first(where: { $0.resource.id == currentPlugin.id })?.category, .installedPlugins)
         XCTAssertNil(catalog.entries.first(where: { $0.resource.id == oldPlugin.id })?.category)
-        XCTAssertEqual(catalog.entries.first(where: { $0.resource.id == child.id })?.category, .installedSkills)
+        XCTAssertNil(catalog.entries.first(where: { $0.resource.id == child.id })?.category)
         XCTAssertEqual(catalog.entries.first(where: { $0.resource.id == child.id })?.parentPluginID, currentPlugin.id)
         XCTAssertNil(catalog.entries.first(where: { $0.resource.id == staleChild.id })?.category)
     }

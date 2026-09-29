@@ -1,7 +1,7 @@
 import Foundation
 import DirectorCore
 
-/// Pure Home projection over the already-classified catalog and seven-day SQL
+/// Pure Home projection over the already-classified catalog and bounded SQL
 /// aggregates. It does not infer categories or load raw invocation records.
 public struct HomeOverviewModel: Equatable, Sendable {
     public struct InventoryTotals: Equatable, Sendable {
@@ -31,8 +31,16 @@ public struct HomeOverviewModel: Equatable, Sendable {
 
     public let inventory: InventoryTotals
     public let rankings: [CapabilityCategory: [RankingRow]]
+    /// Older cached ranking rows may include plugin-provided Skills. Keep
+    /// their independent count visible, but wait for the bounded cache upgrade
+    /// before presenting the installed-Skill ranking as complete.
+    public let installedSkillRankingsVerified: Bool
+    /// Contains the seven-day projection and, when a thirty-day query has
+    /// completed, its independent projection. The existing `rankings` field
+    /// remains the seven-day compatibility view.
+    public let rankingsByPeriod: [HomeUsageRankingPeriod: [CapabilityCategory: [RankingRow]]]
 
-    public init(catalog: CapabilityCatalog, usage: [CapabilityUsageStats]) {
+    public init(catalog: CapabilityCatalog, usage: [CapabilityUsageStats], thirtyDayUsage: [CapabilityUsageStats]? = nil) {
         let entries = catalog.entries
         let customAgents = entries.filter { $0.category == .customAgents }
         let customSkills = entries.filter { $0.category == .customSkills }
@@ -40,14 +48,29 @@ public struct HomeOverviewModel: Equatable, Sendable {
         let plugins = entries.filter { $0.category == .installedPlugins }
         func global(_ values: [CapabilityCatalogEntry]) -> Int { values.filter { $0.resource.projectID == nil }.count }
         func project(_ values: [CapabilityCatalogEntry]) -> Int { values.filter { $0.resource.projectID != nil }.count }
-        let pluginSkills = installedSkills.filter { $0.parentPluginID != nil }
+        let pluginSkills = entries.filter { $0.resource.kind == .skill && $0.resource.ownership == .pluginProvided && $0.parentPluginID != nil }
         self.inventory = InventoryTotals(
             customAgents: customAgents.count, customAgentsGlobal: global(customAgents), customAgentsProject: project(customAgents),
             customSkills: customSkills.count, customSkillsGlobal: global(customSkills), customSkillsProject: project(customSkills),
-            installedSkills: installedSkills.count, installedSkillsIndependent: installedSkills.count - pluginSkills.count, installedSkillsPluginProvided: pluginSkills.count,
+            installedSkills: installedSkills.count, installedSkillsIndependent: installedSkills.count, installedSkillsPluginProvided: pluginSkills.count,
             installedPlugins: plugins.count, enabledPlugins: plugins.filter { $0.resource.status != .blocked }.count
         )
         let byID = Dictionary(uniqueKeysWithValues: usage.map { ($0.resourceID, $0) })
+        let built = Self.buildRankings(entries: entries, usage: byID)
+        let thirtyBuilt = thirtyDayUsage.map { values in
+            Self.buildRankings(entries: entries, usage: Dictionary(uniqueKeysWithValues: values.map { ($0.resourceID, $0) }))
+        }
+        rankings = built
+        installedSkillRankingsVerified = true
+        var periodRankings: [HomeUsageRankingPeriod: [CapabilityCategory: [RankingRow]]] = [.sevenDays: built]
+        if let thirtyBuilt { periodRankings[.thirtyDays] = thirtyBuilt }
+        rankingsByPeriod = periodRankings
+    }
+
+    private static func buildRankings(
+        entries: [CapabilityCatalogEntry],
+        usage byID: [String: CapabilityUsageStats]
+    ) -> [CapabilityCategory: [RankingRow]] {
         var built: [CapabilityCategory: [RankingRow]] = [:]
         for category in [CapabilityCategory.customAgents, .customSkills, .installedSkills] {
             let rows = entries.filter { $0.category == category }.compactMap { entry -> RankingRow? in
@@ -64,7 +87,7 @@ public struct HomeOverviewModel: Equatable, Sendable {
             let maxCount = Double(rows.map(\.count).max() ?? 1)
             built[category] = rows.map { RankingRow(id: $0.id, name: $0.name, count: $0.count, relativeLength: Double($0.count) / maxCount, inferred: $0.inferred, inferredCount: $0.inferredCount, lastUsedAt: $0.lastUsedAt, category: category) }
         }
-        rankings = built
+        return built
     }
 
     /// Direct projection for the compact presentation cache. It does not
@@ -77,7 +100,7 @@ public struct HomeOverviewModel: Equatable, Sendable {
             customSkills: summary.customSkills,
             customSkillsGlobal: summary.customSkillsGlobal,
             customSkillsProject: summary.customSkillsProject,
-            installedSkills: summary.installedSkills,
+            installedSkills: summary.installedSkillsIndependent,
             installedSkillsIndependent: summary.installedSkillsIndependent,
             installedSkillsPluginProvided: summary.installedSkillsPluginProvided,
             installedPlugins: summary.installedPlugins,
@@ -92,11 +115,36 @@ public struct HomeOverviewModel: Equatable, Sendable {
                            lastUsedAt: $0.lastUsedAt, category: $0.category)
             }
         }
-        rankings = [
+        let sevenDayRankings: [CapabilityCategory: [RankingRow]] = [
             .customAgents: rows(summary.customAgentsTop),
             .customSkills: rows(summary.customSkillsTop),
             .installedSkills: rows(summary.installedSkillsTop)
         ]
+        rankings = sevenDayRankings
+        installedSkillRankingsVerified = summary.installedSkillRankingScopeVersion == PresentationHomeSummary.currentInstalledSkillRankingScopeVersion
+        if let thirtyDay = summary.thirtyDayRankings {
+            rankingsByPeriod = [
+                .sevenDays: sevenDayRankings,
+                .thirtyDays: [
+                    .customAgents: rows(thirtyDay.customAgentsTop),
+                    .customSkills: rows(thirtyDay.customSkillsTop),
+                    .installedSkills: rows(thirtyDay.installedSkillsTop)
+                ]
+            ]
+        } else {
+            rankingsByPeriod = [.sevenDays: sevenDayRankings]
+        }
+    }
+
+    public func rankings(for period: HomeUsageRankingPeriod) -> [CapabilityCategory: [RankingRow]]? {
+        rankingsByPeriod[period]
+    }
+
+    /// Last-observed runtime rows remain browseable after a failed query, but
+    /// cannot be reported as a verified current plugin inventory on Home.
+    public func currentPluginCounts(when inventoryVerified: Bool?) -> (installed: Int, enabled: Int)? {
+        guard inventoryVerified == true else { return nil }
+        return (inventory.installedPlugins, inventory.enabledPlugins)
     }
 
     public var presentationSummary: PresentationHomeSummary {
@@ -107,6 +155,20 @@ public struct HomeOverviewModel: Equatable, Sendable {
                                        lastUsedAt: $0.lastUsedAt)
             }
         }
+        let thirtyDaySet: PresentationHomeRankingSet? = rankingsByPeriod[.thirtyDays].map { values in
+            func periodTop(_ category: CapabilityCategory) -> [PresentationHomeTopRow] {
+                (values[category] ?? []).prefix(PresentationHomeSummary.currentRankingCapacity).map {
+                    PresentationHomeTopRow(resourceID: $0.id, name: $0.name, category: $0.category,
+                                           count: $0.count, inferredCount: $0.inferredCount,
+                                           lastUsedAt: $0.lastUsedAt)
+                }
+            }
+            return PresentationHomeRankingSet(
+                customAgentsTop: periodTop(.customAgents),
+                customSkillsTop: periodTop(.customSkills),
+                installedSkillsTop: periodTop(.installedSkills)
+            )
+        }
         return PresentationHomeSummary(
             customAgents: inventory.customAgents, customAgentsGlobal: inventory.customAgentsGlobal,
             customAgentsProject: inventory.customAgentsProject, customSkills: inventory.customSkills,
@@ -114,7 +176,8 @@ public struct HomeOverviewModel: Equatable, Sendable {
             installedSkills: inventory.installedSkills, installedSkillsIndependent: inventory.installedSkillsIndependent,
             installedSkillsPluginProvided: inventory.installedSkillsPluginProvided, installedPlugins: inventory.installedPlugins,
             enabledPlugins: inventory.enabledPlugins, rankingCapacity: PresentationHomeSummary.currentRankingCapacity,
-            customAgentsTop: top(.customAgents), customSkillsTop: top(.customSkills), installedSkillsTop: top(.installedSkills)
+            customAgentsTop: top(.customAgents), customSkillsTop: top(.customSkills), installedSkillsTop: top(.installedSkills),
+            thirtyDayRankings: thirtyDaySet
         )
     }
 }

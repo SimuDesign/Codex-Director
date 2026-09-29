@@ -68,6 +68,9 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
     private let readData: () -> Data?
     private let writeData: (Data) -> Bool
     private let removeData: () -> Bool
+    private let cacheLock = NSLock()
+    private var cachedData: Data?
+    private var cachedEvaluations: [String: InvocationEvaluation]?
 
     public init(defaults: UserDefaults = .standard) {
         self.readData = { defaults.data(forKey: Self.defaultsKey) }
@@ -107,16 +110,31 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
     }
 
     public func all() -> [String: InvocationEvaluation] {
-        guard let data = readData(),
-              let decoded = try? JSONDecoder().decode([String: InvocationEvaluation].self, from: data)
-        else {
+        guard let data = readData() else {
+            cacheLock.lock()
+            cachedData = nil
+            cachedEvaluations = nil
+            cacheLock.unlock()
             return [:]
         }
-        return decoded.filter { key, value in
+        cacheLock.lock()
+        if cachedData == data, let cachedEvaluations {
+            cacheLock.unlock()
+            return cachedEvaluations
+        }
+        cacheLock.unlock()
+
+        let decoded = (try? JSONDecoder().decode([String: InvocationEvaluation].self, from: data)) ?? [:]
+        let validated = decoded.filter { key, value in
             key == value.invocationID && Self.isStableIdentifier(value.invocationID)
                 && Self.isStableIdentifier(value.sessionID)
                 && (value.resourceID == nil || Self.isStableIdentifier(value.resourceID!))
         }
+        cacheLock.lock()
+        cachedData = data
+        cachedEvaluations = validated
+        cacheLock.unlock()
+        return validated
     }
 
     public func evaluation(for invocationID: String) -> InvocationEvaluation? {
@@ -155,7 +173,12 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
 
     @discardableResult
     public func removeAll() -> Bool {
-        return removeData()
+        guard removeData() else { return false }
+        cacheLock.lock()
+        cachedData = nil
+        cachedEvaluations = nil
+        cacheLock.unlock()
+        return true
     }
 
     private static func isValid(_ evaluation: InvocationEvaluation) -> Bool {

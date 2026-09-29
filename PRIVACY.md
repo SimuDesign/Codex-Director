@@ -6,6 +6,8 @@ Codex Director is designed for local, read-only inspection of a user's Codex cap
 
 Depending on the features used, the app may read Agent and Skill definitions, project instructions, plugin inventory output, local Codex session metadata, and local quota reports. Session content is parsed only to derive allowlisted evidence fields; raw prompts, arguments, outputs, tokens, cookies, and credentials must not be persisted.
 
+During an existing source refresh or a user-requested capability export, Director may ask the locally selected Codex executable for its installed-plugin list through the read-only `plugin/installed` app-server method. Director sends no project paths or credentials, does not invoke plugin installation or removal, and discards the raw response after retaining minimal plugin identity and status fields. Codex itself may use its existing account connection or local catalog cache to answer; Director does not make a separate plugin-network request. An incomplete response is not treated as an empty installed list.
+
 When the menu-bar surface is enabled (the default for new installs), the app
 starts the locally selected Codex executable on demand and requests only the read-only account
 allowance endpoint. It keeps a sanitized weekly remaining percentage, reset

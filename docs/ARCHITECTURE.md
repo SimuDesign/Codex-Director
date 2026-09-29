@@ -12,6 +12,16 @@ Codex Director separates local source discovery from Director-owned projections 
 
 Agent, Skill, project instruction, plugin, and session files remain source-owned and read-only. SQLite accelerates presentation and stores Director-owned classifications and evaluations; it is not authoritative for capability file content.
 
+Skill purposes come from top-level frontmatter descriptions, including folded
+and literal block scalars. Markdown-only manifests may supply a bounded opening
+prose paragraph immediately after the title; later sections, lists and code are
+not purpose sources. Malformed or empty declarations remain unknown, and newly
+extracted text is checked against the persistence privacy allowlist.
+Chinese purposes are reviewed offline presentation copy, bound to resource ID,
+kind, name and the normalized source SHA-256. Unknown or changed declarations
+fall back to their current original text. The catalog does not translate future
+capabilities automatically and never changes source files or folder membership.
+
 ## Refresh and concurrency
 
 Application surfaces share one refresh coordinator. Source scanning and projection are distinct phases. Cached results appear before background refresh, failures retain the last valid projection, and late or cancelled work cannot overwrite newer state. The enabled menu bar has one app-scoped account-only scheduler: after startup grace it uses five-minute wakes while the aggregate session is active and 30-minute wakes after 30 minutes idle, backs off failed reads at 5/15/30 minutes, and pauses on lock, sleep or Low Power Mode. Its bounded wake-up never starts capability indexing or reads SQLite.
@@ -23,6 +33,31 @@ The sanitized app-server snapshot is also composed into Home as the current five
 `CodexRuntimeLocator` resolves an executable in this order: an explicit Director preference, known Codex application locations, then absolute directories from `PATH`. It invokes the executable directly without a shell, applies a timeout and output cap to version probing, and exposes source, compatibility, and execute-permission state. Director never installs Codex, changes `PATH`, edits global Codex configuration, or stores Codex account information.
 
 If no usable runtime is available, filesystem inventory continues without runtime discovery. Capability export records plugin inventory as incomplete instead of claiming that zero plugins are installed.
+
+Runtime discovery timestamps are sampled on each discovery pass. Production
+plugin inventory uses the located Codex executable's short-lived, read-only
+app-server `plugin/installed` request, not the CLI marketplace catalog. The
+response is accepted as complete only when it has no marketplace-load errors,
+valid canonical installed IDs, and a remote-marketplace witness. Codex can
+otherwise suppress remote-fetch errors and return a success-shaped local-only
+response. Incomplete reads keep last-observed rows and show an unknown current
+plugin count rather than a false zero. A verified plugin identity without a
+validated local package path remains countable as a plugin, but its child Skill
+inventory is unknown; any last-observed children remain warnings and the Home
+combined installed-Skill total stays unknown. The independently installed
+Skill count remains visible. Capability export uses the same completeness
+rule, and an incomplete list cannot be marked complete in `plugins.json`.
+Settings diagnostics retain their last valid result during a source refresh
+and reload when that index pass completes.
+
+Rollout parser v1.3.0 recognizes the current top-level `token_usage_record`
+and `inter_agent_communication_metadata` envelopes. Token totals use the
+record's cumulative `thread_token_usage`, never its per-response or per-turn
+value, and do not add it to legacy `token_count` totals. Legacy rate-limit
+windows remain a separate evidence stream. On parser upgrade, unchanged 1.2.0
+rollouts older than the 30-day ranking window are left at their existing
+checkpoint; recent files and any subsequently changed older file are reparsed.
+This bounds one-time historical work without altering source files.
 
 ## Capability packages
 
@@ -72,6 +107,13 @@ the concrete read-only plugin and dependency checklists.
 
 Only allowlisted normalized evidence reaches persistence. Prompts, arguments, raw outputs, credentials, cookies, session bodies, and unredacted personal paths are excluded.
 
+Installed Skills is the independent-install category. The catalog retains
+plugin-provided Skill resources and their parent attribution for folder and
+plugin evidence, but excludes them from Installed Skills totals, library rows,
+and seven/thirty-day rankings. A versioned Home-ranking scope marker makes
+older plugin-inclusive cache rows pending until a bounded background upgrade;
+the independent count remains available from the compatible cache field.
+
 ## Capability folders
 
 Capability Folders is a presentation-only projection over the current Agent and
@@ -83,6 +125,11 @@ and many-to-many stable resource-ID memberships under its dedicated UserDefaults
 key. New installs create an empty Self Training folder; existing memberships
 remain unchanged across refreshes and upgrades. There is no automatic
 classification, implicit membership, network access, or source-file write.
+
+Entry search filters localized folder display names in DirectorUI and preserves
+folder order. Interior and import search use the existing capability projection.
+Shared native search/menu fields own full painted hit geometry without adding
+queries, preference writes or indexing work.
 
 Custom folders can be renamed, deleted, reordered, searched, and populated from
 the current eligible directory through one validated atomic preference write.
@@ -102,3 +149,20 @@ compatibility. Relationship history is a separate batch projection: the App
 Model materializes indexed invocations once per seven-day snapshot and maps
 distinct-session co-observation to relation IDs; co-observation never proves
 that an Agent invoked a Skill.
+
+## Home usage ranking periods
+
+Home usage rankings expose recent-seven and recent-thirty local natural-day
+views without changing the seven-day library, detail, relationship, or quota
+contracts. One bounded thirty-day SQLite read conditionally aggregates both
+periods per stable resource ID. Both Top 10 projections are published and cached
+atomically; changing the selected period is therefore an in-memory presentation
+operation and cannot start indexing, refresh work, account reads, or a new
+database query.
+
+The schema-v1 presentation cache keeps its original ranking fields as the
+seven-day compatibility payload and adds an optional thirty-day ranking set.
+`nil` means the older cache has not computed that projection, while a present
+empty set means the query completed with no observed calls. The selected period
+is a separate app-owned UserDefaults value containing only `7d` or `30d`; it
+defaults to seven days and contains no resource metadata or usage evidence.

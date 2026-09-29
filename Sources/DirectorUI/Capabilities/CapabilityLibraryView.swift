@@ -34,7 +34,48 @@ public struct CapabilityLibraryGroup: Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
     public let rows: [CapabilityLibraryRow]
-    public init(id: String, title: String, rows: [CapabilityLibraryRow]) { self.id = id; self.title = title; self.rows = rows }
+    internal let renderRows: [CapabilityLibraryRenderRow]
+    public init(id: String, title: String, rows: [CapabilityLibraryRow]) {
+        self.id = id; self.title = title; self.rows = rows
+        renderRows = rows.enumerated().map { index, row in
+            let boundary: CapabilityLibraryRowBoundary = rows.count == 1 ? .only : index == 0 ? .first : index == rows.count - 1 ? .last : .middle
+            return CapabilityLibraryRenderRow(row: row, boundary: boundary)
+        }
+    }
+}
+
+internal enum CapabilityLibraryRowBoundary: Equatable, Sendable { case first, middle, last, only }
+internal struct CapabilityLibraryRenderRow: Identifiable, Equatable, Sendable {
+    let row: CapabilityLibraryRow
+    let boundary: CapabilityLibraryRowBoundary
+    var id: String { row.id }
+}
+
+/// Window-local disclosure state. It never changes the filtered group counts
+/// or persists capability IDs outside the current browsing session.
+internal struct CapabilityLibraryDisclosureState: Equatable {
+    private(set) var collapsedGroupIDs: Set<String> = []
+
+    func isCollapsed(_ groupID: String) -> Bool { collapsedGroupIDs.contains(groupID) }
+
+    @discardableResult
+    mutating func toggle(_ groupID: String) -> Bool {
+        if collapsedGroupIDs.remove(groupID) != nil { return false }
+        collapsedGroupIDs.insert(groupID)
+        return true
+    }
+
+    mutating func revealAll() { collapsedGroupIDs.removeAll() }
+}
+
+/// In-memory display strings only. No persistence, source reads or row views.
+internal struct CapabilityLibraryRowText: Equatable {
+    let summary: String
+    let metadata: String
+    let countValue: String
+    let countLabel: String
+    let accessibilityLabel: String
+    let inferredLabel: String
 }
 
 /// Geometry contract for the library filter ribbon. Search gets a complete
@@ -74,6 +115,35 @@ public enum DirectorFilterLayout {
 }
 
 @MainActor public final class CapabilityLibraryViewModel: ObservableObject {
+    private struct RowProjectionKey: Equatable {
+        let scope: CapabilityBrowseScope
+        let context: CapabilityBrowseContext
+        let language: AppLanguage
+        let dataRevision: Int
+    }
+
+    private struct RowProjection {
+        let groups: [CapabilityLibraryGroup]
+        let rows: [CapabilityLibraryRow]
+        let rowsByID: [String: CapabilityLibraryRow]
+    }
+
+    private var dataRevision = 0
+    private var cachedRowProjection: (key: RowProjectionKey, value: RowProjection)?
+    private struct RowTextKey: Equatable {
+        let row: CapabilityLibraryRow
+        let language: AppLanguage
+        let isThirtyDay: Bool
+        let ready: Bool
+        let timeZone: TimeZone
+    }
+    private var cachedRowText: [String: (key: RowTextKey, value: CapabilityLibraryRowText)] = [:]
+    private var rowLocalizer: DirectorLocalizer?
+    #if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
+    internal private(set) var rowProjectionBuildCount = 0
+    internal private(set) var rowTextBuildCount = 0
+    #endif
+
     @Published public var context = CapabilityBrowseContext()
     @Published public var selectedID: String?
     @Published public private(set) var catalog: [CapabilityCatalogEntry]
@@ -106,13 +176,19 @@ public enum DirectorFilterLayout {
     /// Updates only the cheap directory projection. A directory read does not
     /// prove that usage statistics were queried, including an empty result.
     public func setDirectory(catalog: [CapabilityCatalogEntry], projects: [CapabilityProject]) {
+        invalidateRowProjection()
         self.catalog = catalog
         self.projects = projects
         if let selectedID, !catalog.contains(where: { $0.resource.id == selectedID }) { self.selectedID = nil }
     }
-    public func setData(catalog: [CapabilityCatalogEntry], categoryStats: [CapabilityUsageStats], browseStats: [CapabilityUsageStats]? = nil, browseHistory: [CapabilityHistory], usageProjects: [String: Set<String>] = [:], category30DayStats: [CapabilityUsageStats]? = nil, browse30DayStats: [CapabilityUsageStats]? = nil, categoryHistory: [CapabilityHistory] = []) { self.catalog = catalog; self.recentStats = categoryStats; self.browseStats = browseStats ?? categoryStats; self.category30DayStats = category30DayStats ?? []; self.browse30DayStats = browse30DayStats ?? []; self.browseHistory = browseHistory; self.categoryHistory = categoryHistory; self.usageProjects = usageProjects; self.categoryStatsReady = true; self.browseStatsReady = true; self.category30StatsReady = category30DayStats != nil; self.browse30StatsReady = browse30DayStats != nil }
-    public func setPluginData(_ stats: [PluginUsageResult], browseStats: [PluginUsageResult]? = nil, category30DayStats: [PluginUsageResult]? = nil, browse30DayStats: [PluginUsageResult]? = nil, attributionUnavailableCount: Int? = nil) { pluginStats = stats; browsePluginStats = browseStats ?? stats; categoryPlugin30DayStats = category30DayStats ?? []; browsePlugin30DayStats = browse30DayStats ?? []; pluginAttributionUnavailableCount = attributionUnavailableCount ?? stats.filter { $0.callCount == nil }.count; pluginStatsReady = true; browsePluginStatsReady = true; categoryPlugin30StatsReady = category30DayStats != nil; browsePlugin30StatsReady = browse30DayStats != nil }
-    public func setProjects(_ value: [CapabilityProject]) { projects = value }
+    public func setData(catalog: [CapabilityCatalogEntry], categoryStats: [CapabilityUsageStats], browseStats: [CapabilityUsageStats]? = nil, browseHistory: [CapabilityHistory], usageProjects: [String: Set<String>] = [:], category30DayStats: [CapabilityUsageStats]? = nil, browse30DayStats: [CapabilityUsageStats]? = nil, categoryHistory: [CapabilityHistory] = []) { invalidateRowProjection(); self.catalog = catalog; self.recentStats = categoryStats; self.browseStats = browseStats ?? categoryStats; self.category30DayStats = category30DayStats ?? []; self.browse30DayStats = browse30DayStats ?? []; self.browseHistory = browseHistory; self.categoryHistory = categoryHistory; self.usageProjects = usageProjects; self.categoryStatsReady = true; self.browseStatsReady = true; self.category30StatsReady = category30DayStats != nil; self.browse30StatsReady = browse30DayStats != nil }
+    public func setPluginData(_ stats: [PluginUsageResult], browseStats: [PluginUsageResult]? = nil, category30DayStats: [PluginUsageResult]? = nil, browse30DayStats: [PluginUsageResult]? = nil, attributionUnavailableCount: Int? = nil) { invalidateRowProjection(); pluginStats = stats; browsePluginStats = browseStats ?? stats; categoryPlugin30DayStats = category30DayStats ?? []; browsePlugin30DayStats = browse30DayStats ?? []; pluginAttributionUnavailableCount = attributionUnavailableCount ?? stats.filter { $0.callCount == nil }.count; pluginStatsReady = true; browsePluginStatsReady = true; categoryPlugin30StatsReady = category30DayStats != nil; browsePlugin30StatsReady = browse30DayStats != nil }
+    public func setProjects(_ value: [CapabilityProject]) { invalidateRowProjection(); projects = value }
+    private func invalidateRowProjection() {
+        dataRevision &+= 1
+        cachedRowProjection = nil
+        cachedRowText.removeAll(keepingCapacity: true)
+    }
     public var categoryEntries: [CapabilityCatalogEntry] { catalog.filter { $0.category == category } }
     public var categoryCount: Int { categoryEntries.count }
     public var modifiedSortAllowed: Bool { category == .customAgents || category == .customSkills }
@@ -149,12 +225,24 @@ public enum DirectorFilterLayout {
         return .init(kind: kind, label: label, value: value, statisticsReady: ready)
     }
     public var rows: [CapabilityLibraryRow] { rows(for: context.scope) }
-    public func rows(for scope: CapabilityBrowseScope) -> [CapabilityLibraryRow] { groupedRows(for: scope).flatMap(\.rows) }
+    public func rows(for scope: CapabilityBrowseScope) -> [CapabilityLibraryRow] { rowProjection(for: scope).rows }
+    public func row(withID id: String, in scope: CapabilityBrowseScope) -> CapabilityLibraryRow? {
+        rowProjection(for: scope).rowsByID[id]
+    }
     /// Stable configuration groups: global first, then localized project name
     /// and stable ID. Search removes empty groups and sort stays group-local.
     public func groupedRows(for scope: CapabilityBrowseScope) -> [CapabilityLibraryGroup] {
+        rowProjection(for: scope).groups
+    }
+
+    private func rowProjection(for scope: CapabilityBrowseScope) -> RowProjection {
+        let key = RowProjectionKey(scope: scope, context: context, language: language, dataRevision: dataRevision)
+        if let cachedRowProjection, cachedRowProjection.key == key { return cachedRowProjection.value }
+        #if DIRECTOR_INTERACTION_PERFORMANCE
+        let projectionStart = DispatchTime.now().uptimeNanoseconds
+        #endif
         let grouped = Dictionary(grouping: makeRows(for: scope)) { $0.entry.resource.projectID ?? "__global__" }
-        return grouped.compactMap { id, values in
+        let groups: [CapabilityLibraryGroup] = grouped.compactMap { id, values in
             guard !values.isEmpty else { return nil }
             let title = id == "__global__" ? "Global" : (projects.first(where: { $0.id == id })?.name ?? id)
             return CapabilityLibraryGroup(id: id, title: title, rows: values.sorted(by: sort))
@@ -164,6 +252,16 @@ public enum DirectorFilterLayout {
             let comparison = lhs.title.localizedStandardCompare(rhs.title)
             return comparison == .orderedSame ? lhs.id < rhs.id : comparison == .orderedAscending
         }
+        let rows = groups.flatMap(\.rows)
+        let projection = RowProjection(groups: groups, rows: rows, rowsByID: Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) }))
+        #if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
+        rowProjectionBuildCount += 1
+        #endif
+        #if DIRECTOR_INTERACTION_PERFORMANCE
+        InteractionPerformanceProbe.record(.rowProjectionBuild, since: projectionStart)
+        #endif
+        cachedRowProjection = (key, projection)
+        return projection
     }
     private func makeRows(for scope: CapabilityBrowseScope) -> [CapabilityLibraryRow] {
         let stats = Dictionary(uniqueKeysWithValues: browseStats.map { ($0.resourceID, $0) })
@@ -187,8 +285,82 @@ public enum DirectorFilterLayout {
     private func matchesScope(_ e: CapabilityCatalogEntry, scope: CapabilityBrowseScope) -> Bool { switch scope { case .global: return e.resource.projectID == nil; case .allProjects: return e.resource.projectID != nil; case .allCapabilities: return true; case .project(let id): return usageProjects[e.resource.id]?.contains(id) == true } }
     private func search(_ e: CapabilityCatalogEntry) -> Bool { let q = context.search.trimmingCharacters(in: .whitespacesAndNewlines); guard !q.isEmpty else { return true }; return CapabilityPurposeLocalization.searchTerms(for: e.resource, language: language).contains { $0.localizedCaseInsensitiveContains(q) } }
     private func matchesActivity(_ row: CapabilityLibraryRow) -> Bool { switch context.activityFilter { case .all: return true; case .recent7: return row.recent7Count.map { $0 > 0 } ?? false; case .notUsed30: return !row.attributionUnavailable && row.recent30Count.map { $0 == 0 } ?? false } }
-    private func matchesPluginStatus(_ entry: CapabilityCatalogEntry) -> Bool { guard category == .installedPlugins else { return true }; switch context.pluginStatusFilter { case .all: return true; case .enabled: return entry.resource.status != .blocked; case .disabled: return entry.resource.status == .blocked } }
-    private func sort(_ l: CapabilityLibraryRow, _ r: CapabilityLibraryRow) -> Bool { if context.sort == .nameAscending { let n = l.entry.resource.name.localizedStandardCompare(r.entry.resource.name); return n == .orderedSame ? l.id < r.id : n == .orderedAscending }; switch context.sort { case .usageAscending, .usageDescending, .recentUsageDescending: if l.recent7Count == nil && r.recent7Count != nil { return false }; if l.recent7Count != nil && r.recent7Count == nil { return true }; if l.recent7Count != r.recent7Count { let a = l.recent7Count ?? 0; let b = r.recent7Count ?? 0; return context.sort == .usageAscending ? a < b : a > b }; case .recentUsageAscending: if l.lastUsedAt != r.lastUsedAt { return (l.lastUsedAt ?? .distantPast) < (r.lastUsedAt ?? .distantPast) }; case .modifiedDescending: if modifiedSortAllowed, l.sourceModifiedAt != r.sourceModifiedAt { return (l.sourceModifiedAt ?? .distantPast) > (r.sourceModifiedAt ?? .distantPast) }; case .nameAscending: break }; if l.recent7Count == r.recent7Count, l.lastUsedAt != r.lastUsedAt, context.sort != .recentUsageAscending { return (l.lastUsedAt ?? .distantPast) > (r.lastUsedAt ?? .distantPast) }; let n = l.entry.resource.name.localizedStandardCompare(r.entry.resource.name); return n == .orderedSame ? l.id < r.id : n == .orderedAscending }
+    private func matchesPluginStatus(_ entry: CapabilityCatalogEntry) -> Bool { guard category == .installedPlugins else { return true }; switch context.pluginStatusFilter { case .all: return true; case .enabled: return entry.resource.status != .blocked && entry.resource.status != .warning; case .disabled: return entry.resource.status == .blocked } }
+    public func displayedUsageCount(for row: CapabilityLibraryRow) -> Int? {
+        context.sort == .thirtyDayUsageDescending ? row.recent30Count : row.recent7Count
+    }
+
+    public var displayedUsageReady: Bool {
+        if category == .installedPlugins {
+            return context.sort == .thirtyDayUsageDescending ? browsePlugin30StatsReady : browsePluginStatsReady
+        }
+        return context.sort == .thirtyDayUsageDescending ? browse30StatsReady : browseStatsReady
+    }
+
+    /// Lazy, bounded to the current directory: warm navigation and selection
+    /// reuse display strings; no eager formatting of offscreen capabilities.
+    internal func rowText(for row: CapabilityLibraryRow, language: AppLanguage, timeZone: TimeZone = .current) -> CapabilityLibraryRowText {
+        let key = RowTextKey(row: row, language: language, isThirtyDay: context.sort == .thirtyDayUsageDescending, ready: displayedUsageReady, timeZone: timeZone)
+        if let cached = cachedRowText[row.id], cached.key == key { return cached.value }
+        if rowLocalizer?.language != language { rowLocalizer = DirectorLocalizer(language: language) }
+        let localizer = rowLocalizer!
+        func copy(_ key: String, _ fallback: String, _ args: CVarArg...) -> String { localizer.format(key, fallback: fallback, arguments: args) }
+        func date(_ value: Date) -> String {
+            var style = Date.FormatStyle(date: .abbreviated, time: .shortened)
+            style.timeZone = timeZone
+            return localizer.date(value, style: style)
+        }
+        let resource = row.entry.resource
+        let owner = localizer.enumLabel(.init(key: "enum.\(resource.ownership.rawValue)", fallback: resource.ownership.rawValue.capitalized))
+        let scope = localizer.enumLabel(.init(key: "enum.\(resource.scope.rawValue)", fallback: resource.scope.rawValue.capitalized))
+        let status = category == .installedPlugins ? (resource.status == .warning ? copy("library.pluginUnverified", "Last observed · unverified") : resource.status == .blocked ? copy("library.disabled", "Disabled") : copy("library.enabled", "Enabled")) : localizer.text("status.\(resource.status.rawValue)", fallback: resource.status.rawValue.capitalized)
+        let parent = row.entry.parentPluginID.flatMap { id in catalog.first { $0.resource.id == id }?.resource.name }
+        let source = resource.ownership == .pluginProvided ? parent.map { copy("library.sourcePlugin", "Plugin %@", $0) } : nil
+        let modified = modifiedSortAllowed ? resource.sourceModifiedAt.map { copy("library.modified", "Modified %@", date($0)) } : nil
+        let inferred = copy("library.inferred", "Inferred")
+        let metadata = [owner, scope, status, source, modified, row.inferredCount > 0 ? inferred : nil, row.lastUsedAt.map(date)].compactMap { $0 }.joined(separator: " · ")
+        let usage = displayedUsageCount(for: row)
+        let unknown = category == .installedPlugins && displayedUsageReady ? copy("library.unavailable", "Unavailable") : copy("library.pending", "—")
+        let count = usage.map { localizer.plural("library.callCount", count: $0, fallback: "%lld calls") } ?? unknown
+        let text = CapabilityLibraryRowText(
+            summary: CapabilityPurposeLocalization.localizedSummary(for: resource, language: language) ?? copy("library.purposeUnavailable", "Purpose unavailable"),
+            metadata: metadata,
+            countValue: usage.map { copy("library.number", "%lld", Int64($0)) } ?? unknown,
+            countLabel: usage == nil ? copy("library.evidence", "Evidence") : key.isThirtyDay ? copy("library.calls30Label", "calls · 30 days") : copy("library.callsLabel", "calls"),
+            accessibilityLabel: "\(resource.name), \(count)", inferredLabel: inferred
+        )
+        #if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
+        rowTextBuildCount += 1
+        #endif
+        // Discard departed rows on directory updates; external callers cannot
+        // turn arbitrary resources into an unbounded cache.
+        if catalog.contains(where: { $0.resource.id == row.id }) { cachedRowText[row.id] = (key, text) }
+        return text
+    }
+
+    private func sort(_ l: CapabilityLibraryRow, _ r: CapabilityLibraryRow) -> Bool {
+        let left = displayedUsageCount(for: l)
+        let right = displayedUsageCount(for: r)
+        switch context.sort {
+        case .usageAscending, .usageDescending, .recentUsageDescending, .thirtyDayUsageDescending:
+            if left == nil && right != nil { return false }
+            if left != nil && right == nil { return true }
+            if let left, let right, left != right {
+                return context.sort == .usageAscending ? left < right : left > right
+            }
+        case .recentUsageAscending:
+            if l.lastUsedAt != r.lastUsedAt { return (l.lastUsedAt ?? .distantPast) < (r.lastUsedAt ?? .distantPast) }
+        case .modifiedDescending:
+            if modifiedSortAllowed, l.sourceModifiedAt != r.sourceModifiedAt { return (l.sourceModifiedAt ?? .distantPast) > (r.sourceModifiedAt ?? .distantPast) }
+        case .nameAscending: break
+        }
+        if context.sort != .nameAscending, context.sort != .recentUsageAscending,
+           left == right, l.lastUsedAt != r.lastUsedAt {
+            return (l.lastUsedAt ?? .distantPast) > (r.lastUsedAt ?? .distantPast)
+        }
+        let name = l.entry.resource.name.localizedStandardCompare(r.entry.resource.name)
+        return name == .orderedSame ? l.id < r.id : name == .orderedAscending
+    }
 }
 
 private struct DetailMetadataToken: Equatable {
@@ -198,9 +370,7 @@ private struct DetailMetadataToken: Equatable {
 }
 
 private struct CapabilityGroupRowBorder: Shape {
-    enum Boundary {
-        case first, middle, last, only
-    }
+    typealias Boundary = CapabilityLibraryRowBoundary
 
     let boundary: Boundary
 
@@ -250,6 +420,8 @@ private struct CapabilityGroupRowBackground: Shape {
 }
 
 private struct CapabilityGroupHeaderBorder: Shape {
+    let isCollapsed: Bool
+
     func path(in rect: CGRect) -> Path {
         var path = Path()
         let radius = min(DirectorRadius.contentPanel, min(rect.width, rect.height) / 2)
@@ -258,13 +430,20 @@ private struct CapabilityGroupHeaderBorder: Shape {
         let top = rect.minY
         let bottom = rect.maxY
 
-        path.move(to: CGPoint(x: left, y: bottom))
+        path.move(to: CGPoint(x: left, y: isCollapsed ? bottom - radius : bottom))
         path.addLine(to: CGPoint(x: left, y: top + radius))
         path.addQuadCurve(to: CGPoint(x: left + radius, y: top), control: CGPoint(x: left, y: top))
         path.addLine(to: CGPoint(x: right - radius, y: top))
         path.addQuadCurve(to: CGPoint(x: right, y: top + radius), control: CGPoint(x: right, y: top))
-        path.addLine(to: CGPoint(x: right, y: bottom))
-        path.addLine(to: CGPoint(x: left, y: bottom))
+        if isCollapsed {
+            path.addLine(to: CGPoint(x: right, y: bottom - radius))
+            path.addQuadCurve(to: CGPoint(x: right - radius, y: bottom), control: CGPoint(x: right, y: bottom))
+            path.addLine(to: CGPoint(x: left + radius, y: bottom))
+            path.addQuadCurve(to: CGPoint(x: left, y: bottom - radius), control: CGPoint(x: left, y: bottom))
+        } else {
+            path.addLine(to: CGPoint(x: right, y: bottom))
+            path.addLine(to: CGPoint(x: left, y: bottom))
+        }
         return path
     }
 }
@@ -280,6 +459,7 @@ public struct CapabilityLibraryView: View {
     public var folderMembership: ((String, String) -> Bool)?
     public var onToggleFolderMembership: ((String, String, Bool) -> Void)?
     public let presentationState: DirectorPresentationState
+    public let pluginInventoryAvailable: Bool?
     public let queryStatus: DirectorLibraryQueryStatus?
     public let resultContext: DirectorLibraryResultContext?
     public let queryTrigger: String?
@@ -289,7 +469,8 @@ public struct CapabilityLibraryView: View {
     @State private var cachedDetail: CapabilityDetailViewModel?
     @State private var cachedDetailKey = ""
     @State private var selectedRowEmphasized = false
-    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership }
+    @State private var groupDisclosure = CapabilityLibraryDisclosureState()
+    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, pluginInventoryAvailable: Bool? = nil, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.pluginInventoryAvailable = pluginInventoryAvailable; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership }
     public var body: some View {
         DirectorEditorialFrame {
             GeometryReader { proxy in
@@ -320,18 +501,47 @@ public struct CapabilityLibraryView: View {
         }
         .navigationTitle(title)
         .task(id: queryTaskID) { guard queryTrigger != nil else { return }; onScopeChanged?(model.context.scope) }
-        .onAppear { model.language = languageStore.language }
+        .onAppear {
+            if model.language != languageStore.language {
+                model.language = languageStore.language
+            }
+        }
         .onChange(of: languageStore.language) { _, value in model.language = value }
+        .onChange(of: model.context.search) { _, _ in groupDisclosure.revealAll() }
         .onExitCommand { model.selectedID = nil }
     }
     private var queryTaskID: String? { queryTrigger.map { "\($0)|\(String(describing: model.context.scope))" } }
     private var effectiveScope: CapabilityBrowseScope { if (queryStatus == .loading || queryStatus == .failed), let resultContext { return resultContext.scope }; return model.context.scope }
     private var displayedRows: [CapabilityLibraryRow] { model.rows(for: effectiveScope) }
-    private var selected: CapabilityLibraryRow? { displayedRows.first { $0.id == model.selectedID } }
+    private var hasLastObservedPlugins: Bool {
+        model.category == .installedPlugins && model.categoryEntries.contains { $0.resource.sourceRootID == "last-known-runtime" }
+    }
+    private var pluginInventoryUnverified: Bool {
+        model.category == .installedPlugins && (pluginInventoryAvailable == false || hasLastObservedPlugins)
+    }
+    private var pluginCountUnknown: Bool {
+        pluginInventoryUnverified || (model.category == .installedPlugins && pluginInventoryAvailable == nil && model.categoryEntries.isEmpty && presentationState != .preview)
+    }
+    private var selected: CapabilityLibraryRow? {
+        guard let selectedID = model.selectedID else { return nil }
+        return model.row(withID: selectedID, in: effectiveScope)
+    }
     private func sideSheetWidth(for width: CGFloat) -> CGFloat {
         min(DirectorSpacing.sideSheetMaxWidth, max(DirectorSpacing.sideSheetMinWidth, width * 0.34))
     }
-    private func list(width: CGFloat) -> some View {
+    @ViewBuilder private func list(width: CGFloat) -> some View {
+        #if DIRECTOR_INTERACTION_PERFORMANCE
+        if ProcessInfo.processInfo.environment["CODEX_DIRECTOR_LIBRARY_RENDERER"] == "appkit" {
+            diagnosticAppKitList(width: width)
+        } else {
+            nativeList(width: width)
+        }
+        #else
+        nativeList(width: width)
+        #endif
+    }
+
+    private func nativeList(width: CGFloat) -> some View {
         // The List remains full workspace width so its scroll indicator aligns
         // with Home. Row insets carry the 40/16 pt page grid because macOS List
         // rows with custom backgrounds do not honor horizontal contentMargins.
@@ -352,6 +562,17 @@ public struct CapabilityLibraryView: View {
                 .listRowBackground(Color.clear)
                 .listRowInsets(rowInsets)
                 .listRowSeparator(.hidden)
+
+            if pluginInventoryUnverified {
+                Label(copy("library.pluginQueryFailed", "Plugin list unavailable. Previous results, if any, are unverified; refresh data to retry."), systemImage: "exclamationmark.triangle")
+                    .font(DirectorTypography.label)
+                    .foregroundStyle(DirectorColor.status(.warning))
+                    .selectionDisabled()
+                    .padding(.bottom, DirectorSpacing.space3)
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(rowInsets)
+                    .listRowSeparator(.hidden)
+            }
 
             DirectorFilterRibbon(compact: compactComposition) {
                 let ribbonInset = compactComposition ? DirectorSpacing.space2 * 2 : DirectorSpacing.space4 * 2
@@ -397,11 +618,14 @@ public struct CapabilityLibraryView: View {
                     .listRowInsets(rowInsets)
                     .listRowSeparator(.hidden)
             } else {
-                ForEach(model.groupedRows(for: effectiveScope)) { group in
-                    groupHeader(group, rowInsets: rowInsets)
+                let groups = model.groupedRows(for: effectiveScope)
+                ForEach(groups) { group in
+                    groupHeader(group, rowInsets: rowInsets, hasPrecedingGroup: group.id != groups.first?.id)
                         .selectionDisabled()
-                    ForEach(Array(group.rows.enumerated()), id: \.element.id) { rowIndex, row in
-                        libraryRow(row, boundary: groupBoundary(for: rowIndex, count: group.rows.count), rowInsets: rowInsets)
+                    if !groupDisclosure.isCollapsed(group.id) {
+                        ForEach(group.renderRows) { item in
+                            libraryRow(item.row, boundary: item.boundary, rowInsets: rowInsets)
+                        }
                     }
                 }
             }
@@ -417,6 +641,116 @@ public struct CapabilityLibraryView: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
+    #if DIRECTOR_INTERACTION_PERFORMANCE
+    private func diagnosticAppKitList(width: CGFloat) -> some View {
+        let contentWidth = DirectorPageLayout.contentWidth(for: width)
+        // The native List path subtracts its own 8pt content inset. This
+        // diagnostic plain NSTableView has no such inset.
+        let rowInset = DirectorPageLayout.contentMargin(for: width)
+        let compact = width < DirectorPageLayout.compactBreakpoint
+        var rows: [FullPageLibraryPrototypeRow] = [
+            .init(
+                id: "diagnostic-header",
+                height: compact ? 444 : 336,
+                selectable: false,
+                view: AnyView(diagnosticAppKitHeader(contentWidth: contentWidth, rowInset: rowInset, compact: compact))
+            )
+        ]
+        if displayedRows.isEmpty {
+            rows.append(.init(
+                id: "diagnostic-empty",
+                height: 72,
+                selectable: false,
+                view: AnyView(Text(emptyMessage)
+                    .font(DirectorTypography.body)
+                    .foregroundStyle(DirectorColor.textSecondary)
+                    .padding(.horizontal, rowInset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading))
+            ))
+        } else {
+            let groups = model.groupedRows(for: effectiveScope)
+            for group in groups {
+                rows.append(.init(
+                    id: "diagnostic-group-\(group.id)",
+                    height: compact ? 60 : 56,
+                    selectable: false,
+                    view: AnyView(groupHeader(group, rowInsets: .init())
+                        .padding(.horizontal, rowInset)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom))
+                ))
+                if !groupDisclosure.isCollapsed(group.id) {
+                    for (index, row) in group.rows.enumerated() {
+                        let boundary = groupBoundary(for: index, count: group.rows.count)
+                        rows.append(.init(
+                            id: row.id,
+                            height: compact ? 112 : 96,
+                            selectable: true,
+                            view: AnyView(libraryRow(row, boundary: boundary, rowInsets: .init())
+                                .tint(DirectorColor.accent(pageTone))
+                                .padding(.horizontal, rowInset)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
+                        ))
+                    }
+                }
+                if group.id != groups.last?.id {
+                    rows.append(.init(
+                        id: "diagnostic-group-space-\(group.id)",
+                        height: DirectorSpacing.space5,
+                        selectable: false,
+                        view: AnyView(Color.clear)
+                    ))
+                }
+            }
+        }
+        return FullPageLibraryRendererPrototype(
+            rows: rows,
+            selectedID: $model.selectedID,
+            folderOptions: { resourceID in
+                guard let folderMembership else { return [] }
+                return folderDefinitions.filter(\.isCustom).map { folder in
+                    FullPageLibraryRendererPrototype.FolderOption(
+                        id: folder.id,
+                        name: folder.displayName(language: model.language == .simplifiedChinese ? .simplifiedChinese : .english),
+                        included: folderMembership(resourceID, folder.id)
+                    )
+                }
+            },
+            onToggleFolder: onToggleFolderMembership
+        )
+        .frame(minHeight: 220)
+    }
+
+    private func diagnosticAppKitHeader(contentWidth: CGFloat, rowInset: CGFloat, compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            capabilityHeader(compact: compact, minimumTitleScale: 1)
+                .padding(.bottom, DirectorSpacing.space6)
+            summary(width: contentWidth, compact: compact)
+                .padding(.bottom, DirectorSpacing.space6)
+            DirectorFilterRibbon(compact: compact) {
+                let ribbonInset = compact ? DirectorSpacing.space2 * 2 : DirectorSpacing.space4 * 2
+                filterRibbonContent(width: max(0, contentWidth - ribbonInset))
+            }
+            .padding(.bottom, DirectorSpacing.ribbonGap)
+            resultContextNotice
+            if model.isLoading {
+                ProgressView(copy("library.loading", "Loading…"))
+                    .controlSize(.small)
+                    .padding(.vertical, DirectorSpacing.space3)
+            }
+            if model.loadError != nil {
+                Text(copy("library.error", "Unable to load capability usage; showing the last available result."))
+                    .foregroundStyle(DirectorColor.status(.failure))
+                    .padding(.vertical, DirectorSpacing.space3)
+            }
+        }
+        // Match the native List's different header-row top insets at its two
+        // responsive sizes; the table does not provide those insets itself.
+        .padding(.top, DirectorSpacing.space6 + (compact ? DirectorSpacing.space1 : DirectorSpacing.space3))
+        .padding(.horizontal, rowInset)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    #endif
+
     private func pageRowInsets(for width: CGFloat) -> EdgeInsets {
         let margin = DirectorPageLayout.listRowInset(for: width)
         return EdgeInsets(top: 0, leading: margin, bottom: 0, trailing: margin)
@@ -427,14 +761,14 @@ public struct CapabilityLibraryView: View {
         return EdgeInsets(top: DirectorSpacing.space6, leading: margin, bottom: 0, trailing: margin)
     }
 
-    private func capabilityHeader(compact: Bool) -> some View {
+    private func capabilityHeader(compact: Bool, minimumTitleScale: CGFloat = 0.72) -> some View {
         VStack(alignment: .leading, spacing: compact ? DirectorSpacing.space4 : DirectorSpacing.space5) {
-            capabilityTitleBlock(compact: compact)
+            capabilityTitleBlock(compact: compact, minimumTitleScale: minimumTitleScale)
         }
         .padding(.bottom, compact ? DirectorSpacing.space3 : DirectorSpacing.space4)
     }
 
-    private func capabilityTitleBlock(compact: Bool) -> some View {
+    private func capabilityTitleBlock(compact: Bool, minimumTitleScale: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
             HStack(alignment: .center, spacing: DirectorSpacing.space3) {
                 Image(systemName: DirectorSymbol.category(model.category))
@@ -445,7 +779,7 @@ public struct CapabilityLibraryView: View {
                     .font(compact ? DirectorTypography.editorialHeroTitleCompact : DirectorTypography.editorialHeroTitle)
                     .foregroundStyle(DirectorColor.textPrimary)
                     .lineLimit(2)
-                    .minimumScaleFactor(0.72)
+                    .minimumScaleFactor(minimumTitleScale)
                     .accessibilityLabel(title)
                     .accessibilityAddTraits(.isHeader)
             }
@@ -476,19 +810,8 @@ public struct CapabilityLibraryView: View {
     }
 
     private var filterSearchField: some View {
-        DirectorControlField {
-            HStack(spacing: DirectorSpacing.space2) {
-                Image(systemName: DirectorSymbol.search)
-                    .foregroundStyle(DirectorColor.textSecondary)
-                    .accessibilityHidden(true)
-                TextField(
-                    copy("filter.searchCapabilities", "Search capabilities"),
-                    text: Binding(get: { model.context.search }, set: { model.context = model.context.updated(search: $0) })
-                )
-                .textFieldStyle(.plain)
-                .accessibilityLabel(copy("filter.searchCapabilities", "Search capabilities"))
-            }
-        }
+        DirectorSearchField(copy("filter.searchCapabilities", "Search capabilities"),
+                            text: Binding(get: { model.context.search }, set: { model.context = model.context.updated(search: $0) }))
     }
 
     private func menuField<Content: View>(
@@ -499,28 +822,8 @@ public struct CapabilityLibraryView: View {
         maxWidth: CGFloat,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        DirectorControlField {
-            ZStack(alignment: .trailing) {
-                Menu {
-                    content()
-                } label: {
-                    Text(value)
-                        .foregroundStyle(DirectorColor.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .padding(.trailing, DirectorSpacing.space5)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .frame(maxWidth: .infinity)
-
-                Image(systemName: "chevron.down")
-                    .font(DirectorTypography.label.weight(.semibold))
-                    .foregroundStyle(DirectorColor.textSecondary)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            }
+        DirectorOutlinedMenuField(value, height: DirectorSpacing.controlMinHeight) {
+            content()
         }
         .frame(minWidth: minWidth, idealWidth: idealWidth, maxWidth: maxWidth)
         .accessibilityLabel(accessibilityLabel)
@@ -560,35 +863,62 @@ public struct CapabilityLibraryView: View {
         return .middle
     }
 
-    private func groupRowInsets(_ base: EdgeInsets, boundary: CapabilityGroupRowBorder.Boundary) -> EdgeInsets {
-        let closesGroup = boundary == .last || boundary == .only
-        return EdgeInsets(
-            top: base.top,
-            leading: base.leading,
-            // Only the final row owns the inter-group gap. The header and
-            // every non-final row retain their existing internal metrics.
-            bottom: closesGroup ? DirectorSpacing.space5 : base.bottom,
-            trailing: base.trailing
-        )
-    }
-
-    private func groupHeader(_ group: CapabilityLibraryGroup, rowInsets: EdgeInsets) -> some View {
-        DirectorGroupHeader(
-            title: groupTitle(group),
-            trailingText: copy("library.groupCount", "%lld capabilities", Int64(group.rows.count)),
-            symbolName: group.id == "__global__" ? "globe" : "folder.fill",
-            tone: pageTone
-        )
+    private func groupHeader(_ group: CapabilityLibraryGroup, rowInsets: EdgeInsets, hasPrecedingGroup: Bool = false) -> some View {
+        let isCollapsed = groupDisclosure.isCollapsed(group.id)
+        let title = groupTitle(group)
+        let groupCount = group.rows.count == 1
+            ? copy("library.groupCount.singular", "1 capability")
+            : copy("library.groupCount", "%lld capabilities", Int64(group.rows.count))
+        let actionLabel = isCollapsed
+            ? copy("library.group.expand", "Expand %@", title)
+            : copy("library.group.collapse", "Collapse %@", title)
+        return Button {
+            if groupDisclosure.toggle(group.id),
+               group.rows.contains(where: { $0.id == model.selectedID }) {
+                model.selectedID = nil
+            }
+        } label: {
+            HStack(alignment: .center, spacing: DirectorSpacing.space2) {
+                Image(systemName: group.id == "__global__" ? "globe" : "folder.fill")
+                    .font(DirectorTypography.supporting.weight(.semibold))
+                    .foregroundStyle(DirectorColor.accent(pageTone))
+                    .frame(width: 24, height: 24)
+                    .background(DirectorColor.accent(pageTone).opacity(0.12), in: RoundedRectangle(cornerRadius: DirectorRadius.compact, style: .continuous))
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(DirectorColor.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(groupCount)
+                    .font(DirectorTypography.label.monospacedDigit())
+                    .foregroundStyle(DirectorColor.textSecondary)
+                    .fixedSize()
+                Spacer(minLength: DirectorSpacing.space3)
+                Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(DirectorTypography.label.weight(.semibold))
+                    .foregroundStyle(DirectorColor.textSecondary)
+                    .frame(width: DirectorSpacing.toolbarControlMinHeight, height: DirectorSpacing.toolbarControlMinHeight)
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(actionLabel)
+        .accessibilityValue("\(groupCount), \(isCollapsed ? copy("library.group.collapsed", "Collapsed") : copy("library.group.expanded", "Expanded"))")
+        .accessibilityAddTraits(.isHeader)
+        .help(actionLabel)
         // The group outline reaches the same page grid as the header and
         // ribbon. Text keeps a 16pt internal inset inside that outline.
         .padding(.horizontal, DirectorSpacing.space4)
         .padding(.top, DirectorSpacing.space3)
         .padding(.bottom, DirectorSpacing.space2)
         .background {
-            CapabilityGroupHeaderBorder().fill(DirectorColor.inset.opacity(0.62))
+            CapabilityGroupHeaderBorder(isCollapsed: isCollapsed).fill(DirectorColor.inset.opacity(0.62))
         }
         .overlay {
-            CapabilityGroupHeaderBorder()
+            CapabilityGroupHeaderBorder(isCollapsed: isCollapsed)
                 .stroke(DirectorColor.boundary, lineWidth: 1)
                 .accessibilityHidden(true)
         }
@@ -599,13 +929,20 @@ public struct CapabilityLibraryView: View {
                 .padding(.vertical, DirectorSpacing.space2)
                 .accessibilityHidden(true)
         }
+        // Own the separation in the next header's content geometry. A List
+        // row inset pads its content, while a standalone spacer is subject to
+        // macOS's minimum list-row height; neither gives an exact 20pt gap.
+        .padding(.top, hasPrecedingGroup ? DirectorSpacing.space5 : 0)
         .listRowBackground(Color.clear)
         .listRowInsets(rowInsets)
-        .accessibilityAddTraits(.isHeader)
     }
 
     private func libraryRow(_ row: CapabilityLibraryRow, boundary: CapabilityGroupRowBorder.Boundary, rowInsets: EdgeInsets) -> some View {
-        HStack(alignment: .top, spacing: DirectorSpacing.space3) {
+        #if DIRECTOR_INTERACTION_PERFORMANCE
+        InteractionPerformanceProbe.increment(.rowViewBuild)
+        #endif
+        let text = model.rowText(for: row, language: languageStore.language)
+        return HStack(alignment: .top, spacing: DirectorSpacing.space3) {
             VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
                 HStack(alignment: .firstTextBaseline, spacing: DirectorSpacing.space2) {
                     if row.entry.resource.kind != .agent {
@@ -620,7 +957,7 @@ public struct CapabilityLibraryView: View {
                         .truncationMode(.middle)
                         .help(row.entry.resource.name)
                     if row.inferredCount > 0 {
-                        Text(copy("library.inferred", "Inferred"))
+                        Text(text.inferredLabel)
                             .font(DirectorTypography.label.weight(.semibold))
                             .foregroundStyle(DirectorColor.dataText)
                             .padding(.horizontal, DirectorSpacing.space2)
@@ -629,12 +966,12 @@ public struct CapabilityLibraryView: View {
                             .overlay(Capsule().stroke(DirectorColor.accent(pageTone).opacity(0.48), lineWidth: 1))
                     }
                 }
-                Text(CapabilityPurposeLocalization.localizedSummary(for: row.entry.resource, language: model.language) ?? copy("library.purposeUnavailable", "Purpose unavailable"))
+                Text(text.summary)
                     .font(DirectorTypography.capabilityRowSummary)
                     .foregroundStyle(DirectorColor.textSecondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(metadata(row))
+                Text(text.metadata)
                     .font(DirectorTypography.label)
                     .foregroundStyle(DirectorColor.textSupporting)
                     .lineLimit(1)
@@ -644,11 +981,11 @@ public struct CapabilityLibraryView: View {
             Spacer(minLength: DirectorSpacing.space3)
 
             VStack(alignment: .trailing, spacing: DirectorSpacing.space1) {
-                Text(countValue(row))
+                Text(text.countValue)
                     .font(DirectorTypography.capabilityRowCount)
                     .foregroundStyle(DirectorColor.textPrimary)
                     .fixedSize()
-                Text(countLabel(row))
+                Text(text.countLabel)
                     .font(DirectorTypography.capabilityRowCountLabel)
                     .foregroundStyle(DirectorColor.textSupporting)
                     .fixedSize()
@@ -717,8 +1054,8 @@ public struct CapabilityLibraryView: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .listRowInsets(groupRowInsets(rowInsets, boundary: boundary))
-        .accessibilityLabel("\(row.entry.resource.name), \(count(row))")
+        .listRowInsets(rowInsets)
+        .accessibilityLabel(text.accessibilityLabel)
     }
     private func groupTitle(_ group: CapabilityLibraryGroup) -> String {
         group.id == "__global__" ? copy("library.group.global", "Global") : group.title
@@ -730,6 +1067,7 @@ public struct CapabilityLibraryView: View {
         case .indexing: return copy("library.indexing", "Indexing capabilities…")
         case .failure: return copy("library.error", "Unable to load capability usage.")
         default:
+            if model.category == .installedPlugins && pluginInventoryAvailable != true && model.categoryEntries.isEmpty && presentationState != .preview { return copy("library.pluginNotVerified", "Installed plugins have not been verified yet.") }
             if model.categoryEntries.isEmpty { return copy("library.noCapabilities", "No capabilities in this category.") }
             if !model.context.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return copy("library.noSearchResults", "No capabilities match this search.") }
             if isProjectScope { return copy("library.noProjectUsage", "No observed calls in this project history.") }
@@ -753,7 +1091,7 @@ public struct CapabilityLibraryView: View {
         switch item.kind { case .global: key = "global"; case .project: key = "project"; case .recent7: key = "used"; case .notUsed30: key = "notUsed30"; case .installed: key = "installed"; case .enabled: key = "enabled"; case .attributionUnavailable: key = "attributionUnavailable" }
         return copy("library.summary.\(key)", item.label)
     }
-    private func metricValue(_ item: CapabilitySummaryMetric) -> String { if !item.statisticsReady && (item.kind == .recent7 || item.kind == .notUsed30) { return copy("library.pending", "—") }; return number(item.value) }
+    private func metricValue(_ item: CapabilitySummaryMetric) -> String { if (item.kind == .installed || item.kind == .enabled) && pluginCountUnknown { return copy("library.pending", "—") }; if !item.statisticsReady && (item.kind == .recent7 || item.kind == .notUsed30) { return copy("library.pending", "—") }; return number(item.value) }
     private var usageStatisticsReady: Bool { model.category == .installedPlugins ? model.pluginStatsReady : model.categoryStatsReady }
     private func detail(_ row: CapabilityLibraryRow, showsBackButton: Bool) -> some View {
         let key = detailKey(row)
@@ -822,7 +1160,7 @@ public struct CapabilityLibraryView: View {
     private func refreshDetailIfNeeded(row: CapabilityLibraryRow, detail: CapabilityDetailViewModel) {
         guard let detailContext else { return }
         let fresh = detailContext(row)
-        let usageChanged = fresh.row.recent7Count != detail.row.recent7Count || fresh.row.inferredCount != detail.row.inferredCount || fresh.row.lastUsedAt != detail.row.lastUsedAt || fresh.row.coverage != detail.row.coverage
+        let usageChanged = fresh.row.recent7Count != detail.row.recent7Count || fresh.row.recent30Count != detail.row.recent30Count || fresh.row.inferredCount != detail.row.inferredCount || fresh.row.lastUsedAt != detail.row.lastUsedAt || fresh.row.coverage != detail.row.coverage
         guard fresh.row != detail.row || fresh.projects != detail.projects || fresh.sessions != detail.sessions || fresh.usageProjectIDs != detail.usageProjectIDs || fresh.now != detail.now else { return }
         detail.updatePresentation(row: fresh.row, projects: fresh.projects, sessions: fresh.sessions, usageProjectIDs: fresh.usageProjectIDs, now: fresh.now)
         if usageChanged && detail.evidenceRequested { detail.reload() }
@@ -920,6 +1258,9 @@ public struct CapabilityLibraryView: View {
             menuOption(copy("library.sort.recentDescending", "Past 7 days ↓"), selected: effectiveSort == .recentUsageDescending) {
                 selectSort(.recentUsageDescending)
             }
+            menuOption(copy("library.sort.thirtyDescending", "Past 30 days ↓"), selected: effectiveSort == .thirtyDayUsageDescending) {
+                selectSort(.thirtyDayUsageDescending)
+            }
             menuOption(copy("library.sort.usageAscending", "Usage ↑"), selected: effectiveSort == .usageAscending) {
                 selectSort(.usageAscending)
             }
@@ -939,7 +1280,7 @@ public struct CapabilityLibraryView: View {
     }
     private var scopeLabel: String { scopeLabel(model.context.scope) }
     private func scopeLabel(_ scope: CapabilityBrowseScope) -> String { switch scope { case .global: return copy("library.scope.global", "Global configuration"); case .allProjects: return copy("library.scope.projects", "Project configuration"); case .allCapabilities: return copy("library.scope.all", "All capabilities"); case .project(let id): return model.projects.first { $0.id == id }.map { copy("library.scope.projectUsage", "%@ · Usage", $0.name) } ?? id } }
-    private var sortLabel: String { switch model.context.sort { case .usageAscending: return copy("library.sort.usageAscending", "Usage ↑"); case .nameAscending: return copy("library.sort.name", "Name A–Z"); case .modifiedDescending where model.modifiedSortAllowed: return copy("library.sort.modified", "Modified ↓"); default: return copy("library.sort.recentDescending", "Past 7 days ↓") } }
+    private var sortLabel: String { switch model.context.sort { case .thirtyDayUsageDescending: return copy("library.sort.thirtyDescending", "Past 30 days ↓"); case .usageAscending: return copy("library.sort.usageAscending", "Usage ↑"); case .nameAscending: return copy("library.sort.name", "Name A–Z"); case .modifiedDescending where model.modifiedSortAllowed: return copy("library.sort.modified", "Modified ↓"); default: return copy("library.sort.recentDescending", "Past 7 days ↓") } }
     private func selectedMetric(_ metric: CapabilitySummaryMetric) -> Bool {
         switch metric.kind {
         case .global: return model.context.scope == .global
@@ -983,16 +1324,6 @@ public struct CapabilityLibraryView: View {
         }
         onScopeChanged?(model.context.scope)
     }
-    private func metadata(_ row: CapabilityLibraryRow) -> String { let resource = row.entry.resource; let owner = languageStore.localizer.enumLabel(.init(key: "enum.\(resource.ownership.rawValue)", fallback: resource.ownership.rawValue.capitalized)); let scope = languageStore.localizer.enumLabel(.init(key: "enum.\(resource.scope.rawValue)", fallback: resource.scope.rawValue.capitalized)); let status = model.category == .installedPlugins ? (resource.status == .blocked ? copy("library.disabled", "Disabled") : copy("library.enabled", "Enabled")) : languageStore.localizer.text("status.\(resource.status.rawValue)", fallback: resource.status.rawValue.capitalized); let parent = row.entry.parentPluginID.flatMap { id in model.catalog.first { $0.resource.id == id }?.resource.name }; let source = resource.ownership == .pluginProvided ? (parent.map { copy("library.sourcePlugin", "Plugin %@", $0) }) : nil; let modified = model.modifiedSortAllowed ? resource.sourceModifiedAt.map { copy("library.modified", "Modified %@", languageStore.localizer.date($0)) } : nil; return [owner, scope, status, source, modified, row.inferredCount > 0 ? copy("library.inferred", "Inferred") : nil, row.lastUsedAt.map { languageStore.localizer.date($0) }].compactMap { $0 }.joined(separator: " · ") }
     private func copy(_ key: String, _ fallback: String, _ args: CVarArg...) -> String { languageStore.localizer.format(key, fallback: fallback, arguments: args) }
     private func number(_ value: Int) -> String { copy("library.number", "%lld", Int64(value)) }
-    private func count(_ row: CapabilityLibraryRow) -> String { if let value = row.recent7Count { return languageStore.localizer.plural("library.callCount", count: value, fallback: "%lld calls") }; if row.attributionUnavailable { return copy("library.unavailable", "Unavailable") }; return copy("library.pending", "—") }
-    private func countValue(_ row: CapabilityLibraryRow) -> String {
-        if let value = row.recent7Count { return number(value) }
-        return row.attributionUnavailable ? copy("library.unavailable", "Unavailable") : copy("library.pending", "—")
-    }
-    private func countLabel(_ row: CapabilityLibraryRow) -> String {
-        guard row.recent7Count != nil else { return copy("library.evidence", "Evidence") }
-        return copy("library.callsLabel", "calls")
-    }
 }

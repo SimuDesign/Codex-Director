@@ -324,7 +324,7 @@ public struct CodexAccountUsageReading: Sendable {
     }
 }
 
-private enum CodexAppServerProcess {
+enum CodexAppServerProcess {
     static func exchange(executableURL: URL, request: Data, timeout: TimeInterval, maxOutputBytes: Int) async throws -> Data {
         let holder = SessionHolder()
         return try await withTaskCancellationHandler {

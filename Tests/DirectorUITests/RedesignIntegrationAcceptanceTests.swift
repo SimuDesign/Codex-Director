@@ -251,7 +251,7 @@ final class RedesignIntegrationAcceptanceTests: XCTestCase {
         XCTAssertEqual(catalog.entries.first { $0.resource.id == plugin.id }?.category, .installedPlugins)
         XCTAssertEqual(catalog.entries.first { $0.resource.id == disabled.id }?.category, .installedPlugins)
         XCTAssertEqual(catalog.entries.first { $0.resource.id == unsupported.id }?.category, .installedPlugins)
-        XCTAssertEqual(catalog.entries.first { $0.resource.id == child.id }?.category, .installedSkills)
+        XCTAssertNil(catalog.entries.first { $0.resource.id == child.id }?.category)
         XCTAssertNil(catalog.entries.first { $0.resource.id == cache.id }?.category)
 
         let prefs = makeMemoryStores()

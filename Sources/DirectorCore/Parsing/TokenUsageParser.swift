@@ -24,11 +24,13 @@ public struct TokenUsageIssue: Sendable, Equatable {
     }
 }
 
-/// Parses `token_count` event evidence into cumulative token snapshots and
-/// reported rate-limit windows.
+/// Parses legacy `token_count` and current `token_usage_record` evidence into
+/// cumulative token snapshots, plus reported rate-limit windows.
 ///
-/// - A task total is the newest cumulative `total_token_usage` snapshot; the
-///   parser never sums cumulative snapshots.
+/// - A task total is the newest cumulative snapshot. New records use
+///   `thread_token_usage`, never per-response `usage` or per-turn totals.
+///   The parser never sums cumulative snapshots or mixes both streams after
+///   the first current-format record.
 /// - `last_token_usage` is a per-event view and is not recorded as a task
 ///   snapshot.
 /// - Primary and secondary rate-limit windows are parsed symmetrically and
@@ -46,7 +48,8 @@ public struct TokenUsageParser: Sendable {
         TokenUsageAccumulator(state: TokenState(
             sessionID: sessionID,
             lastCumulativeTotal: snapshot?.usage.totalTokens,
-            activeModel: snapshot?.modelIdentity
+            activeModel: snapshot?.modelIdentity,
+            hasCurrentFormatSnapshot: snapshot?.id.contains("-newt") == true
         ))
     }
 
@@ -58,19 +61,31 @@ public struct TokenUsageParser: Sendable {
 
     /// The newest cumulative snapshot for a task total — never a sum.
     public static func newestCumulative(from snapshots: [TokenUsageSnapshot]) -> TokenUsageSnapshot? {
-        snapshots.max { $0.capturedAt < $1.capturedAt }
+        snapshots.max { lhs, rhs in
+            if lhs.capturedAt != rhs.capturedAt { return lhs.capturedAt < rhs.capturedAt }
+            let lhsCurrent = lhs.id.contains("-newt")
+            let rhsCurrent = rhs.id.contains("-newt")
+            if lhsCurrent != rhsCurrent { return !lhsCurrent }
+            return lhs.id < rhs.id
+        }
     }
 }
 
-/// Mutable, bounded-memory accumulator for `token_count` evidence.
+/// Mutable, bounded-memory accumulator for token evidence.
 struct TokenUsageAccumulator: Sendable {
     private var state: TokenState
     fileprivate init(state: TokenState) { self.state = state }
     mutating func process(_ envelope: RolloutEnvelope) {
         state.processModelContext(envelope)
-        guard envelope.type == .eventMessage, let payload = envelope.payload else { return }
-        guard (payload.json["type"] as? String) == "token_count" else { return }
-        state.process(envelope: envelope, payload: payload)
+        guard let payload = envelope.payload else { return }
+        switch envelope.type {
+        case .eventMessage where (payload.json["type"] as? String) == "token_count":
+            state.processLegacy(envelope: envelope, payload: payload)
+        case .tokenUsageRecord:
+            state.processCurrent(envelope: envelope, payload: payload)
+        default:
+            break
+        }
     }
     mutating func finish() -> TokenUsageExtraction { state.finish() }
 }
@@ -84,6 +99,7 @@ private struct TokenState {
     var issues: [TokenUsageIssue] = []
     var lastCumulativeTotal: Int64?
     var activeModel: ModelIdentity?
+    var hasCurrentFormatSnapshot: Bool = false
 
     mutating func processModelContext(_ envelope: RolloutEnvelope) {
         guard envelope.type == .turnContext, let payload = envelope.payload else { return }
@@ -99,17 +115,37 @@ private struct TokenState {
         }
     }
 
-    mutating func process(envelope: RolloutEnvelope, payload: TransientPayload) {
+    mutating func processLegacy(envelope: RolloutEnvelope, payload: TransientPayload) {
         guard let capturedAt = envelope.timestamp else {
             issues.append(TokenUsageIssue(lineNumber: envelope.lineNumber, message: "token_count event without timestamp"))
             return
         }
-        if let info = payload.json["info"] as? [String: Any] {
+        if !hasCurrentFormatSnapshot, let info = payload.json["info"] as? [String: Any] {
             parseTokenUsage(envelope: envelope, capturedAt: capturedAt, info: info)
         }
         if let rateLimits = payload.json["rate_limits"] as? [String: Any] {
             parseRateLimits(envelope: envelope, capturedAt: capturedAt, rateLimits: rateLimits)
         }
+    }
+
+    mutating func processCurrent(envelope: RolloutEnvelope, payload: TransientPayload) {
+        guard let capturedAt = envelope.timestamp else {
+            issues.append(TokenUsageIssue(lineNumber: envelope.lineNumber, message: "token_usage_record without timestamp"))
+            return
+        }
+        guard let cumulative = payload.json["thread_token_usage"] as? [String: Any],
+              let parsed = TokenUsageParser.parseUsage(cumulative) else {
+            issues.append(TokenUsageIssue(lineNumber: envelope.lineNumber, message: "malformed thread_token_usage"))
+            return
+        }
+        // Codex also sends per-response and per-turn usage in this envelope;
+        // only the thread value is a session-level cumulative total.
+        if !hasCurrentFormatSnapshot {
+            lastCumulativeTotal = nil // legacy totals need not share the same accounting basis
+        }
+        hasCurrentFormatSnapshot = true
+        appendSnapshot(parsed, envelope: envelope, capturedAt: capturedAt,
+                       id: "\(sessionID)-newt\(Int64(capturedAt.timeIntervalSince1970 * 1_000_000))-\(envelope.lineNumber)")
     }
 
     mutating func parseTokenUsage(envelope: RolloutEnvelope, capturedAt: Date, info: [String: Any]) {
@@ -118,6 +154,14 @@ private struct TokenState {
             issues.append(TokenUsageIssue(lineNumber: envelope.lineNumber, message: "malformed total_token_usage"))
             return
         }
+        appendSnapshot(parsed, envelope: envelope, capturedAt: capturedAt,
+                       id: "\(sessionID)-t\(Int64(capturedAt.timeIntervalSince1970))")
+    }
+
+    mutating func appendSnapshot(
+        _ parsed: (inputTokens: Int64, cachedInputTokens: Int64, cacheWriteInputTokens: Int64, outputTokens: Int64, reasoningOutputTokens: Int64, totalTokens: Int64),
+        envelope: RolloutEnvelope, capturedAt: Date, id: String
+    ) {
         var coverage: CoverageState = .complete
         if let last = lastCumulativeTotal, parsed.totalTokens < last {
             coverage = .partial
@@ -142,7 +186,6 @@ private struct TokenState {
             issues.append(TokenUsageIssue(lineNumber: envelope.lineNumber, message: "invalid token counts"))
             return
         }
-        let id = "\(sessionID)-t\(Int64(capturedAt.timeIntervalSince1970))"
         snapshots.append(TokenUsageSnapshot(
             id: id,
             sessionID: sessionID,

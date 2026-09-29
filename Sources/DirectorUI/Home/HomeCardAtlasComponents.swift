@@ -170,6 +170,10 @@ public struct HomeOutlineModule<Content: View>: View {
     public let title: String
     public let supportingText: String?
     public let tone: DirectorAccentTone
+    /// Optional accessory rendered in the module header. Keeping this as an
+    /// erased view preserves the existing initializer and lets a module add
+    /// a compact, native control without introducing a second header grammar.
+    public let headerAccessory: AnyView?
     private let content: Content
     @Environment(\.colorSchemeContrast) private var contrast
 
@@ -177,25 +181,35 @@ public struct HomeOutlineModule<Content: View>: View {
         title: String,
         supportingText: String? = nil,
         tone: DirectorAccentTone = .blue,
+        headerAccessory: AnyView? = nil,
         @ViewBuilder content: () -> Content
     ) {
         self.title = title
         self.supportingText = supportingText
         self.tone = tone
+        self.headerAccessory = headerAccessory
         self.content = content()
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: DirectorSpacing.space6) {
             VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
-                Text(title)
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(DirectorColor.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-                if let supportingText, !supportingText.isEmpty {
-                    Text(supportingText)
-                        .font(DirectorTypography.supporting)
-                        .foregroundStyle(DirectorColor.textSecondary)
+                HStack(alignment: .firstTextBaseline, spacing: DirectorSpacing.space3) {
+                    VStack(alignment: .leading, spacing: DirectorSpacing.space3) {
+                        Text(title)
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(DirectorColor.textPrimary)
+                            .accessibilityAddTraits(.isHeader)
+                        if let supportingText, !supportingText.isEmpty {
+                            Text(supportingText)
+                                .font(DirectorTypography.supporting)
+                                .foregroundStyle(DirectorColor.textSecondary)
+                        }
+                    }
+                    Spacer(minLength: headerAccessory == nil ? 0 : DirectorSpacing.space3)
+                    if let headerAccessory {
+                        headerAccessory
+                    }
                 }
                 Rectangle()
                     .fill(DirectorColor.boundary.opacity(contrast == .increased ? 1 : 0.82))

@@ -2,14 +2,17 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.4.0`. Requires macOS 26 or later.
+> Current development version: `1.4.1`. Requires macOS 26 or later.
 
 [简体中文](README.zh-CN.md) · [Version notes](CHANGELOG.md) · [中文更新说明](CHANGELOG.zh-CN.md)
 
 ## What it does
 
 - Inventories global, installed, and project-level Agents and Skills, keeping configuration ownership distinct from project usage.
+- The Installed Skills total, list, and usage ranking cover independently installed Skills only. Installed plugins have their own count; any observed plugin-provided Skills remain source-labeled in capability folders and do not inflate independent totals.
 - Shows privacy-safe recent usage evidence and data freshness without treating activity as proof of effectiveness.
+- Ranks observed capability calls over either the last 7 or 30 local calendar days. The first launch defaults to 7 days, then remembers the last selected period without starting a new index or query when switched.
+- Agent, Skill and plugin lists, plus all three tabs inside capability folders, also offer **Past 30 days ↓** sorting. List call counts follow the selected window; changing sort uses loaded statistics.
 - Records lightweight human evaluations alongside the evidence.
 - Exports an open, unencrypted `.codexpack.zip` with manifests, checksums, plugin and dependency lists, and bilingual recovery instructions.
 - Restores a trusted `.codexpack.zip` locally through an isolated verification and preflight flow. It creates missing files only, skips identical files, stops on conflicts, and never executes or installs package content. Before writing, it creates a private mode-0700 quarantine. Failure cleanup and in-session Undo move verified unchanged objects out of their logical paths into that quarantine without deleting them; Codex Director never automatically destroys quarantine contents. The result can reveal the local folder in Finder for manual review and deletion.
@@ -22,7 +25,7 @@ Codex Director keeps source capabilities read-only. It does not upload capabilit
 
 ## Capability Folders
 
-The Capability Folders page creates one empty local **Self Training** folder. Users can create, rename, delete, reorder, and search custom folders, import existing Agents and Skills with a staged multi-select sheet, and add the same capability to more than one folder. Existing memberships are preserved across upgrades; no capability is added implicitly. Folder membership stores only stable resource and folder IDs; source files, paths, capability content, and sessions are never changed or persisted by this feature.
+The Capability Folders page creates one empty local **Self Training** folder. Users can create, rename, delete and reorder custom folders, import existing Agents and Skills with a staged multi-select sheet, and add the same capability to more than one folder. Entry search finds custom, Global and Project folders by name; inside a folder, search finds its capabilities. Existing memberships are preserved across upgrades; no capability is added implicitly. Folder membership stores only stable resource and folder IDs; source files, paths, capability content, and sessions are never changed or persisted by this feature.
 
 Global and project folders reflect configuration ownership from the current read-only index. Every folder exposes Agent & Companion Skills / Agent / Skill tabs. Explicit relationships come from declared local metadata only; a related Skill outside the folder is a preview and is never counted or auto-added. Plugin-provided Skills appear in Global; plugin packages, system capabilities, MCP, tools, instructions, and stale plugin caches are excluded. Folder preferences are independent of the derived database and are not included in `.codexpack.zip` packages.
 

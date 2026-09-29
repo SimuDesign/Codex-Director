@@ -124,6 +124,52 @@ final class TokenUsageParserTests: XCTestCase {
         XCTAssertNotEqual(newest?.usage.totalTokens, 750) // never summed
     }
 
+    func testCurrentRecordUsesThreadCumulativeAndDoesNotDoubleCountLegacy() {
+        let legacy = tokenCount(info: ["total_token_usage": usage(total: 100)],
+                                timestamp: "2026-08-15T04:12:05.000Z", line: 1)
+        let current = envelope(payload: [
+            "usage": usage(total: 7),
+            "turn_token_usage": usage(total: 7),
+            "thread_token_usage": usage(total: 120),
+        ], timestamp: "2026-08-15T04:12:06.000Z", line: 2, type: "token_usage_record")
+        let legacyAfter = tokenCount(info: ["total_token_usage": usage(total: 119)],
+                                     timestamp: "2026-08-15T04:12:07.000Z", line: 3)
+        let result = extract([legacy, current, legacyAfter])
+        XCTAssertEqual(result.snapshots.map(\.usage.totalTokens), [100, 120])
+        XCTAssertEqual(TokenUsageParser.newestCumulative(from: result.snapshots)?.usage.totalTokens, 120)
+        XCTAssertTrue(result.issues.isEmpty)
+    }
+
+    func testCurrentRecordWinsEqualTimestampTieForResume() {
+        let timestamp = "2026-08-15T04:12:06.000Z"
+        let legacy = tokenCount(info: ["total_token_usage": usage(total: 100)],
+                                timestamp: timestamp, line: 1)
+        let current = envelope(payload: ["thread_token_usage": usage(total: 120)],
+                               timestamp: timestamp, line: 2, type: "token_usage_record")
+        let snapshots = extract([legacy, current]).snapshots
+        XCTAssertTrue(TokenUsageParser.newestCumulative(from: snapshots)?.id.contains("-newt") == true)
+    }
+
+    func testCurrentRecordResumeIgnoresLegacyTotalsButKeepsQuotas() {
+        let current = envelope(payload: ["thread_token_usage": usage(total: 120)],
+                               timestamp: "2026-08-15T04:12:06.000Z", line: 2, type: "token_usage_record")
+        let first = extract([current]).snapshots[0]
+        var accumulator = TokenUsageParser().makeAccumulator(sessionID: sessionID, resumeFrom: first)
+        accumulator.process(tokenCount(info: ["total_token_usage": usage(total: 119)],
+                                       rateLimits: ["primary": window(minutes: 10_080, usedPercent: 50)],
+                                       timestamp: "2026-08-15T04:12:07.000Z", line: 3))
+        let resumed = accumulator.finish()
+        XCTAssertTrue(resumed.snapshots.isEmpty)
+        XCTAssertEqual(resumed.quotas.count, 1)
+    }
+
+    func testMalformedCurrentRecordIsPartialEvidenceNotZero() {
+        let result = extract([envelope(payload: ["usage": usage(total: 7)],
+                                       timestamp: "2026-08-15T04:12:06.000Z", type: "token_usage_record")])
+        XCTAssertTrue(result.snapshots.isEmpty)
+        XCTAssertTrue(result.issues.contains { $0.message.contains("malformed thread_token_usage") })
+    }
+
     func testDecreasingCumulativeTotalMarksPartialCoverage() {
         let first = tokenCount(info: ["total_token_usage": usage(total: 400)], line: 1)
         let second = tokenCount(info: ["total_token_usage": usage(total: 300)], line: 2)

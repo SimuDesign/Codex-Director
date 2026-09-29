@@ -10,6 +10,10 @@ public struct IndexingResult: Sendable, Equatable {
     public let runtimeCoverage: CoverageState
     public let runtimeIssueCount: Int
     public let discoveryIssueCount: Int
+    /// Nil means no runtime query was attempted. False is not an observed
+    /// empty plugin list and must never be presented as one.
+    public let runtimePluginInventoryAvailable: Bool?
+    public let runtimePluginPackagesAvailable: Bool?
 
     public init(
         processedFiles: Int,
@@ -19,7 +23,9 @@ public struct IndexingResult: Sendable, Equatable {
         cancelled: Bool,
         runtimeCoverage: CoverageState = .unknown,
         runtimeIssueCount: Int = 0,
-        discoveryIssueCount: Int = 0
+        discoveryIssueCount: Int = 0,
+        runtimePluginInventoryAvailable: Bool? = nil,
+        runtimePluginPackagesAvailable: Bool? = nil
     ) {
         self.processedFiles = processedFiles
         self.skippedFiles = skippedFiles
@@ -29,6 +35,8 @@ public struct IndexingResult: Sendable, Equatable {
         self.runtimeCoverage = runtimeCoverage
         self.runtimeIssueCount = runtimeIssueCount
         self.discoveryIssueCount = discoveryIssueCount
+        self.runtimePluginInventoryAvailable = runtimePluginInventoryAvailable
+        self.runtimePluginPackagesAvailable = runtimePluginPackagesAvailable
     }
 }
 
@@ -143,8 +151,12 @@ public actor IndexingCoordinator {
         var transientRoots: [String: URL] = [:]
         var runtimeIssues: [DiscoveryIssue] = []
         var runtimeCoverage: CoverageState = .unknown
+        var runtimePluginInventoryAvailable: Bool?
+        var runtimePluginPackagesAvailable: Bool?
         if let runtimeDiscovery {
             let runtime = await runtimeDiscovery.discover()
+            runtimePluginInventoryAvailable = !runtime.unsupportedCategories.contains("plugin")
+            runtimePluginPackagesAvailable = runtime.pluginPackagesAvailable
             let runtimeSkillIDs = Dictionary(grouping: runtime.resources.filter { $0.kind == .skill }.compactMap { resource -> (String, String)? in
                 guard let root = runtime.transientRoots[resource.sourceRootID], let relative = resource.relativeSourcePath else { return nil }
                 let marker = resource.sourceRootID.replacingOccurrences(of: "runtime-plugins:", with: "")
@@ -176,13 +188,34 @@ public actor IndexingCoordinator {
             transientRoots = runtime.transientRoots
             runtimeIssues = runtime.issues
             runtimeCoverage = runtime.coverage
-            if runtime.coverage == .unavailable {
-                // Preserve the last-known runtime inventory without counting
-                // it as current. It is intentionally marked warning and moved
-                // to a non-current source bucket for the UI.
-                let previous = try await store.fetchAllResources().filter { $0.scope == .runtime }
-                let previousIDs = Set(previous.map(\.id))
-                combinedResources.append(contentsOf: previous.map { resource in
+            if runtime.coverage == .unavailable || runtimePluginInventoryAvailable == false {
+                // A successful version/MCP read must not prune the last-known
+                // plugin inventory when plugin enumeration alone fails. Keep
+                // its children and relations, but mark every retained item as
+                // unverified so it cannot be used as current attribution.
+                let previousRelations = try await store.fetchAllRelations()
+                let previous: [CapabilityResource]
+                if runtime.coverage == .unavailable {
+                    previous = previousResources.filter { $0.scope == .runtime }
+                } else {
+                    let pluginIDs = Set(previousResources.filter {
+                        $0.scope == .runtime && $0.kind == .plugin && ($0.origin == .runtime || $0.origin == .plugin)
+                    }.map(\.id))
+                    var retainedIDs = pluginIDs
+                    var pending = Array(pluginIDs)
+                    while let parent = pending.popLast() {
+                        for relation in previousRelations where relation.sourceResourceID == parent && relation.relationKind == "contains" {
+                            if retainedIDs.insert(relation.targetResourceID).inserted {
+                                pending.append(relation.targetResourceID)
+                            }
+                        }
+                    }
+                    previous = previousResources.filter { retainedIDs.contains($0.id) && $0.scope == .runtime }
+                }
+                let currentIDs = Set(combinedResources.map(\.id))
+                let retained = previous.filter { !currentIDs.contains($0.id) }
+                let retainedIDs = Set(retained.map(\.id))
+                combinedResources.append(contentsOf: retained.map { resource in
                     CapabilityResource(
                         id: resource.id, name: resource.name, kind: resource.kind, status: .warning,
                         scope: resource.scope, projectID: resource.projectID, confidence: resource.confidence,
@@ -195,8 +228,53 @@ public actor IndexingCoordinator {
                         modified: resource.modified
                     )
                 })
-                combinedProvenance.append(contentsOf: try await store.fetchAllProvenance().filter { previousIDs.contains($0.resourceID) })
-                combinedRelations.append(contentsOf: try await store.fetchAllRelations().filter { previousIDs.contains($0.sourceResourceID) || previousIDs.contains($0.targetResourceID) })
+                let allIDs = Set(combinedResources.map(\.id))
+                combinedProvenance.append(contentsOf: try await store.fetchAllProvenance().filter { retainedIDs.contains($0.resourceID) })
+                combinedRelations.append(contentsOf: previousRelations.filter {
+                    (retainedIDs.contains($0.sourceResourceID) || retainedIDs.contains($0.targetResourceID)) &&
+                    allIDs.contains($0.sourceResourceID) && allIDs.contains($0.targetResourceID)
+                })
+            } else if runtimePluginPackagesAvailable == false {
+                // Identity is current, but a remote plugin can have no
+                // validated local package path. Preserve only its previously
+                // observed children as warnings; never retain plugins that
+                // have actually disappeared from the installed inventory.
+                let unscannedPluginIDs = Set(runtime.resources.filter { resource in
+                    guard resource.kind == .plugin,
+                          let relative = resource.relativeSourcePath,
+                          relative.hasPrefix("plugins/") else { return false }
+                    let marker = String(relative.dropFirst("plugins/".count))
+                    return runtime.transientRoots["runtime-plugins:\(marker)"] == nil
+                }.map(\.id))
+                let previousRelations = try await store.fetchAllRelations()
+                let priorChildIDs = Set(previousRelations.filter {
+                    $0.relationKind == "contains" && unscannedPluginIDs.contains($0.sourceResourceID)
+                }.map(\.targetResourceID))
+                let currentIDs = Set(combinedResources.map(\.id))
+                let retained = previousResources.filter {
+                    priorChildIDs.contains($0.id) && $0.scope == .runtime && !currentIDs.contains($0.id)
+                }
+                let retainedIDs = Set(retained.map(\.id))
+                combinedResources.append(contentsOf: retained.map { resource in
+                    CapabilityResource(
+                        id: resource.id, name: resource.name, kind: resource.kind, status: .warning,
+                        scope: resource.scope, projectID: resource.projectID, confidence: resource.confidence,
+                        summary: resource.summary, sourceRootID: "last-known-runtime",
+                        relativeSourcePath: resource.relativeSourcePath, sourcePathHash: resource.sourcePathHash,
+                        lastSeenAt: resource.lastSeenAt, ownership: resource.ownership,
+                        origin: resource.origin, classificationConfidence: resource.classificationConfidence,
+                        originIdentifier: resource.originIdentifier, sourceVersion: resource.sourceVersion,
+                        contentFingerprint: resource.contentFingerprint,
+                        modified: resource.modified
+                    )
+                })
+                let allIDs = Set(combinedResources.map(\.id))
+                combinedProvenance.append(contentsOf: try await store.fetchAllProvenance().filter { retainedIDs.contains($0.resourceID) })
+                combinedRelations.append(contentsOf: previousRelations.filter {
+                    retainedIDs.contains($0.targetResourceID) &&
+                    unscannedPluginIDs.contains($0.sourceResourceID) &&
+                    allIDs.contains($0.sourceResourceID)
+                })
             }
         }
         // Companion declarations are a derived, privacy-safe projection of
@@ -247,10 +325,17 @@ public actor IndexingCoordinator {
             guard let attributes = fileSystem.fileAttributes(url) else { continue }
             let checkpoint = try await store.fetchCheckpoint(sourceFileID: sourceFileID)
 
-            if let checkpoint,
-               checkpoint.sourceSize == attributes.size,
-               checkpoint.sourceMtime == attributes.modificationDate,
-               checkpoint.parserVersion == RolloutEventDecoder.parserVersion {
+            // The current-format token event upgrade only affects recent
+            // ranking windows. Reparse the last 30 days, but do not force a
+            // one-time read of years of unchanged archived rollouts (which
+            // can total tens of GB). Any older file changed later is still
+            // fully reparsed below.
+            let unchanged = checkpoint?.sourceSize == attributes.size &&
+                checkpoint?.sourceMtime == attributes.modificationDate
+            let priorParserOutsideRankingWindow = checkpoint?.parserVersion == "1.2.0" &&
+                attributes.modificationDate < nowProvider().addingTimeInterval(-30 * 86_400).timeIntervalSince1970
+            if let checkpoint, unchanged,
+               (checkpoint.parserVersion == RolloutEventDecoder.parserVersion || priorParserOutsideRankingWindow) {
                 skippedFiles += 1
                 processedFiles += 1
                 progress(.init(phase: .parsing, processedFiles: processedFiles, totalFiles: files.count, indexedSessions: indexedSessions, lastError: nil))
@@ -316,7 +401,9 @@ public actor IndexingCoordinator {
             cancelled: cancelled,
             runtimeCoverage: runtimeCoverage,
             runtimeIssueCount: runtimeIssues.count,
-            discoveryIssueCount: registry.issues.count + discovery.issues.count + companionIssueCount
+            discoveryIssueCount: registry.issues.count + discovery.issues.count + companionIssueCount,
+            runtimePluginInventoryAvailable: runtimePluginInventoryAvailable,
+            runtimePluginPackagesAvailable: runtimePluginPackagesAvailable
         )
     }
 
@@ -426,11 +513,9 @@ public actor IndexingCoordinator {
         let sessionID = resolvedSessionID ?? sourceFileID
         let resumeTokenSnapshot: TokenUsageSnapshot?
         if startOffset > 0 {
-            resumeTokenSnapshot = try await store.fetchTokenSnapshots(sessionID: sessionID)
-                .max { lhs, rhs in
-                    if lhs.capturedAt != rhs.capturedAt { return lhs.capturedAt < rhs.capturedAt }
-                    return lhs.id < rhs.id
-                }
+            resumeTokenSnapshot = TokenUsageParser.newestCumulative(
+                from: try await store.fetchTokenSnapshots(sessionID: sessionID)
+            )
         } else {
             resumeTokenSnapshot = nil
         }

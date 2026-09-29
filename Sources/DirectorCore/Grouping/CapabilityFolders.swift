@@ -294,6 +294,10 @@ public struct CapabilityFolderProjection: Equatable, Sendable {
     /// alter folder membership.
     public let companionRelations: [CapabilityCompanionRelation]
     private let membersByFolder: [String: [CapabilityFolderMember]]
+    private let resourceByID: [String: CapabilityResource]
+    private let memberIDsByFolder: [String: Set<String>]
+    private let relationsByAgentID: [String: [CapabilityCompanionRelation]]
+    private let relationsBySkillID: [String: [CapabilityCompanionRelation]]
 
     public init(
         resources: [CapabilityResource],
@@ -343,13 +347,17 @@ public struct CapabilityFolderProjection: Equatable, Sendable {
         for relation in discoveredRelations.sorted(by: { $0.id < $1.id }) {
             canonicalByPair[relation.pairID] = canonicalByPair[relation.pairID] ?? relation
         }
-        self.companionRelations = canonicalByPair.values.sorted {
+        let canonicalRelations = canonicalByPair.values.sorted {
             $0.agentID == $1.agentID
                 ? ($0.skillID == $1.skillID ? $0.id < $1.id : $0.skillID < $1.skillID)
                 : $0.agentID < $1.agentID
         }
+        self.companionRelations = canonicalRelations
+        self.relationsByAgentID = Dictionary(grouping: canonicalRelations, by: \.agentID)
+        self.relationsBySkillID = Dictionary(grouping: canonicalRelations, by: \.skillID)
         var map: [String: [CapabilityFolderMember]] = [:]
         let byID = Dictionary(uniqueKeysWithValues: eligible.map { ($0.id, $0) })
+        self.resourceByID = byID
         map[CapabilityFolderDefinition.globalID] = eligible.filter { resource in
             resource.ownership == .pluginProvided || resource.projectID == nil
         }.sorted(by: Self.resourceSort).map(CapabilityFolderMember.init)
@@ -367,6 +375,7 @@ public struct CapabilityFolderProjection: Equatable, Sendable {
             }.sorted { Self.resourceSort($0.resource, $1.resource) }
         }
         self.membersByFolder = map
+        self.memberIDsByFolder = map.mapValues { Set($0.map(\.id)) }
     }
 
     public func members(in folderID: String) -> [CapabilityFolderMember] { membersByFolder[folderID, default: []] }
@@ -379,21 +388,25 @@ public struct CapabilityFolderProjection: Equatable, Sendable {
     /// is outside the folder are returned as previews, while membership and
     /// counts remain unchanged.
     public func companionSkills(for agentID: String, in folderID: String) -> [(resource: CapabilityResource, relation: CapabilityCompanionRelation, isPreview: Bool)] {
-        let folderIDs = Set(members(in: folderID).map(\.id))
-        return companionRelations.compactMap { relation in
-            guard relation.agentID == agentID,
-                  let skill = resources.first(where: { $0.id == relation.skillID }) else { return nil }
+        let folderIDs = memberIDsByFolder[folderID] ?? []
+        return (relationsByAgentID[agentID] ?? []).compactMap { relation in
+            guard let skill = resourceByID[relation.skillID] else { return nil }
             return (skill, relation, !folderIDs.contains(skill.id))
         }.sorted { $0.resource.name.localizedStandardCompare($1.resource.name) == .orderedAscending }
     }
 
     public func relatedAgents(for skillID: String, in folderID: String) -> [(resource: CapabilityResource, relation: CapabilityCompanionRelation, isPreview: Bool)] {
-        let folderIDs = Set(members(in: folderID).map(\.id))
-        return companionRelations.compactMap { relation in
-            guard relation.skillID == skillID,
-                  let agent = resources.first(where: { $0.id == relation.agentID }) else { return nil }
+        let folderIDs = memberIDsByFolder[folderID] ?? []
+        return (relationsBySkillID[skillID] ?? []).compactMap { relation in
+            guard let agent = resourceByID[relation.agentID] else { return nil }
             return (agent, relation, !folderIDs.contains(agent.id))
         }.sorted { $0.resource.name.localizedStandardCompare($1.resource.name) == .orderedAscending }
+    }
+
+    /// Relations are canonicalized by Agent/Skill pair at construction, so
+    /// this count is already de-duplicated and does not scan every relation.
+    public func relatedAgentCount(for skillID: String) -> Int {
+        relationsBySkillID[skillID]?.count ?? 0
     }
     public var allUniqueResourceCount: Int { Set(resources.map(\.id)).count }
     public var agentCount: Int { Set(resources.filter { $0.kind == .agent }.map(\.id)).count }

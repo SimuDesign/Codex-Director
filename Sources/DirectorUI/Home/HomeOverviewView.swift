@@ -11,17 +11,25 @@ public struct HomeOverviewView: View {
     public let directoryLoaded: Bool
     public let hasComputedStatistics: Bool
     public let hasCachedHomeSummary: Bool
+    /// Nil means not checked this run; false means the runtime plugin query failed.
+    /// Neither state is evidence for a current installed/enabled count.
+    public let pluginInventoryAvailable: Bool?
     public let lastUpdatedAt: Date?
+    public let homeUsageRankingPeriod: HomeUsageRankingPeriod
+    public let onHomeUsageRankingPeriodChange: (HomeUsageRankingPeriod) -> Void
     @EnvironmentObject private var languageStore: AppLanguageStore
 
-    public init(model: HomeOverviewModel, quotaModel: QuotaOverviewModel, presentationState: DirectorPresentationState = .loaded, directoryLoaded: Bool = true, hasComputedStatistics: Bool = true, hasCachedHomeSummary: Bool = false, lastUpdatedAt: Date? = nil, onQuotaSourceChange: @escaping (String) -> Void = { _ in }, onOpenCategory: @escaping (CapabilityCategory) -> Void = { _ in }, onOpenCapability: @escaping (CapabilityCategory, String) -> Void = { _, _ in }) {
+    public init(model: HomeOverviewModel, quotaModel: QuotaOverviewModel, presentationState: DirectorPresentationState = .loaded, directoryLoaded: Bool = true, hasComputedStatistics: Bool = true, hasCachedHomeSummary: Bool = false, pluginInventoryAvailable: Bool? = nil, lastUpdatedAt: Date? = nil, homeUsageRankingPeriod: HomeUsageRankingPeriod = .sevenDays, onHomeUsageRankingPeriodChange: @escaping (HomeUsageRankingPeriod) -> Void = { _ in }, onQuotaSourceChange: @escaping (String) -> Void = { _ in }, onOpenCategory: @escaping (CapabilityCategory) -> Void = { _ in }, onOpenCapability: @escaping (CapabilityCategory, String) -> Void = { _, _ in }) {
         self.model = model
         self.quotaModel = quotaModel
         self.presentationState = presentationState
         self.directoryLoaded = directoryLoaded
         self.hasComputedStatistics = hasComputedStatistics
         self.hasCachedHomeSummary = hasCachedHomeSummary
+        self.pluginInventoryAvailable = pluginInventoryAvailable
         self.lastUpdatedAt = lastUpdatedAt
+        self.homeUsageRankingPeriod = homeUsageRankingPeriod
+        self.onHomeUsageRankingPeriodChange = onHomeUsageRankingPeriodChange
         self.onQuotaSourceChange = onQuotaSourceChange
         self.onOpenCategory = onOpenCategory
         self.onOpenCapability = onOpenCapability
@@ -31,8 +39,9 @@ public struct HomeOverviewView: View {
         GeometryReader { viewport in
             HomeCardAtlasFrame(workspaceWidth: viewport.size.width) {
                 let contentWidth = HomeLayout.contentWidth(for: viewport.size.width)
+                let isCompact = viewport.size.width < DirectorPageLayout.compactBreakpoint
                 VStack(alignment: .leading, spacing: DirectorSpacing.space4) {
-                    pageHeader(compact: viewport.size.width < DirectorPageLayout.compactBreakpoint)
+                    pageHeader(compact: isCompact)
 
                     VStack(alignment: .leading, spacing: DirectorSpacing.moduleGap) {
                         HomeOutlineModule(
@@ -58,9 +67,10 @@ public struct HomeOverviewView: View {
                         HomeOutlineModule(
                             title: copy("home.module.usageRanking", fallback: "Usage ranking"),
                             supportingText: nil,
-                            tone: .mint
+                            tone: .mint,
+                            headerAccessory: isCompact ? nil : AnyView(rankingPeriodSelector(compact: false))
                         ) {
-                            rankingModule(width: contentWidth)
+                            rankingModule(width: contentWidth, compact: isCompact)
                         }
                     }
 
@@ -147,6 +157,7 @@ public struct HomeOverviewView: View {
     private func inventoryButton(_ category: CapabilityCategory) -> some View {
         let value: String
         let subtitle: String
+        let currentPluginCounts = inventoryAvailable ? model.currentPluginCounts(when: pluginInventoryAvailable) : nil
         switch category {
         case .customAgents:
             value = inventoryAvailable ? number(model.inventory.customAgents) : "—"
@@ -155,11 +166,15 @@ public struct HomeOverviewView: View {
             value = inventoryAvailable ? number(model.inventory.customSkills) : "—"
             subtitle = inventoryAvailable ? copy("home.overview.customCounts", fallback: "Global %lld · Project %lld", Int64(model.inventory.customSkillsGlobal), Int64(model.inventory.customSkillsProject)) : copy("home.state.preparing", fallback: "Preparing indexed data…")
         case .installedSkills:
-            value = inventoryAvailable ? number(model.inventory.installedSkills) : "—"
-            subtitle = inventoryAvailable ? copy("home.overview.installedSkillCounts", fallback: "Independent %lld · Plugin %lld", Int64(model.inventory.installedSkillsIndependent), Int64(model.inventory.installedSkillsPluginProvided)) : copy("home.state.preparing", fallback: "Preparing indexed data…")
+            value = inventoryAvailable ? number(model.inventory.installedSkillsIndependent) : "—"
+            subtitle = inventoryAvailable
+                ? copy("home.overview.installedSkillScope", fallback: "Independent installs only")
+                : copy("home.state.preparing", fallback: "Preparing indexed data…")
         case .installedPlugins:
-            value = inventoryAvailable ? number(model.inventory.installedPlugins) : "—"
-            subtitle = inventoryAvailable ? copy("home.overview.pluginCounts", fallback: "%lld enabled", Int64(model.inventory.enabledPlugins)) : copy("home.state.preparing", fallback: "Preparing indexed data…")
+            value = currentPluginCounts.map { number($0.installed) } ?? "—"
+            subtitle = currentPluginCounts.map {
+                copy("home.overview.pluginCounts", fallback: "%lld enabled", Int64($0.enabled))
+            } ?? copy("library.pluginNotVerified", fallback: "Installed plugins have not been verified yet.")
         }
 
         return HomeMetricSegment(
@@ -176,15 +191,36 @@ public struct HomeOverviewView: View {
     private var inventoryAvailable: Bool { directoryLoaded || hasCachedHomeSummary }
 
     @ViewBuilder
-    private func rankingModule(width: CGFloat) -> some View {
-        HomeRankingLedger(contentWidth: width) {
-            rankingPanel(.customAgents)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            rankingPanel(.customSkills)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-            rankingPanel(.installedSkills)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+    private func rankingModule(width: CGFloat, compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: DirectorSpacing.space4) {
+            if compact {
+                rankingPeriodSelector(compact: true)
+            }
+            HomeRankingLedger(contentWidth: width) {
+                rankingPanel(.customAgents)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                rankingPanel(.customSkills)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                rankingPanel(.installedSkills)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
         }
+    }
+
+    private func rankingPeriodSelector(compact: Bool) -> some View {
+        DirectorOutlinedSegmentedControl(
+            copy("home.ranking.period.accessibilityLabel", fallback: "Usage ranking period"),
+            selection: Binding(
+                get: { homeUsageRankingPeriod },
+                set: { onHomeUsageRankingPeriodChange($0) }
+            ),
+            options: [
+                .init(value: .sevenDays, title: copy("home.ranking.period.sevenDays", fallback: "Last 7 days")),
+                .init(value: .thirtyDays, title: copy("home.ranking.period.thirtyDays", fallback: "Last 30 days"))
+            ]
+        )
+        .frame(maxWidth: compact ? .infinity : 264, alignment: .leading)
+        .accessibilityValue(rankingPeriodTitle)
     }
 
     private func rankingPanel(_ category: CapabilityCategory) -> some View {
@@ -197,14 +233,14 @@ public struct HomeOverviewView: View {
                         .font(DirectorTypography.label)
                 }
 
-                let statisticsReady = hasComputedStatistics || hasCachedHomeSummary
+                let statisticsReady = rankingStatisticsReady(for: category)
                 if !statisticsReady {
-                    Text(copy("home.state.preparing", fallback: "Preparing indexed statistics…"))
+                    Text(rankingPreparingText)
                         .font(DirectorTypography.label)
                         .homeSecondaryText()
                 }
 
-                let rows = statisticsReady ? Array(model.rankings[category] ?? []) : []
+                let rows = statisticsReady ? Array(model.rankings(for: homeUsageRankingPeriod)?[category] ?? []) : []
                 ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                     Button { onOpenCapability(category, row.id) } label: {
                         rankingRow(row, category: category, position: index + 1)
@@ -216,7 +252,7 @@ public struct HomeOverviewView: View {
                 }
 
                 if statisticsReady && rows.isEmpty {
-                    Text(copy("home.overview.noIndexedCalls", fallback: "No calls observed in indexed history"))
+                    Text(copy("home.overview.noIndexedCallsForPeriod", fallback: "No calls observed in %@", rankingPeriodTitle))
                         .font(DirectorTypography.label)
                         .homeSecondaryText()
                 }
@@ -301,6 +337,23 @@ public struct HomeOverviewView: View {
     private func callCount(_ value: Int) -> String { languageStore.localizer.plural("home.overview.callCount", count: value, fallback: "%lld calls") }
     private func rowAccessibility(_ row: HomeOverviewModel.RankingRow, position: Int) -> String {
         let qualifier = row.inferred ? ", " + copy("evidence.inferred", fallback: "Inferred") : ""
-        return "\(position), \(row.name), \(callCount(row.count))\(qualifier)"
+        return "\(rankingPeriodTitle), \(position), \(row.name), \(callCount(row.count))\(qualifier)"
+    }
+
+    private var rankingPeriodTitle: String {
+        switch homeUsageRankingPeriod {
+        case .sevenDays: return copy("home.ranking.period.sevenDays", fallback: "Last 7 days")
+        case .thirtyDays: return copy("home.ranking.period.thirtyDays", fallback: "Last 30 days")
+        }
+    }
+
+    private func rankingStatisticsReady(for category: CapabilityCategory) -> Bool {
+        guard hasComputedStatistics || hasCachedHomeSummary else { return false }
+        if category == .installedSkills && !model.installedSkillRankingsVerified { return false }
+        return model.rankings(for: homeUsageRankingPeriod) != nil
+    }
+
+    private var rankingPreparingText: String {
+        copy("home.overview.rankingPreparing", fallback: "Preparing %@ usage ranking…", rankingPeriodTitle)
     }
 }

@@ -1,8 +1,8 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.4.0`  
+Version: `1.4.1`  
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-09-17
+Last updated: 2026-09-23
 
 The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
@@ -13,7 +13,7 @@ The approved [0.2.1 startup repair](../../docs/plans/2026-08-28-startup-performa
 Capability Folders is the 1.3.0 browser contract. Validate a native single-list
 surface with Global and Project derived folders, an empty Self Training folder
 on new installs, custom folder cards, multi-membership, custom-folder ordering,
-global and folder search, three folder-internal Agent/Skill tabs, recent/name
+entry folder-name and interior capability search, three folder-internal Agent/Skill tabs, recent/name
 sorting, and independent empty and no-match states. Folder operations are local
 preference writes only and must not start indexing, account reads, statistics
 queries, network access, or source-file writes.
@@ -21,7 +21,8 @@ queries, network access, or source-file writes.
 For the folder-browser visual variant, validate a 1280pt content cap, 40/16pt
 gutter behavior, 128/120/112pt card heights, and 4/3/2/1 folder columns at
 actual content widths of 1440/901/561/560pt. The entry page must have one
-title/purpose block, an inline wide search that stacks below 760pt, aligned
+52/36pt rounded title with 24pt folder symbol and purpose block, an inline wide
+folder search that stacks below 900pt, aligned
 My Folders and Global & Projects sections without a thick divider, and a
 subtle opaque Global card surface. Folder interiors must keep breadcrumb,
 compact 32/28pt title/counts, the three fixed tabs, visible current sort value,
@@ -30,6 +31,16 @@ groups. Compare matching-size native screenshots; the web prototype is a
 reference only and is not runtime evidence. Validate pending directory states
 with em-dash counts, refresh banners that preserve existing rows, and safe
 stale/failure banners with a retry action.
+
+The 2026-09-28 entry-search correction supersedes older global capability-result
+search examples below. Entry queries filter folder display names only; interior
+and Add existing queries retain capability search. Check zh/en localized default
+names, case/diacritics, unmatched/clear/pending, ordering and enter/return state.
+At 720×480 and 1280×800, in Light/Dark, click search-field icon, center, top/bottom
+padding and both edges, then type; verify real native editor focus, caret and
+selection. Click filter-menu edges, padding and chevron, select a different
+value, and test keyboard activation. Disabled fields must not accept focus from
+the forwarding gesture. AX inspection is not actual VoiceOver speech evidence.
 
 Capability Folders is the current 1.3.0 contract: responsive custom-folder
 cards, immutable Global/Project projections, Agent & Companion Skills / Agent /
@@ -43,7 +54,7 @@ details. Verify each custom folder's Add existing capabilities sheet stages a
 searchable multi-selection and commits it with one all-or-nothing preference
 write.
 
-The approved Card Atlas Home contract supersedes the earlier numbered-module presentation. Home uses three outline modules with distinct quota, continuous-metric and comparison-ledger grammars, a compact illustration-free welcome hero and a window-level refresh action. The quota chart shows reset-aware observed daily use of the weekly allowance, not cumulative daily-end snapshots. Capability pages use a single flexible search field, narrow right-chevron menus, global-first project ledgers with item separators and closed bottom corners, plus a 380–420 pt dismissible right-side detail Sheet. Verify every capability page in zh/en x Light/Dark x 720×480, 1280×800 and wide windows, with long names, empty/confirmed-zero/pending/failure-with-old-data states. The whole capability surface must be one native `List(selection:)` scroll container; header, filters and folder content must share the page grid without row-background spill. All seven primary destinations share Home's 40/16pt horizontal gutters, 24pt vertical gutters, 1440pt maximum content measure and far-right scroll-indicator edge. Titles share the 52/36pt rounded semibold scale. Capability Folders adds a local browser with a global search result list, responsive custom-folder cards, immutable Global/Project folder projections, Agent/Skill type and folder-scoped sort controls, visible multi-membership actions, keyboard and drag-and-drop custom-folder ordering, and independent empty-folder/no-match states. Settings and capability titles keep the solid primary-text treatment and share the 24pt decorative symbol token, while Home remains illustration-free and applies the brand gradient only to the `Codex Director` fragment of its welcome title. The window toolbar product name retains the native title treatment. The selected sidebar destination uses only the brand gradient and the same black foreground for its monochrome symbol and label while retaining native List selection semantics. Home's additional gate covers symmetric module-title spacing, removed summary/ranking subtitles, a leading-aligned quota heading, the 216pt/20pt weekly ring and optional 154pt/12pt five-hour concentric ring with a centered 40pt divider, an outlined brand-gradient source switch, dynamically scaled gradient daily-usage bars, horizontal grid only and date labels centered with their bars. Capability project groups require visibly tinted icon-led headers and exactly 20pt inter-group separation; group-internal row spacing remains unchanged. Settings keeps its title icon, omits the eyebrow and hero subtitle, presents section 01 as Language & appearance, balances section top/bottom padding, top-aligns ordinals, and uses equal-width/height index actions. The three Settings actions share the `settingsActionLabelWidth` token and a 48pt outer height token, including loading, disabled, focus, and destructive states; toolbar and standard actions retain their own heights. The shared toolbar refresh remains labeled, uses the 28pt compact size and exposes no second glass/shadow container. Actual VoiceOver evidence and AX inspection must be recorded separately.
+The approved Card Atlas Home contract supersedes the earlier numbered-module presentation. Home uses three outline modules with distinct quota, continuous-metric and comparison-ledger grammars, a compact illustration-free welcome hero and a window-level refresh action. The quota chart shows reset-aware observed daily use of the weekly allowance, not cumulative daily-end snapshots. Capability pages use a single flexible search field, narrow right-chevron menus, global-first project ledgers with item separators and closed bottom corners, plus a 380–420 pt dismissible right-side detail Sheet. Verify every capability page in zh/en x Light/Dark x 720×480, 1280×800 and wide windows, with long names, empty/confirmed-zero/pending/failure-with-old-data states. The whole capability surface must be one native `List(selection:)` scroll container; header, filters and folder content must share the page grid without row-background spill. All seven primary destinations share Home's 40/16pt horizontal gutters, 24pt vertical gutters, 1440pt maximum content measure and far-right scroll-indicator edge. Titles share the 52/36pt rounded semibold scale. Capability Folders adds a local browser with a global search result list, responsive custom-folder cards, immutable Global/Project folder projections, Agent/Skill type and folder-scoped sort controls, visible multi-membership actions, keyboard and drag-and-drop custom-folder ordering, and independent empty-folder/no-match states. Settings and capability titles keep the solid primary-text treatment and share the 24pt decorative symbol token, while Home remains illustration-free and applies the brand gradient only to the `Codex Director` fragment of its welcome title. The window toolbar product name retains the native title treatment. The selected sidebar destination uses only the brand gradient and the same black foreground for its monochrome symbol and label while retaining native List selection semantics. Home's additional gate covers symmetric module-title spacing, removed summary/ranking subtitles, a leading-aligned quota heading, the 216pt/20pt weekly ring and optional 154pt/12pt five-hour concentric ring with a centered 40pt divider, an outlined brand-gradient source switch, dynamically scaled gradient daily-usage bars, horizontal grid only and date labels centered with their bars. Capability project groups require visibly tinted icon-led headers and exactly 20pt inter-group separation; group-internal row spacing remains unchanged. Settings keeps its title icon, omits the eyebrow and hero subtitle, presents section 01 as Language & appearance, balances section top/bottom padding, top-aligns ordinals, and uses equal-width/height index actions. The three Settings actions share the `settingsActionLabelWidth` token and a 48pt outer height token, including loading, disabled, focus, and destructive states; toolbar and standard actions retain their own heights. The shared toolbar refresh remains labeled, uses the 28pt compact size and exposes no second glass/shadow container. The Home ranking gate additionally covers the two-choice outlined `Last 7 days` / `Last 30 days` control, remembered selection across relaunch, full selected text in compact and wide layouts, the pending-vs-confirmed-empty distinction for missing thirty-day cache data, period-specific row counts and accessible labels, and no refresh/index/SQLite side effect when switching. Actual VoiceOver evidence and AX inspection must be recorded separately.
 
 For Top5 cache upgrade verify immediate old-content display, at least5s foreground grace, a bounded read-only Home projection with zero quota/source scans, correct identity/classification/window/cancellation guards, old data retained on failure, existing retry semantics and no upgrade query on a fresh Top10 cache. Full tests and Release0.2.8(11) checks follow frozen-source visual acceptance; old results are not new evidence.
 
@@ -259,10 +270,10 @@ Expected: stable identity, no auto-effective label, no fabricated description, e
 ### Journey D — Understand installed capabilities
 
 1. Seed current enabled and disabled plugin packages, old cached versions and plugin-provided Skills.
-2. Installed plugin count includes disabled but not old caches/children; installed Skill includes current plugin Skills exactly once.
+2. Installed plugin count includes disabled but not old caches/children; installed Skill totals, lists and rankings include independently installed Skills only. Plugin-provided Skills remain labeled in Global or custom folders and never enter the independent installed count.
 3. Compare uniquely mapped namespace evidence, explicit child Skill evidence, ambiguous namespace and unsupported plugin.
 
-Expected: wrapper/child event not double-counted, inferred attribution labeled, unsupported/ambiguous coverage never presented as a definite zero.
+Expected: wrapper/child event not double-counted, inferred attribution labeled, unsupported/ambiguous coverage never presented as a definite zero. Failure to verify plugin inventory does not hide a known independent installed-Skill count. An older cache with plugin-inclusive installed-Skill ranking rows keeps the independent count visible but treats that ranking as pending until its bounded upgrade completes.
 
 ### Journey E — Settings and capability export
 
@@ -273,7 +284,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.4.0 with internal build 28, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.4.1 with internal build 29, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -509,6 +520,7 @@ existing shared refresh/index coordinator only.
 For review items 01–08, use the isolated Debug Validation Host and record the exact product viewport reported by AX separately from screenshot pixels and the physically constrained window size.
 
 - In Light and Dark, click a capability and use keyboard selection after Escape. The custom selection must remain inside the project-group boundary, all text must remain readable, structural rows must not accept selection, and no native blue fill may spill into the gutter. Repeated stress scroll/select must not crash or reload the outline because of style changes.
+- In each capability library, confirm the filtered group count follows the title and the far-right chevron toggles only that group. The collapsed header closes its outline, retains the 20pt inter-group gap and count, and exposes an actionable localized expand/collapse state to keyboard and VoiceOver. Searching reveals matching rows even if their group was collapsed.
 - Inspect sidebar pointer and keyboard focus. One gradient is allowed; selected symbol and label use the same foreground. Record the separate focus marker. Retain selected-row AX state and normal List navigation.
 - Resolve `textSupporting` and `dataText` against actual dynamic canvas/panel colors. Sample every point of every action-state rail, including disabled. Screenshot Light and Dark evidence actions plus refresh loading/disabled states.
 - At 720, 1280 and 1600 widths in zh-Hans and English, verify the closed filter values remain readable and search/selector rows align from the measured inner ribbon width. Record any screen-size constraint on the requested Host window rather than relabeling screenshot pixels as the viewport.
@@ -596,3 +608,11 @@ including expand/collapse, detail dismissal, resizing and updates retaining
 old content. Headers, filters and results scroll together in one container;
 the detail overlay stays viewport-pinned and the indicator stays outside
 content gutters. Fresh native AX discovery of offscreen controls is required.
+
+For the 1.4.1 library/folder extension, verify that thirty-day sorting is visible
+in each of the four library destinations and all three folder tabs. Use fixtures
+with opposite seven-day/thirty-day orders, an explicit zero and unknown plugin
+attribution. Check the closed menu value and matching library row count after
+switching. Warm-cache folder entry must load one shared bounded batch; repeated
+sorting/tab/member actions must not query or index. Derived-data deletion clears
+the loaded folder period statistics. Preserve fixed seven-day summary labels.

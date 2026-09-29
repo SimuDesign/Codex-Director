@@ -8,8 +8,8 @@ import Foundation
 /// - the current Codex executable's `--version` output;
 /// - `codex mcp list --json` for configured current MCP server names and
 ///   enabled state;
-/// - `codex plugin list --json` for currently installed Plugin identities,
-///   enabled state, version, and transient installed source location;
+/// - the local Codex app-server's `plugin/installed` for installed Plugin
+///   identities and transient installed source locations;
 /// - manifests inside an installed Plugin source returned by that current
 ///   command (`.app.json`, `.mcp.json`, `hooks.json`).
 ///
@@ -32,14 +32,19 @@ public struct CodexRuntimeDiscovery: Sendable {
         public let relations: [ResourceRelation]
         /// Validated install roots, transient only; never persisted.
         public let transientRoots: [String: URL]
+        /// Nil when plugin discovery failed. A verified plugin identity list
+        /// can still have unavailable child-package manifests (remote-only
+        /// plugins expose no validated local source path).
+        public let pluginPackagesAvailable: Bool?
 
         public init(
             resources: [CapabilityResource],
             issues: [DiscoveryIssue],
             coverage: CoverageState,
             unsupportedCategories: [String],
-            relations: [ResourceRelation] = []
-            , transientRoots: [String: URL] = [:]
+            relations: [ResourceRelation] = [],
+            transientRoots: [String: URL] = [:],
+            pluginPackagesAvailable: Bool? = nil
         ) {
             self.resources = resources
             self.issues = issues
@@ -47,34 +52,44 @@ public struct CodexRuntimeDiscovery: Sendable {
             self.unsupportedCategories = unsupportedCategories
             self.relations = relations
             self.transientRoots = transientRoots
+            self.pluginPackagesAvailable = pluginPackagesAvailable
         }
     }
 
     public let commandClient: RuntimeCommandClient
+    /// Kept for injected legacy CLI fixtures. Production uses
+    /// `installedPluginReading`, which includes account-installed plugins.
+    public let pluginCommandClient: RuntimeCommandClient
+    public let installedPluginReading: (any CodexInstalledPluginInventoryReading)?
     public let codexExecutableURL: URL
     /// Directories inside which an installed plugin source path may be read.
-    /// The installed plugin sources reported by the current CLI live under
+    /// The installed plugin sources reported by the Codex runtime live under
     /// `~/.codex/.tmp` and `~/.cache/codex-runtimes` (and the plugin cache);
     /// arbitrary paths outside these approved roots are never read.
     public let approvedSourceRoots: [URL]
     public let fileSystem: FileSystemClient
-    private let now: Date
+    private let nowProvider: @Sendable () -> Date
 
     public init(
         commandClient: RuntimeCommandClient,
+        pluginCommandClient: RuntimeCommandClient? = nil,
+        installedPluginReading: (any CodexInstalledPluginInventoryReading)? = nil,
         codexExecutableURL: URL,
         approvedSourceRoots: [URL],
         fileSystem: FileSystemClient = FileSystemClient(),
-        now: Date = Date()
+        nowProvider: @escaping @Sendable () -> Date = Date.init
     ) {
         self.commandClient = commandClient
+        self.pluginCommandClient = pluginCommandClient ?? commandClient
+        self.installedPluginReading = installedPluginReading
         self.codexExecutableURL = codexExecutableURL
         self.approvedSourceRoots = approvedSourceRoots
         self.fileSystem = fileSystem
-        self.now = now
+        self.nowProvider = nowProvider
     }
 
     public func discover() async -> Result {
+        let now = nowProvider()
         var resources: [CapabilityResource] = []
         var transientRoots: [String: URL] = [:]
         var issues: [DiscoveryIssue] = []
@@ -94,7 +109,7 @@ public struct CodexRuntimeDiscovery: Sendable {
             issues.append(DiscoveryIssue(rootID: "runtime", relativePath: "version", message: "Codex CLI version unavailable"))
         }
 
-        if let mcp = await runMCPList() {
+        if let mcp = await runMCPList(now: now) {
             completed.append("mcp")
             resources.append(contentsOf: mcp)
         } else {
@@ -102,9 +117,15 @@ public struct CodexRuntimeDiscovery: Sendable {
             issues.append(DiscoveryIssue(rootID: "runtime", relativePath: "mcp", message: "MCP list unavailable or unparsable"))
         }
 
-            if let pluginResources = await runPluginList(transientRoots: &transientRoots, issues: &issues) {
+        var pluginPackagesAvailable: Bool?
+        if let pluginResources = await runPluginList(now: now, transientRoots: &transientRoots, issues: &issues) {
             completed.append("plugin")
             resources.append(contentsOf: pluginResources)
+            pluginPackagesAvailable = pluginResources.filter { $0.kind == .plugin }.allSatisfy { plugin in
+                guard let relative = plugin.relativeSourcePath, relative.hasPrefix("plugins/") else { return false }
+                let marker = String(relative.dropFirst("plugins/".count))
+                return transientRoots["runtime-plugins:\(marker)"] != nil
+            }
         } else {
             unsupportedCategories.append("plugin")
             issues.append(DiscoveryIssue(rootID: "runtime", relativePath: "plugin", message: "Plugin list unavailable or unparsable"))
@@ -123,8 +144,9 @@ public struct CodexRuntimeDiscovery: Sendable {
             issues: issues,
             coverage: coverage,
             unsupportedCategories: unsupportedCategories,
-            relations: Self.pluginRelations(resources)
-            , transientRoots: transientRoots
+            relations: Self.pluginRelations(resources),
+            transientRoots: transientRoots,
+            pluginPackagesAvailable: pluginPackagesAvailable
         )
     }
 
@@ -139,7 +161,7 @@ public struct CodexRuntimeDiscovery: Sendable {
         return version.isEmpty ? nil : version
     }
 
-    private func runMCPList() async -> [CapabilityResource]? {
+    private func runMCPList(now: Date) async -> [CapabilityResource]? {
         guard let result = try? await commandClient.run(arguments: ["mcp", "list", "--json"]),
               result.exitCode == 0, !result.timedOut,
               let json = Self.parseJSON(result.stdout) else {
@@ -159,34 +181,70 @@ public struct CodexRuntimeDiscovery: Sendable {
         }
     }
 
-    private func runPluginList(transientRoots: inout [String: URL], issues: inout [DiscoveryIssue]) async -> [CapabilityResource]? {
-        guard let result = try? await commandClient.run(arguments: ["plugin", "list", "--json"]),
-              result.exitCode == 0, !result.timedOut,
-              let json = Self.parseJSON(result.stdout) else {
-            return nil
+    private func runPluginList(now: Date, transientRoots: inout [String: URL], issues: inout [DiscoveryIssue]) async -> [CapabilityResource]? {
+        let entries: [(id: String, name: String, enabled: Bool, sourcePath: String?)]
+        if let installedPluginReading {
+            let inventory: CodexInstalledPluginInventory
+            do {
+                inventory = try await installedPluginReading.read()
+            } catch let error as CodexInstalledPluginReadError {
+                let issue: String
+                switch error {
+                case .timedOut: issue = "plugin_query_timed_out"
+                case .cancelled: issue = "plugin_query_cancelled"
+                case .outputTooLarge: issue = "plugin_query_output_too_large"
+                case .malformedResponse, .protocolError: issue = "plugin_query_protocol_error"
+                case .unavailable: issue = "plugin_query_unavailable"
+                }
+                issues.append(DiscoveryIssue(rootID: "runtime", relativePath: "plugin", message: issue))
+                return nil
+            } catch {
+                issues.append(DiscoveryIssue(rootID: "runtime", relativePath: "plugin", message: "plugin_query_unavailable"))
+                return nil
+            }
+            guard inventory.isComplete else {
+                issues.append(DiscoveryIssue(rootID: "runtime", relativePath: "plugin", message: inventory.issue ?? "plugin_inventory_incomplete"))
+                return nil
+            }
+            entries = inventory.plugins.map { ($0.id, $0.name, $0.enabled, $0.sourcePath) }
+        } else {
+            // Compatibility-only path for older injected clients. Production
+            // must not mistake a successful CLI JSON result for complete
+            // account-backed inventory.
+            guard let result = try? await pluginCommandClient.run(arguments: ["plugin", "list", "--json"]),
+                  result.exitCode == 0, !result.timedOut, !result.hadStderrOutput,
+                  let json = Self.parseJSON(result.stdout),
+                  let parsed = Self.parseInstalledPlugins(json) else {
+                return nil
+            }
+            entries = parsed.filter(\.installed).map { ($0.name + "@legacy", $0.name, $0.enabled, $0.sourcePath) }
         }
-        guard let entries = Self.parseInstalledPlugins(json) else { return nil }
+        let nameCounts = Dictionary(grouping: entries, by: { $0.name }).mapValues(\.count)
         var resources: [CapabilityResource] = []
-        for entry in entries where entry.installed {
+        for entry in entries {
+            // Preserve existing stable IDs for unique names. Distinct
+            // marketplaces sharing one name receive separate IDs rather than
+            // being silently merged or assigned one another's evaluations.
+            let marker = nameCounts[entry.name] == 1 ? entry.name : entry.id
             resources.append(Self.runtimeResource(
                 kind: .plugin,
                 name: entry.name,
                 summary: nil,
                 status: entry.enabled ? .idle : .blocked,
                 sourceRootID: "runtime-plugins",
-                relative: "plugins/\(entry.name)",
+                relative: "plugins/\(marker)",
                 now: now
             ))
             if let sourcePath = entry.sourcePath,
                let sourceURL = Self.validatedSourceURL(sourcePath, approvedRoots: approvedSourceRoots, fileSystem: fileSystem) {
-                transientRoots["runtime-plugins:\(entry.name)"] = sourceURL
-                scanPluginManifests(pluginDir: sourceURL, name: entry.name, into: &resources, issues: &issues)
+                transientRoots["runtime-plugins:\(marker)"] = sourceURL
+                scanPluginManifests(pluginDir: sourceURL, name: marker, now: now, into: &resources, issues: &issues)
             }
         }
         return resources
     }
 
-    private func scanPluginManifests(pluginDir: URL, name: String, into resources: inout [CapabilityResource], issues: inout [DiscoveryIssue]) {
+    private func scanPluginManifests(pluginDir: URL, name: String, now: Date, into resources: inout [CapabilityResource], issues: inout [DiscoveryIssue]) {
         // Skills are part of the current installed package, not evidence from
         // a cache directory. Keep the absolute install path transient.
         let skillsDir = pluginDir.appendingPathComponent("skills", isDirectory: true)

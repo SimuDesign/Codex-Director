@@ -324,6 +324,57 @@ final class QueryPerformanceTests: XCTestCase {
         XCTAssertEqual(usage.first(where: { $0.resourceID == "tool:test" })?.failureCount, 1)
     }
 
+    func testHomeRankingPeriodAggregateKeepsIndependentWindowsAndStableOrdering() async throws {
+        let root = try temporaryRoot("home-period-contract")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("home-period.sqlite")
+        let store = try DatabaseStore(url: url)
+        let complete = TaskSummary(
+            id: "home-period-complete", projectID: "project-a", startedAt: now, endedAt: now,
+            status: .completed, coverage: .complete, parserVersion: "test",
+            sourceFileID: "home-period-complete-source", title: nil
+        )
+        let partial = TaskSummary(
+            id: "home-period-partial", projectID: "project-b", startedAt: now, endedAt: now,
+            status: .completed, coverage: .partial, parserVersion: "test",
+            sourceFileID: "home-period-partial-source", title: nil
+        )
+        let insideSeven = now.addingTimeInterval(-86_400)
+        let outsideSeven = now.addingTimeInterval(-8 * 86_400)
+        let outsideThirty = now.addingTimeInterval(-31 * 86_400)
+        let calls = [
+            call(id: "home-a-seven", sessionID: complete.id, ordinal: 0, timestamp: insideSeven, resourceID: "agent:a", kind: .agent),
+            call(id: "home-a-thirty", sessionID: complete.id, ordinal: 1, timestamp: outsideSeven, resourceID: "agent:a", kind: .agent),
+            call(id: "home-b-partial", sessionID: partial.id, ordinal: 0, timestamp: outsideSeven, resourceID: "skill:b", kind: .skill),
+            call(id: "home-future", sessionID: complete.id, ordinal: 2, timestamp: now.addingTimeInterval(1), resourceID: "skill:b", kind: .skill),
+            call(id: "home-expired", sessionID: complete.id, ordinal: 3, timestamp: outsideThirty, resourceID: "agent:a", kind: .agent)
+        ]
+        try await store.replaceSession(PersistedSessionBatch(session: complete, calls: [calls[0], calls[1], calls[3], calls[4]], tokenSnapshots: [], quotaSnapshots: [], findings: []))
+        try await store.replaceSession(PersistedSessionBatch(session: partial, calls: [calls[2]], tokenSnapshots: [], quotaSnapshots: [], findings: []))
+
+        let sevenDayWindow = CapabilityQueryWindow(
+            start: now.addingTimeInterval(-7 * 86_400), end: now,
+            timeZone: TimeZone(secondsFromGMT: 0)!
+        )
+        let thirtyDayWindow = CapabilityQueryWindow(
+            start: now.addingTimeInterval(-30 * 86_400), end: now,
+            timeZone: TimeZone(secondsFromGMT: 0)!
+        )
+        let stats = try await store.fetchCapabilityUsagePeriodStats(
+            sevenDayWindow: sevenDayWindow,
+            thirtyDayWindow: thirtyDayWindow
+        )
+
+        XCTAssertEqual(stats.map(\.resourceID), ["agent:a", "skill:b"])
+        let agent = try XCTUnwrap(stats.first { $0.resourceID == "agent:a" })
+        XCTAssertEqual(agent.sevenDay?.callCount, 1)
+        XCTAssertEqual(agent.thirtyDay?.callCount, 2)
+        let skill = try XCTUnwrap(stats.first { $0.resourceID == "skill:b" })
+        XCTAssertNil(skill.sevenDay)
+        XCTAssertEqual(skill.thirtyDay?.callCount, 1)
+        XCTAssertEqual(skill.thirtyDay?.coverage, .partial)
+    }
+
     func testQuotaOverviewReleaseScaleTwentySamples() async throws {
         try requireHeavyPerformanceRun()
         let (writer, root) = try await makeQuotaStore()
@@ -406,8 +457,25 @@ final class QueryPerformanceTests: XCTestCase {
             item.original.resourceID == "skill:ambiguous-child" || item.original.resourceID == "tool:mcp__ambiguous__read"
         })
 
+        let sevenDayWindow = CapabilityQueryWindow(
+            start: now.addingTimeInterval(-7 * 86_400), end: now,
+            timeZone: TimeZone(secondsFromGMT: 0)!
+        )
+        let thirtyDayWindow = CapabilityQueryWindow(
+            start: now.addingTimeInterval(-30 * 86_400), end: now,
+            timeZone: TimeZone(secondsFromGMT: 0)!
+        )
+        let warmHome = try await store.fetchCapabilityUsagePeriodStats(
+            sevenDayWindow: sevenDayWindow,
+            thirtyDayWindow: thirtyDayWindow
+        )
+        XCTAssertEqual(warmHome.reduce(0) { $0 + ($1.sevenDay?.callCount ?? 0) }, 160_000)
+        XCTAssertEqual(warmHome.reduce(0) { $0 + ($1.thirtyDay?.callCount ?? 0) }, 160_000)
+        XCTAssertEqual(warmHome.map(\.resourceID), warmHome.map(\.resourceID).sorted())
+
         var summarySamples: [TimeInterval] = []
         var pluginSamples: [TimeInterval] = []
+        var homeSamples: [TimeInterval] = []
         for _ in 0..<20 {
             var start = ContinuousClock.now
             let summaries = try await store.fetchTaskCallSummaries()
@@ -419,11 +487,22 @@ final class QueryPerformanceTests: XCTestCase {
             pluginSamples.append(elapsed(start, ContinuousClock.now))
             let unsupported = try XCTUnwrap(plugins.first(where: { $0.pluginID == "plugin:unsupported" }))
             XCTAssertNil(unsupported.callCount)
+            start = ContinuousClock.now
+            let home = try await store.fetchCapabilityUsagePeriodStats(
+                sevenDayWindow: sevenDayWindow,
+                thirtyDayWindow: thirtyDayWindow
+            )
+            homeSamples.append(elapsed(start, ContinuousClock.now))
+            XCTAssertEqual(home.reduce(0) { $0 + ($1.sevenDay?.callCount ?? 0) }, 160_000)
+            XCTAssertEqual(home.reduce(0) { $0 + ($1.thirtyDay?.callCount ?? 0) }, 160_000)
         }
         let summaryP50 = percentile(summarySamples, 0.50)
         let summaryP95 = percentile(summarySamples, 0.95)
         let pluginP50 = percentile(pluginSamples, 0.50)
         let pluginP95 = percentile(pluginSamples, 0.95)
-        print("[call-perf] rows=160000 sessions=1500 largeSession=\(largeSessionCalls) samples=20 summaryP50=\(summaryP50)s summaryP95=\(summaryP95)s summaryMax=\(summarySamples.max() ?? 0)s pluginP50=\(pluginP50)s pluginP95=\(pluginP95)s pluginMax=\(pluginSamples.max() ?? 0)s")
+        let homeP50 = percentile(homeSamples, 0.50)
+        let homeP95 = percentile(homeSamples, 0.95)
+        print("[call-perf] rows=160000 sessions=1500 largeSession=\(largeSessionCalls) samples=20 summaryP50=\(summaryP50)s summaryP95=\(summaryP95)s summaryMax=\(summarySamples.max() ?? 0)s pluginP50=\(pluginP50)s pluginP95=\(pluginP95)s pluginMax=\(pluginSamples.max() ?? 0)s homeP50=\(homeP50)s homeP95=\(homeP95)s homeMax=\(homeSamples.max() ?? 0)s")
+        XCTAssertLessThanOrEqual(homeP95, 0.5, "160k-call Home dual-period aggregate p95 exceeded the approved 0.5s gate")
     }
 }

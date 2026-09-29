@@ -23,6 +23,29 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(stored, "en")
     }
 
+    func testCachedLocalizerSwitchesImmediatelyWithStoreLanguage() {
+        let store = AppLanguageStore(memoryLanguage: .simplifiedChinese)
+        XCTAssertEqual(store.localizer.plural("resource.count", count: 2, fallback: "%lld resource(s)"), "2 项能力")
+        store.setLanguage(.english)
+        XCTAssertEqual(store.localizer.plural("resource.count", count: 2, fallback: "%lld resource(s)"), "2 resources")
+        store.setLanguage(.simplifiedChinese)
+        XCTAssertEqual(store.localizer.plural("resource.count", count: 2, fallback: "%lld resource(s)"), "2 项能力")
+    }
+
+    func testLanguagePublicationExposesMatchingCachedLocalizer() {
+        let store = AppLanguageStore(memoryLanguage: .simplifiedChinese)
+        var publishedLanguageAndLocalizer: [(AppLanguage, AppLanguage)] = []
+        let observation = store.$language.sink { published in
+            publishedLanguageAndLocalizer.append((published, store.localizer.language))
+        }
+        defer { observation.cancel() }
+
+        store.setLanguage(.english)
+
+        XCTAssertEqual(publishedLanguageAndLocalizer.last?.0, .english)
+        XCTAssertEqual(publishedLanguageAndLocalizer.last?.1, .english)
+    }
+
     func testMissingLanguageUsesDeterministicEnglishOrExplicitFallback() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("codex-director-locale-\(UUID().uuidString)", isDirectory: true)
         let englishDirectory = root.appendingPathComponent("en.lproj", isDirectory: true)

@@ -1260,7 +1260,14 @@ public actor DatabaseStore {
         queryObserver?(.directory)
         let readCancellation = cancellation ?? SQLiteCancellationToken(timeout: .seconds(5))
         return try connection.performReadSnapshot(cancellation: readCancellation) {
-            HomeRankingPresentationSnapshot(
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = window.timeZone
+            let thirtyDayWindow = CapabilityQueryWindow.recent30(now: window.end, calendar: calendar)
+            let recentUsagePeriods = try self.fetchCapabilityUsagePeriodStats(
+                sevenDayWindow: window,
+                thirtyDayWindow: thirtyDayWindow
+            )
+            return HomeRankingPresentationSnapshot(
                 directory: PresentationDirectorySnapshot(
                     metadata: try self.fetchPresentationIndexMetadata(),
                     resources: try self.fetchAllResources(),
@@ -1269,7 +1276,8 @@ public actor DatabaseStore {
                     provenance: try self.fetchAllProvenance(),
                     indexedSessionCount: try self.count("sessions")
                 ),
-                recentUsage: try self.fetchCapabilityUsageStats(window: window)
+                recentUsage: recentUsagePeriods.compactMap(\.sevenDay),
+                recentUsagePeriods: recentUsagePeriods
             )
         }
     }
@@ -1277,10 +1285,18 @@ public actor DatabaseStore {
     public func fetchStartupPresentation(window: CapabilityQueryWindow, cancellation: SQLiteCancellationToken? = nil) throws -> StartupPresentationSnapshot {
         queryObserver?(.startup)
         return try connection.performReadSnapshot(cancellation: cancellation) {
-            StartupPresentationSnapshot(
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = window.timeZone
+            let thirtyDayWindow = CapabilityQueryWindow.recent30(now: window.end, calendar: calendar)
+            let recentUsagePeriods = try self.fetchCapabilityUsagePeriodStats(
+                sevenDayWindow: window,
+                thirtyDayWindow: thirtyDayWindow
+            )
+            return StartupPresentationSnapshot(
                 directory: try self.fetchPresentationDirectory(cancellation: cancellation),
-                recentUsage: try self.fetchCapabilityUsageStats(window: window),
-                quota: try self.fetchQuotaOverview(window: window, cancellation: cancellation)
+                recentUsage: recentUsagePeriods.compactMap(\.sevenDay),
+                quota: try self.fetchQuotaOverview(window: window, cancellation: cancellation),
+                recentUsagePeriods: recentUsagePeriods
             )
         }
     }
@@ -1560,6 +1576,95 @@ public actor DatabaseStore {
             ))
         }
         return results }
+    }
+
+    /// Computes the Home seven-day and thirty-day projections from one bounded
+    /// thirty-day scan. The existing single-window method above remains the
+    /// source of truth for Library and Detail callers.
+    public func fetchCapabilityUsagePeriodStats(
+        sevenDayWindow: CapabilityQueryWindow,
+        thirtyDayWindow: CapabilityQueryWindow,
+        projectID: String? = nil,
+        cancellation: SQLiteCancellationToken? = nil
+    ) throws -> [CapabilityUsagePeriodSnapshot] {
+        let readCancellation = cancellation ?? SQLiteCancellationToken(timeout: .seconds(5))
+        return try connection.performReadSnapshot(cancellation: readCancellation) {
+            try self.fetchCapabilityUsagePeriodStats(
+                sevenDayWindow: sevenDayWindow,
+                thirtyDayWindow: thirtyDayWindow,
+                projectID: projectID
+            )
+        }
+    }
+
+    private func fetchCapabilityUsagePeriodStats(
+        sevenDayWindow: CapabilityQueryWindow,
+        thirtyDayWindow: CapabilityQueryWindow,
+        projectID: String? = nil
+    ) throws -> [CapabilityUsagePeriodSnapshot] {
+        let sql = """
+        SELECT c.resource_id,
+               SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? THEN 1 ELSE 0 END),
+               SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? AND c.confidence = 'inferred' THEN 1 ELSE 0 END),
+               MAX(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? THEN c.timestamp END),
+               SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? AND COALESCE(s.coverage, 'unknown') IN ('partial','unavailable','unknown') THEN 1 ELSE 0 END),
+               SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? THEN 1 ELSE 0 END),
+               SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? AND c.confidence = 'inferred' THEN 1 ELSE 0 END),
+               MAX(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? THEN c.timestamp END),
+               SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? AND COALESCE(s.coverage, 'unknown') IN ('partial','unavailable','unknown') THEN 1 ELSE 0 END)
+        FROM calls c LEFT JOIN sessions s ON s.id = c.session_id
+        WHERE c.resource_id IS NOT NULL AND c.timestamp >= ? AND c.timestamp <= ?
+          AND (? IS NULL OR s.project_id = ?)
+        GROUP BY c.resource_id ORDER BY c.resource_id
+        """
+        let statement = try connection.prepare(sql)
+        var index: Int32 = 1
+        func bind(_ value: Double) {
+            statement.bind(value, at: index)
+            index += 1
+        }
+        func bind(_ value: String?) {
+            statement.bind(value, at: index)
+            index += 1
+        }
+        let sevenStart = sevenDayWindow.start.timeIntervalSince1970
+        let sevenEnd = sevenDayWindow.end.timeIntervalSince1970
+        let thirtyStart = thirtyDayWindow.start.timeIntervalSince1970
+        let thirtyEnd = thirtyDayWindow.end.timeIntervalSince1970
+        // Seven-day count, inferred count, last timestamp, partial count.
+        bind(sevenStart); bind(sevenEnd)
+        bind(sevenStart); bind(sevenEnd)
+        bind(sevenStart); bind(sevenEnd)
+        bind(sevenStart); bind(sevenEnd)
+        // Thirty-day count, inferred count, last timestamp, partial count.
+        bind(thirtyStart); bind(thirtyEnd)
+        bind(thirtyStart); bind(thirtyEnd)
+        bind(thirtyStart); bind(thirtyEnd)
+        bind(thirtyStart); bind(thirtyEnd)
+        // Bound the single table scan to the thirty-day interval.
+        bind(thirtyStart); bind(thirtyEnd)
+        bind(projectID); bind(projectID)
+
+        var results: [CapabilityUsagePeriodSnapshot] = []
+        while try statement.step() == .row {
+            let resourceID = statement.columnText(0) ?? ""
+            let sevenCount = statement.columnInt(1)
+            let sevenInferred = statement.columnInt(2)
+            let sevenLastUsed = statement.columnIsNull(3) ? nil : Date(timeIntervalSince1970: statement.columnDouble(3))
+            let sevenCoverage = statement.columnInt(4) > 0 ? CoverageState.partial : .complete
+            let thirtyCount = statement.columnInt(5)
+            let thirtyInferred = statement.columnInt(6)
+            let thirtyLastUsed = statement.columnIsNull(7) ? nil : Date(timeIntervalSince1970: statement.columnDouble(7))
+            let thirtyCoverage = statement.columnInt(8) > 0 ? CoverageState.partial : .complete
+            let seven: CapabilityUsageStats? = sevenCount > 0
+                ? CapabilityUsageStats(resourceID: resourceID, callCount: sevenCount, inferredCount: sevenInferred, lastUsedAt: sevenLastUsed, coverage: sevenCoverage)
+                : nil
+            let thirty: CapabilityUsageStats? = thirtyCount > 0
+                ? CapabilityUsageStats(resourceID: resourceID, callCount: thirtyCount, inferredCount: thirtyInferred, lastUsedAt: thirtyLastUsed, coverage: thirtyCoverage)
+                : nil
+            results.append(CapabilityUsagePeriodSnapshot(resourceID: resourceID, sevenDay: seven, thirtyDay: thirty))
+        }
+        return results
     }
 
     /// Fetches invocation evidence using keyset pagination. The cursor is an

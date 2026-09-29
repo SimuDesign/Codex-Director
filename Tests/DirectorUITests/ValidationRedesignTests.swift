@@ -15,7 +15,7 @@ final class ValidationRedesignTests: XCTestCase {
         let grouped = Dictionary(grouping: catalog.entries.compactMap(\.category), by: { $0 })
         XCTAssertEqual(grouped[.customAgents]?.count, 3)
         XCTAssertEqual(grouped[.customSkills]?.count, 2)
-        XCTAssertEqual(grouped[.installedSkills]?.count, 2)
+        XCTAssertEqual(grouped[.installedSkills]?.count, 1)
         XCTAssertEqual(grouped[.installedPlugins]?.count, 3)
         XCTAssertTrue(catalog.entries.contains { $0.resource.id == "plugin:validation-enabled" })
         XCTAssertTrue(catalog.entries.contains { $0.resource.id == "plugin:validation-cached" && $0.category == nil })

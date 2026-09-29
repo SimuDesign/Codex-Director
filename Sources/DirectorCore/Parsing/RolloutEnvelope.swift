@@ -8,6 +8,8 @@ public enum RolloutEventType: String, Sendable, CaseIterable, Equatable {
     case worldState = "world_state"
     case responseItem = "response_item"
     case eventMessage = "event_msg"
+    case tokenUsageRecord = "token_usage_record"
+    case interAgentCommunicationMetadata = "inter_agent_communication_metadata"
     case compacted
 }
 

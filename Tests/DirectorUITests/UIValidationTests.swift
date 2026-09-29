@@ -1,5 +1,6 @@
 #if DEBUG
 import Foundation
+import Combine
 import XCTest
 import DirectorCore
 @testable import DirectorUI
@@ -11,13 +12,91 @@ final class UIValidationTests: XCTestCase {
             languageStore: AppLanguageStore(memoryLanguage: .simplifiedChinese),
             themeStore: AppThemeStore(memoryTheme: .dark)
         )
-        XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 5)
+        XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 7)
     }
 
     func testValidationSessionUsesAnIsolatedFolderPreferenceBoundary() throws {
         let session = try UIValidationSession(dataset: .empty)
         XCTAssertEqual(session.model.capabilityFolderPreferencesState, .valid)
         XCTAssertEqual(session.model.capabilityFolderStore.preferencesState(), .valid)
+    }
+
+    func testFolderListsKeepOneScrollSurfaceAndLazyRows() throws {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: sourceRoot.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("ScrollView(.vertical)"))
+        XCTAssertTrue(source.contains("private func memberListPanel"))
+        XCTAssertTrue(source.contains("private func companionListPanel"))
+        XCTAssertTrue(source.contains("LazyVStack(alignment: .leading, spacing: 0)"))
+        XCTAssertTrue(source.contains("LazyVStack(alignment: .leading, spacing: width < DirectorCapabilityFolderLayout.compactBreakpoint"))
+        XCTAssertFalse(source.contains("List(selection:"), "The approved folder browser must not introduce a second list or scroll region")
+    }
+
+    func testInteractionStressFixtureHasThousandEligibleCapabilitiesAndManyToManyRelations() async throws {
+        let session = try UIValidationSession(dataset: .interactionStress)
+        try await session.prepare()
+        let projection = session.model.capabilityFolders
+        XCTAssertEqual(projection.members(in: CapabilityFolderDefinition.globalID).count, 1_000)
+        XCTAssertEqual(projection.agentCount, 500)
+        XCTAssertEqual(projection.skillCount, 500)
+        XCTAssertEqual(projection.companionRelations.count, 4_000)
+    }
+
+    func testInteractionRepresentativeFixtureHasExactFolderScalesAndBoundaries() async throws {
+        let session = try UIValidationSession(dataset: .interactionRepresentative)
+        try await session.prepare()
+        let projection = session.model.capabilityFolders
+        let globalMembers = projection.members(in: CapabilityFolderDefinition.globalID)
+        let projectFolder = try XCTUnwrap(projection.folders.first(where: { $0.source == .project }))
+        let projectMembers = projection.members(in: projectFolder.id)
+
+        XCTAssertEqual(projection.agentCount, 66)
+        XCTAssertEqual(projection.skillCount, 217)
+        XCTAssertEqual(globalMembers.filter { $0.resource.kind == .agent }.count, 47)
+        XCTAssertEqual(globalMembers.filter { $0.resource.kind == .skill }.count, 44)
+        XCTAssertEqual(projectMembers.filter { $0.resource.kind == .agent }.count, 19)
+        XCTAssertEqual(projectMembers.filter { $0.resource.kind == .skill }.count, 173)
+        XCTAssertEqual(projection.folders.filter { $0.source == .project }.count, 1)
+
+        XCTAssertEqual(globalMembers.filter { $0.resource.ownership == .pluginProvided }.count, 2)
+        XCTAssertEqual(projectMembers.filter { $0.resource.ownership == .pluginProvided }.count, 0)
+        XCTAssertTrue(projection.companionSkills(
+            for: "agent:interaction-representative-project-0",
+            in: projectFolder.id
+        ).contains { relation in
+            relation.isPreview && relation.resource.id == "skill:interaction-representative-global-0"
+        })
+
+        let rows = session.model.capabilities.allRows
+        XCTAssertTrue(rows.contains { $0.resource.status == .unknown })
+        let projectIDs = Set(projectMembers.map(\.id))
+        XCTAssertTrue(rows.filter { projectIDs.contains($0.id) }.allSatisfy { $0.callCount == 0 })
+    }
+
+    func testWarmLibraryReloadDoesNotPublishTransientLoading() async throws {
+        let session = try UIValidationSession(dataset: .representative)
+        try await session.prepare()
+        let model = session.model
+        let library = try XCTUnwrap(model.libraryModels.first(where: { $0.category == .customAgents }))
+        let scope = library.context.scope
+        await model.reloadLibrary(.customAgents, scope: scope)
+        var states: [DirectorLibraryQueryStatus] = []
+        let observation = model.$libraryQueryStatus.sink { statuses in
+            if let status = statuses[.customAgents] { states.append(status) }
+        }
+        defer { observation.cancel() }
+        var libraryChangeCount = 0
+        let libraryObservation = library.objectWillChange.sink { _ in libraryChangeCount += 1 }
+        defer { libraryObservation.cancel() }
+        let initialStateCount = states.count
+
+        await model.reloadLibrary(.customAgents, scope: scope)
+
+        XCTAssertFalse(states.contains(.loading))
+        XCTAssertEqual(states.count, initialStateCount, "An unchanged warm result must not republish query status")
+        XCTAssertEqual(libraryChangeCount, 0, "An unchanged warm result must not rebuild every List row")
+        XCTAssertFalse(library.isLoading)
     }
 
     func testValidationHostExposesBilingualAppearanceAndWindowMatrix() throws {
@@ -34,6 +113,8 @@ final class UIValidationTests: XCTestCase {
         XCTAssertTrue(host.contains(".environmentObject(themeStore)"))
         XCTAssertTrue(host.contains(".onChange(of: themeStore.theme)"))
         XCTAssertTrue(host.contains("Toggle(\"Refresh loading\""))
+        XCTAssertTrue(host.contains("Menu(\"Usage ranking period\""))
+        XCTAssertTrue(host.contains("setHomeUsageRankingPeriod(.thirtyDays)"))
         XCTAssertTrue(host.contains("session.model.isIndexing = value"))
         XCTAssertTrue(host.contains(".onChange(of: session.generation)"))
         XCTAssertTrue(host.contains("720 × 480"))
@@ -142,6 +223,7 @@ final class UIValidationTests: XCTestCase {
             XCTAssertLessThanOrEqual(ranking.count, 10)
             XCTAssertTrue(ranking.allSatisfy { $0.count > 0 })
         }
+        XCTAssertNotNil(session.model.presentationHomeSummary?.thirtyDayRankings, "The synthetic Home fixture must support the saved 30-day visual state")
     }
 
     func testSyntheticPNGExportUsesOnlyTheBoundedProductView() throws {

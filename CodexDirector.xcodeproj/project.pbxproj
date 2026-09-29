@@ -11,14 +11,16 @@
 		48676C0B9A398B2BED41D7CF /* AppContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5C69DB72A1C7A980BA56972 /* AppContainer.swift */; };
 		5B1D85A03C193B5BBB2EF35A /* DirectorCore in Frameworks */ = {isa = PBXBuildFile; productRef = 1C38DFB792AC0E897CD0D7AC /* DirectorCore */; };
 		9DA320DFD3C6479B20228DA7 /* DirectorUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1B25A81793D1F8967367BB23 /* DirectorUI */; };
+		BB8A2B1B730116C4F5AEED44 /* InteractionPerformanceHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72E9931C20143AF8B9634C59 /* InteractionPerformanceHost.swift */; };
 		DFD3D6F25731976B2D905362 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = E48DC96B7C6A8BF7EF4AFA0B /* AppIcon.icon */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		654D3690FC239B4E7C401EB3 /* CodexDirectorApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexDirectorApp.swift; sourceTree = "<group>"; };
+		72E9931C20143AF8B9634C59 /* InteractionPerformanceHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionPerformanceHost.swift; sourceTree = "<group>"; };
+		DDB00914681FE71FE75EDB84 /* Codex Director */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "Codex Director"; path = .; sourceTree = SOURCE_ROOT; };
 		CD0BC561F139E12326906D8D /* CodexDirectorMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CodexDirectorMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D5C69DB72A1C7A980BA56972 /* AppContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppContainer.swift; sourceTree = "<group>"; };
-		DDB00914681FE71FE75EDB84 /* Codex Director */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "Codex Director"; path = .; sourceTree = SOURCE_ROOT; };
 		E48DC96B7C6A8BF7EF4AFA0B /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = AppIcon.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -56,6 +58,7 @@
 			children = (
 				D5C69DB72A1C7A980BA56972 /* AppContainer.swift */,
 				654D3690FC239B4E7C401EB3 /* CodexDirectorApp.swift */,
+				72E9931C20143AF8B9634C59 /* InteractionPerformanceHost.swift */,
 			);
 			path = CodexDirectorApp;
 			sourceTree = "<group>";
@@ -165,6 +168,7 @@
 			files = (
 				48676C0B9A398B2BED41D7CF /* AppContainer.swift in Sources */,
 				231757C8A88DDFAD819EB3FF /* CodexDirectorApp.swift in Sources */,
+				BB8A2B1B730116C4F5AEED44 /* InteractionPerformanceHost.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -181,7 +185,7 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_TESTABILITY = YES;
@@ -196,7 +200,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.4.0;
+				MARKETING_VERSION = 1.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.peiweitang.CodexDirector;
 				PRODUCT_NAME = "Codex Director";
 				SDKROOT = macosx;
@@ -217,7 +221,7 @@
 				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -231,7 +235,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.4.0;
+				MARKETING_VERSION = 1.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.peiweitang.CodexDirector;
 				PRODUCT_NAME = "Codex Director";
 				SDKROOT = macosx;

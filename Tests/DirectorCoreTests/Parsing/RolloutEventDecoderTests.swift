@@ -83,6 +83,18 @@ final class RolloutEventDecoderTests: XCTestCase {
         XCTAssertNotNil(envelopes.first?.payload)
     }
 
+    func testCurrentTokenAndAgentMetadataEnvelopesAreKnown() {
+        let decoder = RolloutEventDecoder()
+        for type in ["token_usage_record", "inter_agent_communication_metadata"] {
+            let line = JSONLLine(byteOffset: 0, lineNumber: 1,
+                                 text: #"{"type":"\#(type)","timestamp":"2026-09-28T04:11:50.973Z","payload":{}}"#)
+            guard case .envelope(let envelope)? = decoder.decode(line).line else {
+                return XCTFail("expected known metadata envelope")
+            }
+            XCTAssertEqual(envelope.type.rawValue, type)
+        }
+    }
+
     func testMissingTypeProducesIssue() throws {
         let decoder = RolloutEventDecoder()
         let line = JSONLLine(byteOffset: 0, lineNumber: 7, text: #"{"timestamp":"2026-08-15T04:11:50.973Z","payload":{}}"#)
@@ -99,6 +111,6 @@ final class RolloutEventDecoderTests: XCTestCase {
     }
 
     func testParserVersionTriggersDerivedDataReindexAfterIdentityFix() {
-        XCTAssertEqual(RolloutEventDecoder.parserVersion, "1.2.0")
+        XCTAssertEqual(RolloutEventDecoder.parserVersion, "1.3.0")
     }
 }

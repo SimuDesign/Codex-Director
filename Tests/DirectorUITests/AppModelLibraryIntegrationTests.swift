@@ -25,6 +25,23 @@ final class AppModelLibraryIntegrationTests: XCTestCase {
         }
     }
 
+    private final class QueryProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [PresentationQueryOperation] = []
+
+        func append(_ operation: PresentationQueryOperation) {
+            lock.lock()
+            values.append(operation)
+            lock.unlock()
+        }
+
+        func count(of operation: PresentationQueryOperation) -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return values.filter { $0 == operation }.count
+        }
+    }
+
     private func makePreferenceStores() -> (ResourceClassificationOverrideStore, InvocationEvaluationStore) {
         let classificationData = MemoryData()
         let evaluationData = MemoryData()
@@ -425,8 +442,10 @@ final class AppModelLibraryIntegrationTests: XCTestCase {
 
     func testAppModelPublishesBatchCompanionUsageFromIndexedInvocationsAndInvalidatesOnRefresh() async throws {
         let now = Date(timeIntervalSince1970: 1_780_000_000)
+        let queries = QueryProbe()
         let database = try DatabaseStore(
-            url: FileManager.default.temporaryDirectory.appendingPathComponent("director-companion-batch-\(UUID().uuidString).sqlite")
+            url: FileManager.default.temporaryDirectory.appendingPathComponent("director-companion-batch-\(UUID().uuidString).sqlite"),
+            queryObserver: { queries.append($0) }
         )
         let agent = CapabilityResource(id: "agent:batch", name: "Batch Agent", kind: .agent, status: .success, scope: .global, projectID: nil, confidence: .exact, summary: "Agent", sourceRootID: "test", relativeSourcePath: "batch.toml", sourcePathHash: nil, lastSeenAt: now, ownership: .userOwned, origin: .local)
         let skill = CapabilityResource(id: "skill:batch", name: "batch-skill", kind: .skill, status: .success, scope: .global, projectID: nil, confidence: .exact, summary: "Skill", sourceRootID: "test", relativeSourcePath: "batch/SKILL.md", sourcePathHash: nil, lastSeenAt: now, ownership: .userOwned, origin: .local)
@@ -444,6 +463,27 @@ final class AppModelLibraryIntegrationTests: XCTestCase {
         let model = DirectorAppModel(store: database, classificationOverrides: stores.0, evaluationStore: stores.1, nowProvider: { now })
         try await model.refresh()
         XCTAssertEqual(model.capabilityCompanionUsageByRelationID[CapabilityCompanionRelation(agentID: agent.id, skillID: skill.id, declarationSource: .agentBrief).id]?.sessionCount, 1)
+
+        let usageGeneration = model.capabilityCompanionUsageGeneration
+        let evidenceReads = queries.count(of: .companionEvidence)
+        model.setCapabilityFolderMembership(
+            resourceID: agent.id,
+            folderID: CapabilityFolderDefinition.selfTrainingID,
+            included: true
+        )
+        await model.loadCapabilityCompanionUsageIfNeeded()
+        XCTAssertEqual(model.capabilityCompanionUsageGeneration, usageGeneration)
+        XCTAssertEqual(queries.count(of: .companionEvidence), evidenceReads)
+        XCTAssertEqual(model.capabilityCompanionUsageByRelationID[CapabilityCompanionRelation(agentID: agent.id, skillID: skill.id, declarationSource: .agentBrief).id]?.sessionCount, 1)
+
+        model.setCapabilityFolderMembership(
+            resourceID: agent.id,
+            folderID: CapabilityFolderDefinition.selfTrainingID,
+            included: false
+        )
+        await model.loadCapabilityCompanionUsageIfNeeded()
+        XCTAssertEqual(model.capabilityCompanionUsageGeneration, usageGeneration)
+        XCTAssertEqual(queries.count(of: .companionEvidence), evidenceReads)
 
         try await database.replaceSession(session("session:two", offset: -120))
         try await model.refresh()
