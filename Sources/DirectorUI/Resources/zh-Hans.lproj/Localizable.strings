@@ -921,3 +921,16 @@
 "settings.migration.error.unavailable" = "导出服务尚未就绪。请关闭此窗口，等待启动完成后重试。";
 "settings.migration.error.preflight" = "预检未能完成。源文件没有被修改。";
 "settings.migration.error.save" = "能力包未能创建或校验，所选位置没有留下半成品。";
+
+"capabilityFolders.usage.period" = "统计周期";
+"capabilityFolders.usage.sevenDays" = "近 7 天";
+"capabilityFolders.usage.thirtyDays" = "近 30 天";
+"capabilityFolders.usage.allProjects" = "全部使用项目";
+"capabilityFolders.usage.scopeHelp" = "文件夹按配置归属组织能力；次数统计覆盖所有已索引的使用项目。";
+"capabilityFolders.usage.recorded" = "次已记录调用";
+"capabilityFolders.usage.captionSeven" = "已记录 · 近 7 天";
+"capabilityFolders.usage.captionThirty" = "已记录 · 近 30 天";
+"capabilityFolders.usage.pending" = "统计尚未就绪";
+"capabilityFolders.usage.inferred" = "%d 次为推断识别";
+"capabilityFolders.usage.partial" = "证据覆盖不完整或未知";
+"capabilityFolders.usage.help" = "这是已记录的委派或文件读取证据，不代表成功执行或能力有效。零表示没有记录到调用，不代表没有使用。配套 Skill 的次数是它自身的使用记录，不证明该 Agent 调用了它。";

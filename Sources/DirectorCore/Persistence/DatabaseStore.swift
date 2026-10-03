@@ -255,7 +255,7 @@ public actor DatabaseStore {
 
             // Calls: INSERT OR REPLACE by stable call id.
             let callStatement = try connection.prepare(
-                "INSERT OR REPLACE INTO calls (id, session_id, parent_call_id, ordinal, timestamp, actor_name, resource_id, call_kind, status, duration_ms, confidence, error_category) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+                "INSERT OR REPLACE INTO calls (id, session_id, parent_call_id, ordinal, timestamp, actor_name, resource_id, call_kind, status, duration_ms, confidence, error_category, evidence_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
             )
             for call in batch.calls {
                 callStatement.bind(call.id, at: 1)
@@ -270,6 +270,7 @@ public actor DatabaseStore {
                 callStatement.bind(call.durationMs, at: 10)
                 callStatement.bind(call.confidence.rawValue, at: 11)
                 callStatement.bind(call.errorCategory, at: 12)
+                callStatement.bind(call.evidenceKind?.rawValue, at: 13)
                 _ = try callStatement.step()
                 try callStatement.reset()
             }
@@ -619,6 +620,7 @@ public actor DatabaseStore {
             "actor_name": call.actorName ?? "", "resource_id": call.resourceID ?? "",
             "call_kind": call.kind.rawValue, "status": call.status.rawValue,
             "duration_ms": call.durationMs ?? -1, "confidence": call.confidence.rawValue,
+            "evidence_kind": call.evidenceKind?.rawValue ?? "",
             "error_category": call.errorCategory ?? "",
         ]
     }
@@ -786,7 +788,7 @@ public actor DatabaseStore {
     public func fetchCalls(sessionID: String) throws -> [InvocationEvent] {
         queryObserver?(.allInvocations)
         let statement = try connection.prepare(
-            "SELECT id, session_id, parent_call_id, ordinal, timestamp, actor_name, resource_id, call_kind, status, duration_ms, confidence, error_category FROM calls WHERE session_id = ? ORDER BY ordinal"
+            "SELECT id, session_id, parent_call_id, ordinal, timestamp, actor_name, resource_id, call_kind, status, duration_ms, confidence, error_category, evidence_kind FROM calls WHERE session_id = ? ORDER BY ordinal"
         )
         statement.bind(sessionID, at: 1)
         var results: [InvocationEvent] = []
@@ -803,7 +805,7 @@ public actor DatabaseStore {
                 status: InvocationStatus(rawValue: statement.columnText(8) ?? "") ?? .unknown,
                 durationMs: statement.columnIsNull(9) ? nil : statement.columnInt(9),
                 confidence: EvidenceConfidence(rawValue: statement.columnText(10) ?? "") ?? .unknown,
-                errorCategory: statement.columnText(11)
+                errorCategory: statement.columnText(11), evidenceKind: statement.columnText(12).flatMap(InvocationEvidenceKind.init(rawValue:))
             ))
         }
         return results
@@ -820,7 +822,7 @@ public actor DatabaseStore {
             let statement = try connection.prepare(
                 """
                 SELECT id, session_id, parent_call_id, ordinal, timestamp, actor_name,
-                       resource_id, call_kind, status, duration_ms, confidence, error_category
+                       resource_id, call_kind, status, duration_ms, confidence, error_category, evidence_kind
                 FROM calls
                 WHERE (? IS NULL OR timestamp >= ?) AND (? IS NULL OR timestamp <= ?)
                 ORDER BY session_id, ordinal
@@ -847,7 +849,7 @@ public actor DatabaseStore {
                     status: InvocationStatus(rawValue: statement.columnText(8) ?? "") ?? .unknown,
                     durationMs: statement.columnIsNull(9) ? nil : statement.columnInt(9),
                     confidence: EvidenceConfidence(rawValue: statement.columnText(10) ?? "") ?? .unknown,
-                    errorCategory: statement.columnText(11)
+                    errorCategory: statement.columnText(11), evidenceKind: statement.columnText(12).flatMap(InvocationEvidenceKind.init(rawValue:))
                 )
                 result[sessionID, default: []].append(event)
             }
@@ -879,7 +881,7 @@ public actor DatabaseStore {
                     WHERE (s.started_at IS NOT NULL AND s.started_at <= ?
                            AND (s.ended_at IS NULL OR s.ended_at >= ?))
                        OR EXISTS (
-                           SELECT 1 FROM calls c2
+                           SELECT 1 FROM capability_usage_calls c2
                            WHERE c2.session_id = s.id
                              AND c2.timestamp IS NOT NULL
                              AND c2.timestamp >= ? AND c2.timestamp <= ?
@@ -889,9 +891,9 @@ public actor DatabaseStore {
                        rs.status, rs.coverage, rs.parser_version, rs.source_file_id,
                        c.id, c.session_id, c.parent_call_id, c.ordinal, c.timestamp,
                        c.actor_name, c.resource_id, c.call_kind, c.status,
-                       c.duration_ms, c.confidence, c.error_category
+                       c.duration_ms, c.confidence, c.error_category, c.evidence_kind
                 FROM relevant_sessions rs
-                LEFT JOIN calls c
+                LEFT JOIN capability_usage_calls c
                   ON c.session_id = rs.id
                  AND c.timestamp IS NOT NULL
                  AND c.timestamp >= ? AND c.timestamp <= ?
@@ -940,7 +942,7 @@ public actor DatabaseStore {
                     status: InvocationStatus(rawValue: statement.columnText(16) ?? "") ?? .unknown,
                     durationMs: statement.columnIsNull(17) ? nil : statement.columnInt(17),
                     confidence: EvidenceConfidence(rawValue: statement.columnText(18) ?? "") ?? .unknown,
-                    errorCategory: statement.columnText(19)
+                    errorCategory: statement.columnText(19), evidenceKind: statement.columnText(20).flatMap(InvocationEvidenceKind.init(rawValue:))
                 ))
             }
             return CapabilityCompanionEvidenceSnapshot(sessions: sessions, invocationsBySession: invocations)
@@ -1217,7 +1219,7 @@ public actor DatabaseStore {
     /// aggregation. It intentionally excludes resources with no project.
     public func fetchCapabilityUsageProjects(through: Date, cancellation: SQLiteCancellationToken? = nil) throws -> [String: Set<String>] {
         try connection.performReadSnapshot(cancellation: cancellation) {
-            let statement = try connection.prepare("SELECT c.resource_id, s.project_id FROM calls c JOIN sessions s ON s.id = c.session_id WHERE c.resource_id IS NOT NULL AND s.project_id IS NOT NULL AND c.timestamp IS NOT NULL AND c.timestamp <= ? GROUP BY c.resource_id, s.project_id")
+            let statement = try connection.prepare("SELECT c.resource_id, s.project_id FROM capability_usage_calls c JOIN sessions s ON s.id = c.session_id WHERE c.resource_id IS NOT NULL AND s.project_id IS NOT NULL AND c.timestamp IS NOT NULL AND c.timestamp <= ? GROUP BY c.resource_id, s.project_id")
             statement.bind(through.timeIntervalSince1970, at: 1)
             var result: [String: Set<String>] = [:]
             while try statement.step() == .row {
@@ -1524,7 +1526,7 @@ public actor DatabaseStore {
                                   OR COALESCE(s.coverage, 'unknown') != 'complete'
                                   OR c.status IN ('started','unknown')
                             THEN 1 ELSE 0 END)
-            FROM calls c
+            FROM capability_usage_calls c
             LEFT JOIN sessions s ON s.id = c.session_id
             WHERE c.resource_id IS NOT NULL
             GROUP BY c.resource_id
@@ -1555,7 +1557,7 @@ public actor DatabaseStore {
                MAX(c.timestamp),
                CASE WHEN SUM(CASE WHEN COALESCE(s.coverage, 'unknown') IN ('partial','unavailable','unknown') THEN 1 ELSE 0 END) > 0
                     THEN 'partial' ELSE 'complete' END
-        FROM calls c LEFT JOIN sessions s ON s.id = c.session_id
+        FROM capability_usage_calls c LEFT JOIN sessions s ON s.id = c.session_id
         WHERE c.resource_id IS NOT NULL AND c.timestamp >= ? AND c.timestamp <= ?
           AND (? IS NULL OR s.project_id = ?)
         GROUP BY c.resource_id ORDER BY c.resource_id
@@ -1612,7 +1614,7 @@ public actor DatabaseStore {
                SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? AND c.confidence = 'inferred' THEN 1 ELSE 0 END),
                MAX(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? THEN c.timestamp END),
                SUM(CASE WHEN c.timestamp >= ? AND c.timestamp <= ? AND COALESCE(s.coverage, 'unknown') IN ('partial','unavailable','unknown') THEN 1 ELSE 0 END)
-        FROM calls c LEFT JOIN sessions s ON s.id = c.session_id
+        FROM capability_usage_calls c LEFT JOIN sessions s ON s.id = c.session_id
         WHERE c.resource_id IS NOT NULL AND c.timestamp >= ? AND c.timestamp <= ?
           AND (? IS NULL OR s.project_id = ?)
         GROUP BY c.resource_id ORDER BY c.resource_id
@@ -1681,7 +1683,7 @@ public actor DatabaseStore {
         let limit = max(1, min(pageSize, 200))
         let sql = """
         SELECT c.id, c.session_id, c.parent_call_id, c.ordinal, c.timestamp, c.actor_name,
-               c.resource_id, c.call_kind, c.status, c.duration_ms, c.confidence, c.error_category
+               c.resource_id, c.call_kind, c.status, c.duration_ms, c.confidence, c.error_category, c.evidence_kind
         FROM calls c LEFT JOIN sessions s ON s.id = c.session_id
         WHERE c.resource_id = ? AND c.timestamp IS NOT NULL
           AND (? IS NULL OR s.project_id = ?)
@@ -1714,7 +1716,7 @@ public actor DatabaseStore {
                 status: InvocationStatus(rawValue: statement.columnText(8) ?? "") ?? .unknown,
                 durationMs: statement.columnIsNull(9) ? nil : statement.columnInt(9),
                 confidence: EvidenceConfidence(rawValue: statement.columnText(10) ?? "") ?? .unknown,
-                errorCategory: statement.columnText(11)
+                errorCategory: statement.columnText(11), evidenceKind: statement.columnText(12).flatMap(InvocationEvidenceKind.init(rawValue:))
             ))
         }
         let hasMore = calls.count > limit
@@ -1749,7 +1751,7 @@ public actor DatabaseStore {
 
     public func fetchCapabilityHistory(projectID: String? = nil, through: Date = Date()) throws -> [CapabilityHistory] {
         return try connection.performReadSnapshot { () -> [CapabilityHistory] in
-        let statement = try connection.prepare("SELECT c.resource_id, COUNT(*), MAX(c.timestamp) FROM calls c LEFT JOIN sessions s ON s.id = c.session_id WHERE c.resource_id IS NOT NULL AND c.timestamp IS NOT NULL AND c.timestamp <= ? AND (? IS NULL OR s.project_id = ?) GROUP BY c.resource_id ORDER BY c.resource_id")
+        let statement = try connection.prepare("SELECT c.resource_id, COUNT(*), MAX(c.timestamp) FROM capability_usage_calls c LEFT JOIN sessions s ON s.id = c.session_id WHERE c.resource_id IS NOT NULL AND c.timestamp IS NOT NULL AND c.timestamp <= ? AND (? IS NULL OR s.project_id = ?) GROUP BY c.resource_id ORDER BY c.resource_id")
         statement.bind(through.timeIntervalSince1970, at: 1)
         statement.bind(projectID, at: 2); statement.bind(projectID, at: 3)
         var result: [CapabilityHistory] = []
@@ -1761,7 +1763,7 @@ public actor DatabaseStore {
 
     public func fetchCapabilityUsageProjects(resourceID: String, through: Date = Date()) throws -> [String] {
         return try connection.performReadSnapshot { () -> [String] in
-        let statement = try connection.prepare("SELECT DISTINCT s.project_id FROM calls c JOIN sessions s ON s.id = c.session_id WHERE c.resource_id = ? AND c.timestamp IS NOT NULL AND c.timestamp <= ? AND s.project_id IS NOT NULL ORDER BY s.project_id")
+        let statement = try connection.prepare("SELECT DISTINCT s.project_id FROM capability_usage_calls c JOIN sessions s ON s.id = c.session_id WHERE c.resource_id = ? AND c.timestamp IS NOT NULL AND c.timestamp <= ? AND s.project_id IS NOT NULL ORDER BY s.project_id")
         statement.bind(resourceID, at: 1); statement.bind(through.timeIntervalSince1970, at: 2)
         var result: [String] = []
         while try statement.step() == .row { if let id = statement.columnText(0) { result.append(id) } }
@@ -1795,7 +1797,7 @@ public actor DatabaseStore {
         let statement = query.statement; try query.bind(statement)
         var items: [AttributedInvocation] = []
         while try statement.step() == .row {
-            let event = InvocationEvent(id: statement.columnText(0) ?? "", sessionID: statement.columnText(1) ?? "", parentCallID: statement.columnText(2), ordinal: statement.columnInt(3), timestamp: statement.columnIsNull(4) ? nil : Date(timeIntervalSince1970: statement.columnDouble(4)), actorName: statement.columnText(5), resourceID: statement.columnText(6), kind: InvocationKind(rawValue: statement.columnText(7) ?? "") ?? .unknown, status: InvocationStatus(rawValue: statement.columnText(8) ?? "") ?? .unknown, durationMs: statement.columnIsNull(9) ? nil : statement.columnInt(9), confidence: EvidenceConfidence(rawValue: statement.columnText(10) ?? "") ?? .unknown, errorCategory: statement.columnText(11))
+            let event = InvocationEvent(id: statement.columnText(0) ?? "", sessionID: statement.columnText(1) ?? "", parentCallID: statement.columnText(2), ordinal: statement.columnInt(3), timestamp: statement.columnIsNull(4) ? nil : Date(timeIntervalSince1970: statement.columnDouble(4)), actorName: statement.columnText(5), resourceID: statement.columnText(6), kind: InvocationKind(rawValue: statement.columnText(7) ?? "") ?? .unknown, status: InvocationStatus(rawValue: statement.columnText(8) ?? "") ?? .unknown, durationMs: statement.columnIsNull(9) ? nil : statement.columnInt(9), confidence: EvidenceConfidence(rawValue: statement.columnText(10) ?? "") ?? .unknown, errorCategory: statement.columnText(11), evidenceKind: statement.columnText(14).flatMap(InvocationEvidenceKind.init(rawValue:)))
             items.append(AttributedInvocation(original: event, projectID: statement.columnText(12), pluginID: pluginID, confidence: EvidenceConfidence(rawValue: statement.columnText(13) ?? "unknown") ?? .unknown))
         }
         let hasMore = items.count > limit; if hasMore { items.removeLast() }
@@ -1824,7 +1826,8 @@ public actor DatabaseStore {
         WITH RECURSIVE candidates AS (
           SELECT c.id,c.session_id,c.parent_call_id,c.ordinal,c.timestamp,c.actor_name,c.resource_id,c.call_kind,c.status,c.duration_ms,c.confidence,c.error_category,s.project_id,
                  ? AS plugin_id,
-                 CASE WHEN c.resource_id IN (\(mapping.skillIDs.isEmpty ? "NULL" : Array(repeating: "?", count: mapping.skillIDs.count).joined(separator: ","))) THEN c.confidence ELSE 'inferred' END AS attribution_confidence
+                 CASE WHEN c.resource_id IN (\(mapping.skillIDs.isEmpty ? "NULL" : Array(repeating: "?", count: mapping.skillIDs.count).joined(separator: ","))) THEN c.confidence ELSE 'inferred' END AS attribution_confidence,
+                 c.evidence_kind
           FROM calls c LEFT JOIN sessions s ON s.id=c.session_id
           WHERE (\(match)) AND c.timestamp IS NOT NULL
             AND (? IS NULL OR s.project_id=?)
@@ -1840,7 +1843,7 @@ public actor DatabaseStore {
         """
         let select: String
         if detail {
-            select = "SELECT id,session_id,parent_call_id,ordinal,timestamp,actor_name,resource_id,call_kind,status,duration_ms,confidence,error_category,project_id,attribution_confidence FROM leaves WHERE (? IS NULL OR (timestamp<? OR (timestamp=? AND id<?))) ORDER BY timestamp DESC,id DESC LIMIT ?"
+            select = "SELECT id,session_id,parent_call_id,ordinal,timestamp,actor_name,resource_id,call_kind,status,duration_ms,confidence,error_category,project_id,attribution_confidence,evidence_kind FROM leaves WHERE (? IS NULL OR (timestamp<? OR (timestamp=? AND id<?))) ORDER BY timestamp DESC,id DESC LIMIT ?"
         } else {
             select = "SELECT COUNT(*),MAX(timestamp),SUM(CASE WHEN attribution_confidence='inferred' THEN 1 ELSE 0 END),CASE WHEN SUM(CASE WHEN COALESCE((SELECT coverage FROM sessions WHERE id=leaves.session_id),'unknown')!='complete' THEN 1 ELSE 0 END)>0 THEN 'partial' ELSE 'complete' END,(SELECT GROUP_CONCAT(project_id) FROM (SELECT DISTINCT project_id FROM leaves WHERE project_id IS NOT NULL ORDER BY project_id)) FROM leaves"
         }

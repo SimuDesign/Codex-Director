@@ -111,6 +111,15 @@ final class RolloutEventDecoderTests: XCTestCase {
     }
 
     func testParserVersionTriggersDerivedDataReindexAfterIdentityFix() {
-        XCTAssertEqual(RolloutEventDecoder.parserVersion, "1.3.0")
+        XCTAssertEqual(RolloutEventDecoder.parserVersion, "1.4.0")
+    }
+
+    func testSourceOrdinalAcceptsOnlyNonnegativeIntegerJSONValues() throws {
+        for (value, expected): (Any, Int?) in [(0, 0), (7, 7), (true, nil), (-1, nil), (1.5, nil), ("7", nil)] {
+            let data = try JSONSerialization.data(withJSONObject: ["type": "event_msg", "ordinal": value, "payload": [:]])
+            let line = JSONLLine(byteOffset: 0, lineNumber: 1, text: String(decoding: data, as: UTF8.self))
+            guard case .envelope(let envelope)? = RolloutEventDecoder().decode(line).line else { return XCTFail("expected envelope") }
+            XCTAssertEqual(envelope.sourceOrdinal, expected)
+        }
     }
 }

@@ -40,6 +40,9 @@ private final class AppLaunchState: ObservableObject {
         let homeUsageRankingPreferences = useMemoryPreferences
             ? HomeUsageRankingPreferences(memoryPeriod: .sevenDays)
             : HomeUsageRankingPreferences(defaults: .standard)
+        let capabilityFolderUsagePreferences = useMemoryPreferences
+            ? CapabilityFolderUsagePreferences(memoryPeriod: .sevenDays)
+            : CapabilityFolderUsagePreferences(defaults: .standard)
 
         // This model is deliberately service-less but not synthetic. It lets
         // the main window and all seven destinations render immediately while
@@ -61,6 +64,7 @@ private final class AppLaunchState: ObservableObject {
                 bootstrapPending: true,
                 menuBarPreferences: resolvedMenuBarPreferences,
                 homeUsageRankingPreferences: homeUsageRankingPreferences,
+                capabilityFolderUsagePreferences: capabilityFolderUsagePreferences,
                 capabilityFolderStore: CapabilityFolderStore.makeMemory()
             )
         } else {
@@ -69,6 +73,7 @@ private final class AppLaunchState: ObservableObject {
                 bootstrapPending: true,
                 menuBarPreferences: resolvedMenuBarPreferences,
                 homeUsageRankingPreferences: homeUsageRankingPreferences,
+                capabilityFolderUsagePreferences: capabilityFolderUsagePreferences,
                 capabilityFolderStore: CapabilityFolderStore(defaults: .standard)
             )
         }

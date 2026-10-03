@@ -300,6 +300,100 @@ final class CodexAccountUsageReadingTests: XCTestCase {
         XCTAssertEqual(snapshot.weeklyResetsAt, Date(timeIntervalSince1970: 2_001_000))
     }
 
+    func testConcurrentImmediateExitExchangesDoNotRaceClosedOutputHandle() async throws {
+        let (directory, executable) = try immediateExitResponseServer()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let expectedCapturedAt = capturedAt
+        let snapshots = try await withThrowingTaskGroup(of: CodexAccountUsageSnapshot.self) { group in
+            for _ in 0..<16 {
+                group.addTask {
+                    let reading = CodexAccountUsageReading(
+                        executableURL: executable,
+                        timeoutSeconds: 2,
+                        now: { expectedCapturedAt }
+                    )
+                    return try await reading.read()
+                }
+            }
+
+            var values: [CodexAccountUsageSnapshot] = []
+            for try await snapshot in group {
+                values.append(snapshot)
+            }
+            return values
+        }
+
+        XCTAssertEqual(snapshots.count, 16)
+        XCTAssertTrue(snapshots.allSatisfy { $0.weeklyRemainingPercent == 80 })
+    }
+
+    func testImmediateCancellationBeforeProcessRunDoesNotLaunchOrLoseCancelledResult() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-director-menu-bar-prelaunch-cancel-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("synthetic-codex")
+        let launchMarker = directory.appendingPathComponent("launched")
+        let script = """
+        #!/bin/sh
+        printf 'launched' > "\(launchMarker.path)"
+        sleep 30
+        """
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o755))], ofItemAtPath: executable.path)
+
+        let enteredPrelaunch = DispatchSemaphore(value: 0)
+        let cancellationHandled = DispatchSemaphore(value: 0)
+        let task = Task<CodexAccountUsageReadError?, Never> {
+            do {
+                _ = try await CodexAppServerProcess.exchange(
+                    executableURL: executable,
+                    request: Data(),
+                    timeout: 2,
+                    maxOutputBytes: 1_024,
+                    beforeStartupLock: {
+                        enteredPrelaunch.signal()
+                        _ = cancellationHandled.wait(timeout: .now() + 2)
+                    },
+                    onCancellationHandled: { cancellationHandled.signal() }
+                )
+                return nil
+            } catch let error as CodexAccountUsageReadError {
+                return error
+            } catch {
+                return nil
+            }
+        }
+
+        XCTAssertEqual(enteredPrelaunch.wait(timeout: .now() + 2), .success)
+        task.cancel()
+        let outcome = await task.value
+
+        XCTAssertEqual(outcome, .cancelled)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: launchMarker.path))
+    }
+
+    func testProductionExchangeLaunchFailureReturnsWithoutStartupLockDeadlock() async {
+        let missingExecutable = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-director-missing-\(UUID().uuidString)")
+        let expectedCapturedAt = capturedAt
+        let reading = CodexAccountUsageReading(
+            executableURL: missingExecutable,
+            timeoutSeconds: 0.2,
+            now: { expectedCapturedAt }
+        )
+
+        do {
+            _ = try await reading.read()
+            XCTFail("expected launch failure")
+        } catch let error as CodexAccountUsageReadError {
+            XCTAssertEqual(error, .launchFailed)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     func testFoundationChildOwnsItsPGIDWhenSetPGIDReturnsEACCES() throws {
 #if canImport(Darwin)
         let process = Process()
@@ -479,6 +573,24 @@ final class CodexAccountUsageReadingTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let executable = directory.appendingPathComponent("synthetic-codex")
         let script = "#!/bin/sh\nsleep 10\n"
+        try Data(script.utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o755))], ofItemAtPath: executable.path)
+        return (directory, executable)
+    }
+
+    private func immediateExitResponseServer() throws -> (URL, URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-director-menu-bar-immediate-exit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let executable = directory.appendingPathComponent("synthetic-codex")
+        let script = """
+        #!/bin/sh
+        IFS= read -r _
+        printf '%s\\n' '{"id":1,"result":{"userAgent":"synthetic"}}'
+        IFS= read -r _
+        IFS= read -r _
+        printf '%s\\n' '{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":10080}}}}'
+        """
         try Data(script.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: Int16(0o755))], ofItemAtPath: executable.path)
         return (directory, executable)

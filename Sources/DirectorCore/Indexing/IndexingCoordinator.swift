@@ -303,11 +303,14 @@ public actor IndexingCoordinator {
         // Skill evidence resolution uses only currently discovered resources.
         extractor = InvocationExtractor(
             skillResolver: SkillEvidenceResolver(resources: combinedResources, roots: configuration.scanRoots, transientRoots: transientRoots),
-            agentResolver: AgentEvidenceResolver(resources: combinedResources, roots: configuration.scanRoots)
+            agentResolver: AgentEvidenceResolver(resources: combinedResources, roots: configuration.scanRoots, pairings: discovery.agentPairings)
         )
 
         // 2. Session file inventory.
         let files = collectSessionFiles(configuration: configuration)
+        let recentStart = CapabilityQueryWindow.recent30(now: nowProvider(), calendar: .current).start.timeIntervalSince1970
+        let sessionEnds = Dictionary(grouping: try await store.fetchAllSessions(), by: \.sourceFileID)
+            .mapValues { rows in rows.compactMap { $0.endedAt ?? $0.startedAt }.max()?.timeIntervalSince1970 ?? 0 }
         progress(.init(phase: .parsing, processedFiles: 0, totalFiles: files.count, indexedSessions: 0, lastError: nil))
 
         var processedFiles = 0
@@ -325,15 +328,15 @@ public actor IndexingCoordinator {
             guard let attributes = fileSystem.fileAttributes(url) else { continue }
             let checkpoint = try await store.fetchCheckpoint(sourceFileID: sourceFileID)
 
-            // The current-format token event upgrade only affects recent
-            // ranking windows. Reparse the last 30 days, but do not force a
+            // Observation repair affects recent ranking windows. Reparse
+            // the last 30 days, but do not force a
             // one-time read of years of unchanged archived rollouts (which
             // can total tens of GB). Any older file changed later is still
             // fully reparsed below.
             let unchanged = checkpoint?.sourceSize == attributes.size &&
-                checkpoint?.sourceMtime == attributes.modificationDate
-            let priorParserOutsideRankingWindow = checkpoint?.parserVersion == "1.2.0" &&
-                attributes.modificationDate < nowProvider().addingTimeInterval(-30 * 86_400).timeIntervalSince1970
+                checkpoint?.sourceMtime == attributes.modificationDate && checkpoint?.byteOffset == attributes.size
+            let priorParserOutsideRankingWindow = ["1.2.0", "1.3.0"].contains(checkpoint?.parserVersion ?? "") &&
+                attributes.modificationDate < recentStart && (sessionEnds[sourceFileID] ?? 0) < recentStart
             if let checkpoint, unchanged,
                (checkpoint.parserVersion == RolloutEventDecoder.parserVersion || priorParserOutsideRankingWindow) {
                 skippedFiles += 1
@@ -462,6 +465,7 @@ public actor IndexingCoordinator {
         scanRoots: [ScanRoot],
         fileProgress: @Sendable (UInt64, UInt64) -> Void = { _, _ in }
     ) async throws -> ParseOutcome {
+        let sourceBeforeRead = fileSystem.fileAttributes(url)
         guard let reader = JSONLIncrementalReader(url: url, startOffset: startOffset) else {
             return ParseOutcome(indexed: false, cancelled: false)
         }
@@ -506,7 +510,6 @@ public actor IndexingCoordinator {
         }
 
         if cancelled {
-            try await persistCheckpoint(url: url, sourceFileID: sourceFileID, byteOffset: lastCommittedOffset)
             return ParseOutcome(indexed: false, cancelled: true)
         }
 
@@ -519,7 +522,20 @@ public actor IndexingCoordinator {
         } else {
             resumeTokenSnapshot = nil
         }
-        var invocation = extractor.makeAccumulator(sessionID: sessionID)
+        var metadata: RolloutEnvelope? = leading.first { $0.type == .sessionMeta }
+        // Appended segments do not repeat metadata. Recover only a bounded
+        // header, without replaying old calls or cumulative token snapshots.
+        if startOffset > 0, let header = JSONLIncrementalReader(url: url) {
+            for _ in 0..<32 {
+                guard let line = try header.nextLine() else { break }
+                if case .envelope(let envelope) = decoder.decode(line).line, envelope.type == .sessionMeta {
+                    metadata = envelope; break
+                }
+            }
+        }
+        let directory = metadata?.payload?.json["cwd"] as? String
+        var invocation = extractor.makeAccumulator(sessionID: sessionID, projectID: resolvedProjectID, workingDirectory: directory)
+        if startOffset > 0, let metadata { invocation.process(metadata) }
         var tokens = tokenParser.makeAccumulator(sessionID: sessionID, resumeFrom: resumeTokenSnapshot)
 
         var startedAt: Date?
@@ -571,9 +587,9 @@ public actor IndexingCoordinator {
             }
         }
 
-        // Persist the resume point even when cancelled mid-file.
+        // Calls have not committed. Advancing a checkpoint on cancel would
+        // permanently drop the uncommitted segment on retry.
         if cancelled {
-            try await persistCheckpoint(url: url, sourceFileID: sourceFileID, byteOffset: lastCommittedOffset)
             return ParseOutcome(indexed: false, cancelled: true)
         }
 
@@ -599,7 +615,8 @@ public actor IndexingCoordinator {
         )
         let batch = try makeBatch(accumulation: accumulation, priorCoverage: priorCoverage)
         try await store.replaceSession(batch, resetExisting: startOffset == 0)
-        if let attributes = fileSystem.fileAttributes(url) {
+        if let attributes = fileSystem.fileAttributes(url),
+           sourceBeforeRead?.size == attributes.size, sourceBeforeRead?.modificationDate == attributes.modificationDate {
             try await store.upsertCheckpoint(IndexCheckpoint(
                 sourceFileID: sourceFileID,
                 sourceSize: attributes.size,
@@ -610,18 +627,6 @@ public actor IndexingCoordinator {
             ))
         }
         return ParseOutcome(indexed: true, cancelled: false)
-    }
-
-    private func persistCheckpoint(url: URL, sourceFileID: String, byteOffset: UInt64) async throws {
-        guard let attributes = fileSystem.fileAttributes(url) else { return }
-        try await store.upsertCheckpoint(IndexCheckpoint(
-            sourceFileID: sourceFileID,
-            sourceSize: attributes.size,
-            sourceMtime: attributes.modificationDate,
-            byteOffset: byteOffset,
-            parserVersion: RolloutEventDecoder.parserVersion,
-            indexedAt: Date()
-        ))
     }
 
     private static func sessionID(from envelope: RolloutEnvelope) -> String? {

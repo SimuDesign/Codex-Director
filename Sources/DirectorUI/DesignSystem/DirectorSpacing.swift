@@ -104,6 +104,10 @@ public enum DirectorCapabilityFolderLayout {
     public static let controlHeight: CGFloat = 36
     public static let segmentHeight: CGFloat = 32
     public static let sortFieldWidth: CGFloat = 176
+    public static let usageFilterInlineBreakpoint: CGFloat = 1000
+    public static let usageControlsInlineWidth: CGFloat = 440
+    public static let usagePeriodFieldWidth: CGFloat = 232
+    public static let usageCountColumnWidth: CGFloat = 128
     /// Explicit rhythm for the folder browser. These values are applied by
     /// the owning structural row exactly once; they do not rely on native
     /// List section spacing, which is not aligned with ordinary rows on macOS.

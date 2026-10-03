@@ -921,3 +921,16 @@
 "settings.migration.error.unavailable" = "The export service is not available yet. Close this sheet and try again after startup finishes.";
 "settings.migration.error.preflight" = "Preflight could not be completed. Source files were not modified.";
 "settings.migration.error.save" = "The package could not be created or verified. No partial package was left at the selected location.";
+
+"capabilityFolders.usage.period" = "Usage period";
+"capabilityFolders.usage.sevenDays" = "Last 7 days";
+"capabilityFolders.usage.thirtyDays" = "Last 30 days";
+"capabilityFolders.usage.allProjects" = "All usage projects";
+"capabilityFolders.usage.scopeHelp" = "Folder membership follows configuration ownership; recorded counts cover all indexed usage projects.";
+"capabilityFolders.usage.recorded" = "Recorded calls";
+"capabilityFolders.usage.captionSeven" = "Recorded · 7 days";
+"capabilityFolders.usage.captionThirty" = "Recorded · 30 days";
+"capabilityFolders.usage.pending" = "Statistics not ready";
+"capabilityFolders.usage.inferred" = "%d inferred";
+"capabilityFolders.usage.partial" = "Evidence coverage partial or unknown";
+"capabilityFolders.usage.help" = "Recorded delegation/read evidence, not successful execution or effectiveness. Zero means no calls were recorded, not that the capability was unused. A companion Skill's count is its own usage, not proof that this Agent called it.";
