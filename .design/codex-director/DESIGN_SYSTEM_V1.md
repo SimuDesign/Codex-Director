@@ -1,6 +1,6 @@
 # Codex Director Design System v1
 
-Version: `1.4.1` (visible marketing version; internal build `29`)  
+Version: `1.5.0` (visible marketing version; internal build `33`)
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
 Last updated: 2026-09-23
@@ -332,8 +332,9 @@ decorative folder symbol and one purpose line, an inline wide/stacked narrow
 folder-name search field, two aligned folder sections without a thick divider, and opaque
 folder cards. Folder interiors use breadcrumb, compact 32/28pt title, counts,
 three tabs and unboxed search/sort controls. Agent companions share one
-continuous bordered group; list rows omit zero/noisy usage evidence and keep
-that detail in the inspector. This local variant does not replace the shared
+continuous bordered group; rows show period-labelled observed calls, including
+zero after computation and `—` while pending. Noisy coverage details stay in
+help/AX and the inspector. This local variant does not replace the shared
 1440pt page measure, 52/36pt editorial titles or global 4/2/1 metric rules.
 While the directory is pending, counts use an em dash and the page shows a
 native loading state; an active refresh or safe stale/failure signal is a
@@ -640,17 +641,25 @@ branded Refresh data control, and Open main window. An unavailable or expired
 window contributes neither a persistent label value nor popover rows.
 The refresh control uses the existing indeterminate native progress indicator
 and cannot be activated twice. Opening the popover may request one account-usage
-read when the cached reading is missing, older than thirty minutes, or past its
+read when the cached reading is missing, at least two minutes old, or past its
 reported reset; it never starts a capability indexer.
 
 When enabled, the app schedules only account-usage reads after the normal
-startup grace. While the Mac is awake, unlocked and not in Low Power Mode, an
-active session uses a five-minute cadence and an aggregate idle duration of at
-least 30 minutes uses a 30-minute cadence. Locked, sleeping and Low Power Mode
-states cancel the account schedule until the next OS state notification. Read
-failures back off to 5, 15 and 30 minutes and reset after a successful read.
-The scheduler has one bounded next-due wake-up, reads no event contents, and
-does not poll, read SQLite, or start a second indexer.
+startup grace. While the Mac is awake, unlocked and not in Low Power Mode, the
+exact `com.openai.codex` foreground identity uses a one-minute cadence. A
+confirmed departure uses two minutes for ten minutes, another foreground app
+outside that grace uses five minutes, and unknown foreground identity uses a
+conservative two minutes. Aggregate idle duration of at least 30 minutes takes
+priority and uses 30 minutes. Foreground means the keyboard-receiving app; it
+does not indicate whether a Codex task is running in the background. Locked,
+sleeping and Low Power Mode states cancel the account schedule until the next
+OS state notification. Read failures back off to stable 5, 15 and 30 minute
+deadlines and reset after a successful read. The scheduler has one bounded
+wake-up. During idle periods it checks aggregate idle duration at most once per
+minute when needed to detect resumed input, without starting Codex until an
+account read is due. It keeps only a safe foreground enum and last confirmed
+departure in memory, reads no window, task or input-event contents or SQLite,
+persists no application-activity history, and does not start a second indexer.
 
 Account values come only from the local Codex app-server read boundary and are
 reduced to validated five-hour and weekly percentages, their independent reset
@@ -797,6 +806,23 @@ behavior. Library counts show the selected period, with a "calls · 30 days"
 caption for thirty-day sorting. Summary metrics and companion shared-session
 evidence retain their explicitly labeled seven-day meaning. Unknown results
 remain unavailable and sort after known values; changing sort uses memory.
+
+### 1.5.0 capability-folder usage extension
+
+This supersedes only the folder portion of the 1.4.1 sort contract. All three
+tabs use an independent outlined Last 7 days / Last 30 days selector, a visible
+All usage projects scope label and Usage descending / Usage ascending / Name
+A–Z menu. Keep one native search editor. Wide filters place the selector and
+sort alongside search; narrow filters stack using folder-local tokens.
+Wide member and companion rows place a nonwrapping 128pt count/caption column
+before trailing actions; compact rows put the same count below metadata.
+Use the existing monospaced count and observed-calls caption roles, no new
+glass/card/chart. Related-preview Skills show their own counts without joining
+the folder or Agent total. `—` is pending and computed `0` is no observed call,
+not non-use proof. AX/help include period, all-project scope and evidence limits.
+The remembered period is app-shared, not coupled to Home rankings or the
+per-window/folder/tab search, sort, expanded state and scroll position.
+Seven-day companion co-observation remains separate and noncausal.
 
 ### Pending proposal — four-library renderer experiment (not approved)
 

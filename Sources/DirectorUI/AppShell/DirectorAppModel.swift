@@ -115,6 +115,7 @@ public final class DirectorAppModel: ObservableObject {
     @Published public private(set) var isCapabilityRestoring = false
     @Published public private(set) var menuBarEnabled: Bool
     @Published public private(set) var homeUsageRankingPeriod: HomeUsageRankingPeriod
+    @Published public private(set) var capabilityFolderUsagePeriod: CapabilityFolderUsagePeriod
     @Published public private(set) var accountUsageSnapshot: CodexAccountUsageSnapshot?
     @Published public private(set) var accountUsageError: String?
     @Published public private(set) var accountUsageReadRevision: UInt64 = 0
@@ -256,7 +257,7 @@ public final class DirectorAppModel: ObservableObject {
         if let reset = snapshot.weeklyResetsAt,
            snapshot.weeklyRemainingPercent != nil,
            reset <= now { return true }
-        return now.timeIntervalSince(snapshot.capturedAt) > 30 * 60
+        return now.timeIntervalSince(snapshot.capturedAt) >= AccountUsageSystemState.popoverFreshnessInterval
     }
 
     @discardableResult
@@ -308,11 +309,13 @@ public final class DirectorAppModel: ObservableObject {
     public let capabilityFolderStore: CapabilityFolderStore
     private let menuBarPreferences: MenuBarPreferences
     private let homeUsageRankingPreferences: HomeUsageRankingPreferences
+    private let capabilityFolderUsagePreferences: CapabilityFolderUsagePreferences
     /// Keeps model instances in separate windows aligned with the shared
     /// application preference. The App scene and Settings may observe the
     /// same store through different model instances.
     private var menuBarPreferencesCancellable: AnyCancellable?
     private var homeUsageRankingPreferencesCancellable: AnyCancellable?
+    private var capabilityFolderUsagePreferencesCancellable: AnyCancellable?
 
     public private(set) var store: DatabaseStore?
     public private(set) var readStore: DatabaseStore?
@@ -408,6 +411,7 @@ public final class DirectorAppModel: ObservableObject {
         presentationRefreshCoordinator: RefreshCoordinator? = nil,
         menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
         homeUsageRankingPreferences: HomeUsageRankingPreferences = HomeUsageRankingPreferences(memoryPeriod: .sevenDays),
+        capabilityFolderUsagePreferences: CapabilityFolderUsagePreferences = CapabilityFolderUsagePreferences(memoryPeriod: .sevenDays),
         accountUsageReading: CodexAccountUsageReading? = nil,
         capabilityFolderStore: CapabilityFolderStore = CapabilityFolderStore.makeMemory()
     ) {
@@ -426,6 +430,8 @@ public final class DirectorAppModel: ObservableObject {
         self.menuBarEnabled = menuBarPreferences.snapshot().isEnabled
         self.homeUsageRankingPreferences = homeUsageRankingPreferences
         self.homeUsageRankingPeriod = homeUsageRankingPreferences.snapshot()
+        self.capabilityFolderUsagePreferences = capabilityFolderUsagePreferences
+        self.capabilityFolderUsagePeriod = capabilityFolderUsagePreferences.period
         self.accountUsageSnapshot = nil
         self.accountUsageError = nil
         self.presentationRefreshCoordinator = presentationRefreshCoordinator
@@ -525,6 +531,12 @@ public final class DirectorAppModel: ObservableObject {
                 guard let self, self.homeUsageRankingPeriod != period else { return }
                 self.homeUsageRankingPeriod = period
             }
+        self.capabilityFolderUsagePreferencesCancellable = capabilityFolderUsagePreferences.$period
+            .removeDuplicates()
+            .sink { [weak self] period in
+                guard let self, self.capabilityFolderUsagePeriod != period else { return }
+                self.capabilityFolderUsagePeriod = period
+            }
     }
 
     /// Changes only the Home ranking projection. Both bounded result sets are
@@ -533,6 +545,11 @@ public final class DirectorAppModel: ObservableObject {
     /// SQLite read.
     public func setHomeUsageRankingPeriod(_ period: HomeUsageRankingPeriod) {
         homeUsageRankingPreferences.setPeriod(period)
+    }
+
+    /// Selection-only: both periods are already supplied by the shared batch.
+    public func setCapabilityFolderUsagePeriod(_ period: CapabilityFolderUsagePeriod) {
+        capabilityFolderUsagePreferences.setPeriod(period)
     }
 
     /// Installs services after the first window is already visible. This

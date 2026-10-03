@@ -1,5 +1,18 @@
 # Privacy
 
+Invocation observation stores only fixed evidence provenance values, stable
+resource/session IDs and existing normalized timing, status and confidence.
+Role names, working directories, manifest aliases, source ordinals and tool
+arguments are used transiently for identity resolution, never copied into the
+new provenance field. Historical repair changes only Director-owned derived
+rows and checkpoints; capability files, Codex logs, folders and evaluations
+are not cleared or rewritten.
+
+调用观测仅新增固定类型的证据来源，沿用稳定 ID、时间、状态和可信度。
+角色、工作目录、文件别名、原始序号与工具参数仅用于瞬时解析。
+历史修复只更新 Director 的派生记录和检查点，不清空或改写能力源文件、
+Codex 日志、文件夹及评价。
+
 Codex Director is designed for local, read-only inspection of a user's Codex capability system.
 
 ## Data read locally
@@ -15,10 +28,17 @@ time, reset-card count, and capture time. Account IDs, model-specific buckets,
 reset-card identifiers, credentials, and other account metadata are discarded;
 the app does not log or display them. With the menu bar disabled, this reader
 is not started. When enabled, a bounded account-only schedule may run after
-startup: it reads only aggregate system idle duration, never event contents,
-and adapts between five and thirty minutes. It pauses while the Mac is locked,
-asleep, or in Low Power Mode, and does not poll, read the Director database,
-or index capability files.
+startup. It transiently compares the system-reported frontmost application's
+bundle identifier with the exact validated Codex identifier, keeps only a safe
+foreground enum and the last confirmed Codex departure time in memory, and
+reads aggregate system idle duration. It uses one minute while Codex is
+frontmost, two minutes during the ten-minute departure grace or when identity
+is unknown, five minutes for another active application outside grace, and
+thirty minutes after thirty minutes idle. Foreground identity does not reveal
+whether a Codex task is running in the background. The app does not read or
+persist window, task or input-event contents or application-activity history.
+It pauses while the Mac is locked, asleep, or in Low Power Mode, and does not
+read the Director database or index capability files during account checks.
 
 ## Data stored locally
 
@@ -30,6 +50,12 @@ They do not contain source paths, capability bodies, prompts, sessions, or
 account data. Folder membership is edited locally by the user; no AI service or
 network request is used. Folder preferences are retained when derived index
 data is deleted and are not added to capability packages.
+
+The separate `com.peiweitang.CodexDirector.capabilityFolders.usagePeriod`
+preference stores only `7d` or `30d`. Folder counts reuse existing derived
+observations across all usage projects. Changing period or sort starts no
+source scan, account read, analytics request or additional database query.
+No usage content or project paths are added to this preference.
 
 ## Exports
 

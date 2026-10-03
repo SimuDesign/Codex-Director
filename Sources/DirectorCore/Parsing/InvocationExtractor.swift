@@ -26,9 +26,9 @@ public struct InvocationExtraction: Sendable {
 ///
 /// - Recognizes `custom_tool_call`, `custom_tool_call_output`, `function_call`,
 ///   and `function_call_output`, pairing calls and results by `call_id`.
-/// - Recovers the nested tool name from an `exec` wrapper only when a single
-///   unambiguous `tools.<name>` identifier is present in the (transient) input;
-///   the input itself is never retained.
+/// - Resolves literal, unconditional tool operations from bounded `exec`
+///   wrappers without executing or retaining their transient input.
+/// - Records child delegation once and excludes explicitly inherited history.
 /// - Preserves order, parent/child nesting, retry, error, interruption, and
 ///   missing-result signals. Duplicate events do not duplicate calls.
 /// - Never infers Skill use from a name in a prompt or system Skill list.
@@ -46,8 +46,9 @@ public struct InvocationExtractor: Sendable {
 
     /// Bounded-memory streaming extractor for one session. Feed envelopes in
     /// order; each transient payload is consumed and then released.
-    func makeAccumulator(sessionID: String) -> InvocationAccumulator {
-        InvocationAccumulator(state: ExtractionState(sessionID: sessionID, skillResolver: skillResolver, agentResolver: agentResolver))
+    func makeAccumulator(sessionID: String, projectID: String? = nil, workingDirectory: String? = nil) -> InvocationAccumulator {
+        InvocationAccumulator(state: ExtractionState(sessionID: sessionID, skillResolver: skillResolver, agentResolver: agentResolver,
+            projectID: projectID, workingDirectory: workingDirectory))
     }
 
     public func extract(sessionID: String, envelopes: [RolloutEnvelope]) -> InvocationExtraction {
@@ -71,6 +72,12 @@ private struct ExtractionState {
     let sessionID: String
     let skillResolver: SkillEvidenceResolver
     let agentResolver: AgentEvidenceResolver
+    var projectID: String?
+    var workingDirectory: String?
+    var historyBoundary: Int?
+    var hasUnknownForkBoundary = false
+    var processedMetadata = false
+    var warnedHistory = false
 
     var calls: [CallRecord] = []
     var openByCallID: [String: OpenCall] = [:]
@@ -81,6 +88,18 @@ private struct ExtractionState {
     var ordinal = 0
 
     mutating func process(_ envelope: RolloutEnvelope) {
+        if envelope.type == .sessionMeta {
+            handleSessionMetadata(envelope)
+            return
+        }
+        if hasUnknownForkBoundary || (historyBoundary != nil && envelope.sourceOrdinal == nil) {
+            if !warnedHistory {
+                issues.append(InvocationIssue(lineNumber: envelope.lineNumber, message: "inherited history boundary unavailable; calls not attributed"))
+                warnedHistory = true
+            }
+            return
+        }
+        if let boundary = historyBoundary, let sourceOrdinal = envelope.sourceOrdinal, sourceOrdinal < boundary { return }
         switch envelope.type {
         case .responseItem:
             guard let payload = envelope.payload else { return }
@@ -101,6 +120,8 @@ private struct ExtractionState {
                 handleSkillEvent(envelope: envelope, payload: payload)
             case "agent_invoked":
                 handleAgentEvent(envelope: envelope, payload: payload)
+            case "task_complete":
+                for index in calls.indices where calls[index].evidenceKind == .agentDelegation { calls[index].status = .completed }
             default:
                 break
             }
@@ -127,6 +148,29 @@ private struct ExtractionState {
         }
     }
 
+    private mutating func handleSessionMetadata(_ envelope: RolloutEnvelope) {
+        guard !processedMetadata, let payload = envelope.payload?.json else { return }
+        processedMetadata = true
+        workingDirectory = (payload["cwd"] as? String) ?? (payload["working_directory"] as? String) ?? (payload["workdir"] as? String) ?? workingDirectory
+        projectID = projectID ?? agentResolver.projectID(workingDirectory: workingDirectory)
+        historyBoundary = RolloutEnvelope.validatedOrdinal(payload["subagent_history_start_ordinal"])
+        hasUnknownForkBoundary = payload["forked_from_id"] != nil && historyBoundary == nil
+        let source = payload["source"] as? [String: Any]
+        guard payload["parent_thread_id"] is String || source?["subagent"] != nil,
+              let role = payload["agent_role"] as? String, !role.isEmpty,
+              !["default", "worker", "explorer"].contains(role.lowercased()) else { return }
+        let resolved = agentResolver.resolveStructuredEvent(agentIdentifier: role, projectID: projectID)
+        if resolved.resourceID == nil {
+            issues.append(InvocationIssue(lineNumber: envelope.lineNumber, message: "child Agent identity unresolved"))
+        }
+        calls.append(CallRecord(id: "delegation-\(sessionID)", sessionID: sessionID, parentCallID: nil,
+            ordinal: ordinal, timestamp: envelope.timestamp, actorName: nil, resourceID: resolved.resourceID,
+            kind: .agent, status: .started, durationMs: nil,
+            confidence: resolved.resourceID == nil ? .unknown : .inferred,
+            errorCategory: nil, hasResult: true, evidenceKind: .agentDelegation))
+        ordinal += 1
+    }
+
     private mutating func handleCallStart(envelope: RolloutEnvelope, payload: TransientPayload) {
         let itemID = payload.json["id"] as? String
         if let itemID, !seenItemIDs.insert(itemID).inserted {
@@ -135,7 +179,7 @@ private struct ExtractionState {
         }
 
         let callID = payload.json["call_id"] as? String
-        let name = payload.json["name"] as? String ?? "unknown"
+        let name = TransientToolInput.normalizedName(payload.json["name"] as? String ?? "unknown")
         let kind = Self.kind(for: name)
         let id = itemID ?? callID ?? "line-\(envelope.lineNumber)-\(ordinal)"
 
@@ -180,84 +224,57 @@ private struct ExtractionState {
                 message: "tool call without call_id; result pairing unavailable"))
         }
 
-        // exec wrapper: recover the nested tool name from the transient input.
-        let input = payload.json["input"] as? String
-        let evidenceToolName: String?
-        if name == "exec", let input {
-            let nested = Self.nestedToolNames(in: input)
-            if nested.count == 1 {
-                evidenceToolName = nested[0]
-                let childKind = Self.kind(for: nested[0])
-                let child = CallRecord(
-                    id: "\(id)-nested-\(nested[0])",
-                    sessionID: sessionID,
-                    parentCallID: id,
-                    ordinal: ordinal,
-                    timestamp: envelope.timestamp,
-                    actorName: nil,
-                    resourceID: "\(childKind.rawValue):\(nested[0])",
-                    kind: childKind,
-                    status: .completed,
-                    durationMs: nil,
-                    confidence: .exact,
-                    errorCategory: nil,
-                    hasResult: true
-                )
-                calls.append(child)
-                ordinal += 1
-            } else {
-                evidenceToolName = nil
-                issues.append(InvocationIssue(
-                    lineNumber: envelope.lineNumber,
-                    message: "nested tool name not recoverable (found \(nested.count))"))
+        let input = (payload.json["input"] as? String) ?? (payload.json["arguments"] as? String)
+        guard let input else { return }
+        let operations: [TransientToolInput.Call]
+        if name == "exec" {
+            guard let nested = TransientToolInput.literalCalls(input), !nested.isEmpty else {
+                issues.append(InvocationIssue(lineNumber: envelope.lineNumber, message: "nested tool name not recoverable; dynamic or unsupported wrapper"))
+                return
             }
-        } else {
-            evidenceToolName = name
+            operations = nested
+            for (offset, operation) in nested.enumerated() {
+                let childKind = Self.kind(for: operation.name)
+                let suffix = nested.count == 1 ? "" : "-\(offset)"
+                calls.append(CallRecord(id: "\(id)-nested-\(operation.name)\(suffix)", sessionID: sessionID,
+                    parentCallID: id, ordinal: ordinal, timestamp: envelope.timestamp, actorName: nil,
+                    resourceID: "\(childKind.rawValue):\(operation.name)", kind: childKind,
+                    status: .unknown, durationMs: nil, confidence: .exact, errorCategory: nil, hasResult: true))
+                ordinal += 1
+            }
+        } else { operations = [.init(name: name, input: input)] }
+        let uncertainBatch = operations.count > 1
+        var emittedSkills = Set<String>()
+        var emittedAgents = Set<String>()
+        for (operationIndex, operation) in operations.enumerated() {
+            if operation.name == "spawn_agent", let role = TransientToolInput.arguments(operation.input)?["agent_type"] as? String {
+                let resolved = agentResolver.resolveStructuredEvent(agentIdentifier: role, projectID: projectID)
+                appendEvidence(id: "\(id)-delegation-request-\(operationIndex)", parentID: id, envelope: envelope, resourceID: resolved.resourceID,
+                    kind: .agent, confidence: resolved.resourceID == nil ? .unknown : .inferred,
+                    evidence: .agentDelegationRequest, uncertain: uncertainBatch)
+            }
+            for resolved in skillResolver.resolveManifestReadSignals(input: operation.input, toolName: operation.name,
+                projectID: projectID, workingDirectory: workingDirectory) {
+                guard let resourceID = resolved.resourceID, emittedSkills.insert(resourceID).inserted else { continue }
+                appendEvidence(id: "\(id)-skill-\(resourceID)", parentID: id, envelope: envelope, resourceID: resourceID,
+                    kind: .skill, confidence: resolved.confidence, evidence: .skillManifestRead, uncertain: uncertainBatch)
+            }
+            for resolved in agentResolver.resolveManifestReadSignals(input: operation.input, toolName: operation.name,
+                projectID: projectID, workingDirectory: workingDirectory) {
+                guard let resourceID = resolved.resourceID, emittedAgents.insert(resourceID).inserted else { continue }
+                appendEvidence(id: "\(id)-agent-\(resourceID)", parentID: id, envelope: envelope, resourceID: resourceID,
+                    kind: .agent, confidence: resolved.confidence, evidence: .agentBriefRead, uncertain: uncertainBatch)
+            }
         }
+    }
 
-        // Capability evidence: only a real read of a discovered manifest in a
-        // tool input resolves to a child invocation. The transient input is
-        // never retained.
-        if let input, let evidenceToolName,
-           let resolved = skillResolver.resolveManifestReadSignal(input: input, toolName: evidenceToolName) {
-            let child = CallRecord(
-                id: "\(id)-skill-\(resolved.resourceID ?? "unresolved")",
-                sessionID: sessionID,
-                parentCallID: id,
-                ordinal: ordinal,
-                timestamp: envelope.timestamp,
-                actorName: nil,
-                resourceID: resolved.resourceID,
-                kind: .skill,
-                status: .started,
-                durationMs: nil,
-                confidence: resolved.confidence,
-                errorCategory: nil,
-                hasResult: false
-            )
-            calls.append(child)
-            ordinal += 1
-        }
-        if let input, let evidenceToolName,
-           let resolved = agentResolver.resolveManifestReadSignal(input: input, toolName: evidenceToolName) {
-            let child = CallRecord(
-                id: "\(id)-agent-\(resolved.resourceID ?? "unresolved")",
-                sessionID: sessionID,
-                parentCallID: id,
-                ordinal: ordinal,
-                timestamp: envelope.timestamp,
-                actorName: nil,
-                resourceID: resolved.resourceID,
-                kind: .agent,
-                status: .started,
-                durationMs: nil,
-                confidence: resolved.confidence,
-                errorCategory: nil,
-                hasResult: false
-            )
-            calls.append(child)
-            ordinal += 1
-        }
+    private mutating func appendEvidence(id: String, parentID: String, envelope: RolloutEnvelope, resourceID: String?,
+        kind: InvocationKind, confidence: EvidenceConfidence, evidence: InvocationEvidenceKind, uncertain: Bool) {
+        calls.append(CallRecord(id: id, sessionID: sessionID, parentCallID: parentID, ordinal: ordinal,
+            timestamp: envelope.timestamp, actorName: nil, resourceID: resourceID, kind: kind,
+            status: uncertain ? .unknown : .started, durationMs: nil, confidence: confidence,
+            errorCategory: nil, hasResult: false, evidenceKind: evidence, hasUncertainResult: uncertain))
+        ordinal += 1
     }
 
     private mutating func handleCallOutput(envelope: RolloutEnvelope, payload: TransientPayload) {
@@ -322,7 +339,7 @@ private struct ExtractionState {
         let dedupKey = (payload.json["id"] as? String) ?? "\(skillName)-\(envelope.lineNumber)"
         guard seenStructuredEvents.insert(dedupKey).inserted else { return }
 
-        let resolved = skillResolver.resolveStructuredEvent(skillName: skillName)
+        let resolved = skillResolver.resolveStructuredEvent(skillName: skillName, projectID: projectID)
         let eventStatus = Self.itemStatus(payload.json["status"])
         let record = CallRecord(
             id: "skill-\(dedupKey)",
@@ -337,7 +354,8 @@ private struct ExtractionState {
             durationMs: nil,
             confidence: resolved.confidence,
             errorCategory: nil,
-            hasResult: true
+            hasResult: true,
+            evidenceKind: .structuredInvocation
         )
         calls.append(record)
         ordinal += 1
@@ -356,7 +374,7 @@ private struct ExtractionState {
         }
         let dedupKey = (payload.json["id"] as? String) ?? "\(identifier)-\(envelope.lineNumber)"
         guard seenStructuredEvents.insert("agent-\(dedupKey)").inserted else { return }
-        let resolved = agentResolver.resolveStructuredEvent(agentIdentifier: identifier)
+        let resolved = agentResolver.resolveStructuredEvent(agentIdentifier: identifier, projectID: projectID)
         let eventStatus = Self.itemStatus(payload.json["status"])
         calls.append(CallRecord(
             id: "agent-\(dedupKey)",
@@ -371,7 +389,8 @@ private struct ExtractionState {
             durationMs: nil,
             confidence: resolved.confidence,
             errorCategory: nil,
-            hasResult: true
+            hasResult: true,
+            evidenceKind: .structuredInvocation
         ))
         ordinal += 1
     }
@@ -388,7 +407,7 @@ private struct ExtractionState {
         }
         // Derived capability children whose parent result is missing stay
         // honestly unknown.
-        for index in calls.indices where (calls[index].kind == .skill || calls[index].kind == .agent) && calls[index].status == .started {
+        for index in calls.indices where (calls[index].kind == .skill || calls[index].kind == .agent) && calls[index].status == .started && calls[index].evidenceKind != .agentDelegation {
             calls[index].status = .unknown
         }
         let events = calls.map { $0.toEvent() }
@@ -398,7 +417,7 @@ private struct ExtractionState {
     /// Propagates the parent call's resolved status to derived capability children.
     private static func propagateToSkillChildren(calls: inout [CallRecord], parentID: String, status: InvocationStatus) {
         for index in calls.indices where (calls[index].kind == .skill || calls[index].kind == .agent) && calls[index].parentCallID == parentID {
-            calls[index].status = status
+            calls[index].status = calls[index].hasUncertainResult && status == .completed ? .unknown : status
         }
     }
 }
@@ -417,6 +436,8 @@ private struct CallRecord {
     let confidence: EvidenceConfidence
     var errorCategory: String?
     var hasResult: Bool
+    var evidenceKind: InvocationEvidenceKind? = nil
+    var hasUncertainResult = false
 
     func toEvent() -> InvocationEvent {
         InvocationEvent(
@@ -431,7 +452,8 @@ private struct CallRecord {
             status: status,
             durationMs: durationMs,
             confidence: confidence,
-            errorCategory: errorCategory
+            errorCategory: errorCategory,
+            evidenceKind: evidenceKind
         )
     }
 }
@@ -446,7 +468,7 @@ private struct OpenCall {
 private extension ExtractionState {
     static func kind(for name: String) -> InvocationKind {
         switch name {
-        case "spawn_agent", "send_input", "wait_agent", "resume_agent", "close_agent":
+        case "spawn_agent", "send_input", "wait_agent", "resume_agent", "close_agent", "send_message", "followup_task", "interrupt_agent", "list_agents":
             return .orchestration
         default:
             return .tool
@@ -491,26 +513,4 @@ private extension ExtractionState {
         return Int(secs * 1000 + nanos / 1_000_000)
     }
 
-    /// Bare `tools.<name>` identifiers inside an exec wrapper's JS-style input.
-    /// Returns all matches so ambiguity can be detected.
-    static func nestedToolNames(in input: String) -> [String] {
-        var names: [String] = []
-        var searchRange = input.startIndex..<input.endIndex
-        while let range = input.range(of: "tools.", options: [], range: searchRange) {
-            var end = range.upperBound
-            while end < input.endIndex {
-                let character = input[end]
-                if character.isLetter || character.isNumber || character == "_" || character == "-" {
-                    end = input.index(after: end)
-                } else {
-                    break
-                }
-            }
-            if end > range.upperBound {
-                names.append(String(input[range.upperBound..<end]))
-            }
-            searchRange = end..<input.endIndex
-        }
-        return names
-    }
 }

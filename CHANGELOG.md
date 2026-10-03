@@ -4,6 +4,42 @@ All notable public changes will be documented here. The project follows semantic
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.5.0
+
+Capability-folder usage. Internal build: `33`. Local iteration only; no Tag or GitHub Release is implied.
+
+- Shows each capability's observed calls in Agent & Companion Skills, Agent and Skill tabs, including out-of-folder Skill previews without changing membership.
+- Adds an independent, remembered Last 7 days / Last 30 days selector shared across windows. Usage ascending/descending and Name A–Z sorting retain the selected period.
+- Labels the all-usage-project scope; distinguishes pending statistics from observed zero and keeps partial/inferred evidence qualifications in help, accessibility and details.
+- Reuses the existing bounded batch and in-memory projections. Switching period/sort does not index, read account usage or query SQLite; source files, folder members, parser/schema and manifest v1 remain unchanged.
+
+## 1.4.4
+
+Local invocation-observation repair. Internal build: `32`. No Tag or GitHub Release is implied.
+
+- Recognizes actual child-session Agent roles with project-aware identity resolution; keeps delegation requests separate from confirmed child launches.
+- Maps project/global Agent configurations and companion Briefs to the existing stable resource identity without changing folder memberships or evaluations.
+- Recognizes literal batch tool reads, JSON function arguments and multiple known manifests; uncertain branches, dynamic inputs and mixed mutations remain unattributed.
+- Excludes inherited child history and redundant own-Agent reads from usage totals, while retaining fixed evidence provenance. Read/dispatch completion does not prove capability effectiveness.
+- Upgrades the derived schema transactionally and reparses recent old-parser sessions once in the background. Unchanged older archives remain deferred; cancellation cannot advance an uncommitted checkpoint.
+
+## 1.4.3
+
+Adaptive menu-bar allowance refresh. Internal build: `31`. No Tag or GitHub Release is implied.
+
+- Uses the exact `com.openai.codex` foreground application identity for a one-minute cadence, a two-minute cadence for ten minutes after confirmed departure, and a five-minute cadence while another application remains active after that grace period.
+- Keeps a conservative two-minute fallback when foreground identity is unknown and a thirty-minute cadence after thirty minutes of aggregate input idle time. Foreground status is not treated as evidence of background Codex task activity.
+- Keeps foreground state and the last confirmed Codex departure only in memory. No window, task or input-event contents and no application-activity history are read or persisted.
+- Preserves pause/disable gates, the two-minute popover freshness rule, reset-aware reads, one shared coordinator, cached values, and stable 5/15/30-minute failure deadlines under repeated system or cache notifications.
+
+## 1.4.2
+
+Local account-refresh patch. Internal build: `30`. No Tag or GitHub Release is implied.
+
+- Refreshes menu-bar account allowance every two minutes during active use without opening the popover; idle account reads remain thirty minutes apart.
+- Detects resumed aggregate input activity using the existing single wake-up, without starting Codex, reading SQLite or indexing capabilities during idle checks.
+- Restores the two-minute popover freshness threshold and preserves reset deadlines, shared refresh coalescing, pause states, cached values and 5/15/30-minute failure backoff.
+
 ## 1.4.1
 
 Source update; this merge does not create a Tag or GitHub Release. Internal build: `29`.

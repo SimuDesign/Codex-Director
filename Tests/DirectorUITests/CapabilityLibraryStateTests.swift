@@ -95,10 +95,10 @@ final class CapabilityLibraryStateTests: XCTestCase {
         XCTAssertEqual(model.rows.map { model.displayedUsageCount(for: $0) }, [8, 0, nil])
     }
 
-    func testFolderSortOffersBothPeriodsAndLocalizedCurrentValue() {
-        XCTAssertEqual(CapabilityFolderSort.allCases.map(\.rawValue), ["recentUsageDescending", "thirtyDayUsageDescending", "usageAscending", "nameAscending"])
-        XCTAssertEqual(CapabilityFolderSort.thirtyDayUsageDescending.title(.simplifiedChinese), "近 30 天调用 ↓")
-        XCTAssertEqual(CapabilityFolderSort.thirtyDayUsageDescending.title(.english), "Past 30 days ↓")
+    func testFolderSortIsIndependentOfPeriodAndHasLocalizedCurrentValue() {
+        XCTAssertEqual(CapabilityFolderSort.allCases.map(\.rawValue), ["usageDescending", "usageAscending", "nameAscending"])
+        XCTAssertEqual(CapabilityFolderSort.usageDescending.title(.simplifiedChinese), "调用量 ↓")
+        XCTAssertEqual(CapabilityFolderSort.usageDescending.title(.english), "Usage ↓")
     }
     func testDefaultSortUsesSevenDayCountBeforeHistoryDate() {
         let a = CapabilityCatalogEntry(resource: resource("a", project: nil), category: .customAgents, parentPluginID: nil)

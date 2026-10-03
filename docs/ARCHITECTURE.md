@@ -24,7 +24,7 @@ capabilities automatically and never changes source files or folder membership.
 
 ## Refresh and concurrency
 
-Application surfaces share one refresh coordinator. Source scanning and projection are distinct phases. Cached results appear before background refresh, failures retain the last valid projection, and late or cancelled work cannot overwrite newer state. The enabled menu bar has one app-scoped account-only scheduler: after startup grace it uses five-minute wakes while the aggregate session is active and 30-minute wakes after 30 minutes idle, backs off failed reads at 5/15/30 minutes, and pauses on lock, sleep or Low Power Mode. Its bounded wake-up never starts capability indexing or reads SQLite.
+Application surfaces share one refresh coordinator. Source scanning and projection are distinct phases. Cached results appear before background refresh, failures retain the last valid projection, and late or cancelled work cannot overwrite newer state. The enabled menu bar has one app-scoped account-only scheduler: after startup grace it uses exact `com.openai.codex` frontmost identity for a one-minute account cadence, a two-minute cadence for ten minutes after confirmed departure, a five-minute cadence for another active application outside grace, a conservative two-minute cadence when identity is unknown, and a thirty-minute cadence after thirty minutes of aggregate input idle time. It pauses on lock, sleep or Low Power Mode. The monitor reduces transient bundle identity to a safe enum and in-memory departure timestamp; it keeps no application-activity history and reads no window, task or input-event contents. Foreground identity is not evidence of background task execution. The scheduler keeps account-read and local policy/activity deadlines separate, reevaluates policy before every read, and anchors failed reads at stable 5/15/30-minute retry deadlines. One bounded wake checks idle recovery at most once per minute when needed without starting Codex. Opening the popover refreshes missing, expired or at-least-two-minute-old account data through the same coordinator. Account reads also respect the earliest reported reset. The bounded wake-up never starts capability indexing or reads SQLite.
 
 The sanitized app-server snapshot is also composed into Home as the current five-hour and weekly allowance for the canonical Codex source when it is at least as recent as that window's indexed observation. This is a presentation-only merge: indexed observations remain the sole input to the seven-day weekly chart, and live account values are never inserted into session evidence or SQLite history. The account DTO and indexed projection remain separate fields in presentation-cache schema v1 so old caches stay readable.
 
@@ -50,14 +50,51 @@ rule, and an incomplete list cannot be marked complete in `plugins.json`.
 Settings diagnostics retain their last valid result during a source refresh
 and reload when that index pass completes.
 
-Rollout parser v1.3.0 recognizes the current top-level `token_usage_record`
+Rollout parser v1.4.0 recognizes the current top-level `token_usage_record`
 and `inter_agent_communication_metadata` envelopes. Token totals use the
 record's cumulative `thread_token_usage`, never its per-response or per-turn
 value, and do not add it to legacy `token_count` totals. Legacy rate-limit
 windows remain a separate evidence stream. On parser upgrade, unchanged 1.2.0
-rollouts older than the 30-day ranking window are left at their existing
-checkpoint; recent files and any subsequently changed older file are reparsed.
-This bounds one-time historical work without altering source files.
+and 1.3.0 rollouts outside the last 30 local calendar days (by both cached
+session end and file modification time) retain their checkpoint. Recent files
+are transactionally reparsed once; changed older files continue normal indexing.
+Cancellation does not advance an uncommitted checkpoint. A changing source
+is not stamped fully current, and append parses recover a bounded metadata
+header rather than replaying old calls or token totals.
+
+Agent identity resolution preserves canonical stable IDs and consumes ephemeral
+TOML/Brief aliases for both scopes. Explicit paths identify their own configured
+scope; named roles prefer the current registered project and otherwise a unique
+global candidate. Ambiguity is not guessed. `agent_path` is not a configuration
+path and is not used as identity evidence. Actual child metadata emits one launch
+observation per child, while `agent_type` supplies request evidence only. Explicit
+source ordinals exclude inherited fork history; missing boundaries remain unknown.
+Literal read extraction is bounded and never executes shell or JavaScript.
+Multiple known manifests are resolved independently; comments, quoted tool names,
+dynamic paths, uncertain control flow and mixed mutations are not use evidence.
+
+Derived schema v6 adds nullable allowlisted `evidence_kind` provenance. Legacy
+rows and cached JSON remain readable. Capability aggregates use an indexed view
+that excludes delegation requests and redundant own-Agent Brief/structured events
+when an actual child launch exists. Raw normalized evidence remains available.
+Other Brief and Skill reads remain inferred observations, not proof of complete
+workflow execution or effectiveness. No prompts, raw arguments/outputs, paths or
+role instructions enter the new field.
+
+## Capability-folder usage presentation
+
+`CapabilityFolderUsagePreferences` stores only the independent seven/thirty-day
+period; AppLaunchState shares it across windows and validation hosts use memory
+storage. Changing it publishes presentation state only. The existing app-scoped
+folder loader obtains both windows in one bounded batch from the normalized
+usage view, with no project filter. Ownership and membership remain separate
+from usage-project scope. Every row, including related-preview Skills, uses its
+own stable resource ID; shared Skill calls are not summed into Agent counts.
+Usage/name sorting consumes this cached dictionary. An absent dictionary means
+pending (`—`); an absent resource/window after successful computation means
+no recorded observation (`0`), not proof of non-use. Evidence qualifiers remain
+in localized help/AX/details. Companion shared-session evidence stays seven-day
+and noncausal. No schema migration, rollout reparse or new indexer is introduced.
 
 ## Capability packages
 

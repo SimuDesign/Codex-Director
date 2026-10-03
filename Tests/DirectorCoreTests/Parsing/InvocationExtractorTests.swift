@@ -229,7 +229,7 @@ final class InvocationExtractorTests: XCTestCase {
         }
 
         let readOnly = extractor.extract(sessionID: sessionID, envelopes: [
-            call("", callID: "sed-read-agent", name: "exec", input: "const r = await tools.exec_command({command: 'sed -n sample-agent/agent.md'})"),
+            call("", callID: "sed-read-agent", name: "exec", input: "const r = await tools.exec_command({command: 'sed -n 1,200p sample-agent/agent.md'})"),
             output("", callID: "sed-read-agent"),
         ])
         XCTAssertTrue(readOnly.calls.contains { $0.kind == .agent && $0.resourceID == agent.id })
@@ -492,13 +492,13 @@ final class InvocationExtractorTests: XCTestCase {
         assertNoSkillInvocation(result)
     }
 
-    func testSkillManifestPathInSecondShellLineDoesNotResolve() throws {
+    func testSkillManifestInUnconditionalReadOnlySecondShellLineResolves() throws {
         let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: skillResources()))
         let result = extractor.extract(sessionID: sessionID, envelopes: [
             envelope(#"{"type":"response_item","timestamp":"2026-08-15T04:12:05.949Z","payload":{"type":"custom_tool_call","id":"newline-skill","call_id":"newline-skill","name":"exec","input":"const r = await tools.exec_command({command: 'cat unrelated.txt\u000acat sample-skill/SKILL.md'})"}}"#, line: 1),
             output("", callID: "newline-skill"),
         ])
-        assertNoSkillInvocation(result)
+        XCTAssertTrue(result.calls.contains { $0.kind == .skill && $0.resourceID == "skill:sample-skill" })
     }
 
     func testSedMutationOptionsDoNotResolveSkillManifest() throws {
@@ -518,23 +518,22 @@ final class InvocationExtractorTests: XCTestCase {
         }
 
         let readOnly = extractor.extract(sessionID: sessionID, envelopes: [
-            envelope(#"{"type":"response_item","timestamp":"2026-08-15T04:12:05.949Z","payload":{"type":"custom_tool_call","id":"sed-read-skill","call_id":"sed-read-skill","name":"exec","input":"const r = await tools.exec_command({command: 'sed -n sample-skill/SKILL.md'})"}}"#, line: 10),
+            envelope(#"{"type":"response_item","timestamp":"2026-08-15T04:12:05.949Z","payload":{"type":"custom_tool_call","id":"sed-read-skill","call_id":"sed-read-skill","name":"exec","input":"const r = await tools.exec_command({command: \"sed -n '1,200p' sample-skill/SKILL.md\"})"}}"#, line: 10),
             output("", callID: "sed-read-skill"),
         ])
         XCTAssertTrue(readOnly.calls.contains { $0.kind == .skill && $0.resourceID == "skill:sample-skill" })
     }
 
-    func testAmbiguousManifestSignalProducesUnknownSkillEvidence() throws {
+    func testMultipleKnownManifestsProduceSeparateSkillEvidence() throws {
         let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: skillResources()))
         let result = extractor.extract(sessionID: sessionID, envelopes: [
             readCall("read sample-skill/SKILL.md other-skill/SKILL.md"),
             output("", callID: "r1"),
         ])
-        XCTAssertEqual(result.calls.count, 2)
-        let skill = result.calls[1]
-        XCTAssertEqual(skill.kind, .skill)
-        XCTAssertEqual(skill.confidence, .unknown)
-        XCTAssertNil(skill.resourceID)
+        XCTAssertEqual(result.calls.count, 3)
+        let skills = result.calls.filter { $0.kind == .skill }
+        XCTAssertEqual(Set(skills.compactMap(\.resourceID)), ["skill:sample-skill", "skill:other-skill"])
+        XCTAssertTrue(skills.allSatisfy { $0.confidence == .inferred })
     }
 
     func testSystemPromptSkillNameProducesNoSkillInvocation() throws {

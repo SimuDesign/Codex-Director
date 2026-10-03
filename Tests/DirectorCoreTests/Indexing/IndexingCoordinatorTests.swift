@@ -202,6 +202,70 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(checkpoint?.parserVersion, RolloutEventDecoder.parserVersion)
     }
 
+    func testObservationUpgradeReparsesRecentSessionDespiteOldFileMtimeExactlyOnce() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("observation-upgrade")
+        let url = active.appendingPathComponent("recent-old-mtime.jsonl")
+        let now = Date()
+        let stamp = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        try write([metaLine(id: "session:recent-evidence").replacingOccurrences(of: "2026-08-15T04:11:50.973Z", with: stamp)], to: url)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-50 * 86_400)], ofItemAtPath: url.path)
+        let coordinator = makeCoordinator(store: store)
+        _ = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        let storedCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        let checkpoint = try XCTUnwrap(storedCheckpoint)
+        try await store.upsertCheckpoint(IndexCheckpoint(sourceFileID: checkpoint.sourceFileID, sourceSize: checkpoint.sourceSize,
+            sourceMtime: checkpoint.sourceMtime, byteOffset: checkpoint.byteOffset, parserVersion: "1.3.0", indexedAt: now))
+        let repaired = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        XCTAssertEqual(repaired.indexedSessions, 1)
+        let repeated = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        XCTAssertEqual(repeated.skippedFiles, 1)
+    }
+
+    func testAppendedChildSessionRestoresRoleScopeAliasesAndHistoryBoundary() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("child-append")
+        let project = try tempDirectory("child-project")
+        let agentDir = project.appendingPathComponent(".codex/agents/sample-agent")
+        let skillDir = project.appendingPathComponent(".agents/skills/sample-skill")
+        try FileManager.default.createDirectory(at: agentDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        try "name = \"Sample Agent\"\n".write(to: project.appendingPathComponent(".codex/agents/sample-agent.toml"), atomically: true, encoding: .utf8)
+        try "# Sample Agent\nSynthetic method.\n".write(to: agentDir.appendingPathComponent("agent.md"), atomically: true, encoding: .utf8)
+        try "---\nname: sample-skill\n---\n".write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        func line(_ type: String, _ payload: [String: Any], _ ordinal: Int) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: ["type": type, "timestamp": "2026-10-03T00:00:00Z", "ordinal": ordinal, "payload": payload]), as: UTF8.self)
+        }
+        let url = active.appendingPathComponent("child.jsonl")
+        try write([
+            line("session_meta", ["id": "session:child", "cwd": project.path, "agent_role": "Sample Agent", "parent_thread_id": "parent", "forked_from_id": "parent", "subagent_history_start_ordinal": 3], 0),
+            line("response_item", ["type": "custom_tool_call", "id": "inherited", "call_id": "inherited", "name": "read", "input": ".agents/skills/sample-skill/SKILL.md"], 1),
+            line("response_item", ["type": "custom_tool_call", "id": "brief", "call_id": "brief", "name": "read", "input": ".codex/agents/sample-agent/agent.md"], 3),
+            line("response_item", ["type": "custom_tool_call_output", "call_id": "brief", "output": "synthetic"], 4)
+        ], to: url)
+        let config = IndexingCoordinator.Configuration(scanRoots: [ScanRoot(id: "project", url: project, scope: .project, kind: .projects)], activeSessionRoots: [active], archivedSessionRoot: nil)
+        let discovery = ResourceScanner(roots: config.scanRoots).scan()
+        XCTAssertEqual(discovery.agentPairings.count, 1)
+        let resolution = AgentEvidenceResolver(resources: discovery.resources, roots: config.scanRoots, pairings: discovery.agentPairings)
+            .resolveManifestReadSignals(input: ".codex/agents/sample-agent/agent.md", toolName: "read", projectID: "project", workingDirectory: project.path)
+        XCTAssertEqual(resolution.count, 1)
+        let coordinator = makeCoordinator(store: store)
+        _ = try await coordinator.run(configuration: config)
+        try append([
+            line("response_item", ["type": "function_call", "id": "skill", "call_id": "skill", "name": "exec_command", "arguments": "{\"cmd\":\"cat .agents/skills/sample-skill/SKILL.md\"}"], 5),
+            line("response_item", ["type": "function_call_output", "call_id": "skill", "output": "synthetic"], 6)
+        ], to: url)
+        _ = try await coordinator.run(configuration: config)
+        let calls = try await store.fetchCalls(sessionID: "session:child")
+        XCTAssertEqual(calls.filter { $0.evidenceKind == .agentDelegation }.count, 1)
+        XCTAssertEqual(calls.filter { $0.evidenceKind == .agentBriefRead }.count, 1)
+        XCTAssertEqual(calls.filter { $0.evidenceKind == .skillManifestRead }.count, 1)
+        XCTAssertFalse(calls.contains { $0.id.contains("inherited") })
+        let usage = try await store.fetchCapabilityHistory(through: Date(timeIntervalSince1970: 1_800_000_000))
+        let agentUsage = usage.filter { $0.resourceID.hasPrefix("agent:") }
+        XCTAssertEqual(agentUsage.first?.callCount, 1)
+    }
+
     func testCurrentTokenUpgradeDefersUnchangedRolloutOlderThanThirtyDays() async throws {
         let store = try makeStore()
         let active = try tempDirectory("active")
@@ -377,6 +441,37 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(count_sessions, 0)
         let count_calls = try await store.count("calls");
         XCTAssertEqual(count_calls, 0)
+    }
+
+    func testCancellationDuringAppendPreservesCommittedCheckpointAndRetryEvidence() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("cancel-append")
+        let file = active.appendingPathComponent("synthetic-cancel.jsonl")
+        try write([metaLine(id: "cancel-child"), callLine(callID: "first", name: "read"), outputLine(callID: "first")], to: file)
+        let coordinator = makeCoordinator(store: store)
+        let config = configuration(activeRoots: [active])
+        _ = try await coordinator.run(configuration: config)
+        let before = try await store.fetchCheckpoint(sourceFileID: file.lastPathComponent)
+        let padding = #"{"type":"response_item","payload":{"type":"message","text":"\#(String(repeating: "x", count: 1_100_000))"}}"#
+        try append([padding, callLine(callID: "second", name: "read"), outputLine(callID: "second")], to: file)
+        let progress = ProgressBox()
+        let task = Task {
+            try await coordinator.run(configuration: config) { event in
+                progress.append(event)
+                if event.currentFileBytesRead != nil { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { _ = try await task.value; XCTFail("expected mid-file cancellation") }
+        catch is CancellationError { }
+        XCTAssertTrue(progress.snapshot.contains { $0.currentFileBytesRead != nil })
+        let cancelledCheckpoint = try await store.fetchCheckpoint(sourceFileID: file.lastPathComponent)
+        let cancelledCalls = try await store.fetchCalls(sessionID: "cancel-child")
+        XCTAssertEqual(cancelledCheckpoint, before)
+        XCTAssertEqual(cancelledCalls.count, 1)
+        _ = try await coordinator.run(configuration: config)
+        let retriedCalls = try await store.fetchCalls(sessionID: "cancel-child")
+        XCTAssertEqual(retriedCalls.count, 2)
+        XCTAssertEqual(Set(retriedCalls.map(\.id)).count, 2)
     }
 
     private var fixturesResourcesRoot: URL {
