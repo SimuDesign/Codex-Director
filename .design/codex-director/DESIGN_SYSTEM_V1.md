@@ -1,6 +1,6 @@
 # Codex Director Design System v1
 
-Version: `1.5.0` (visible marketing version; internal build `33`)
+Version: `1.5.0` (visible marketing version; internal build `34`)
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
 Last updated: 2026-09-23
@@ -838,3 +838,27 @@ the viewport-pinned detail Sheet. Compare actual input-to-first-correct-paint,
 memory, scroll smoothness, Light/Dark, Increase Contrast, Reduce Motion and
 actual VoiceOver reading on the complete page. A faster stripped-down table
 alone does not satisfy these conditions or authorize production replacement.
+
+### Unified capability filters — 2026-10-05
+
+Supersedes the 1.4.1 period-in-sort contract and the old 32pt library filter
+height only. All four libraries and all folder interiors share
+`DirectorUsagePeriodPicker`, `DirectorUsageSortMenu` and
+`DirectorCapabilityFilterMetrics`: 36pt outer fields, 232pt period selector,
+176pt sort field, 12pt horizontal gaps, existing neutral outline/brand-selected
+rail, native focus/keyboard/AX and full painted hit bounds. The period control
+uses a scoped native fitting height; other tabs/Settings retain their metrics.
+
+Order: search, applicable configuration/usage scope, Last 7/30 days, sort,
+applicable plugin status. An enclosing folder needs no redundant scope picker.
+Sort uses the identical Usage ↓ / Usage ↑ / Name A–Z labels; only custom
+libraries add Modified ↓. Both periods and all sort directions use cached
+projections. Period selection is app-shared and remembered through the existing
+preference key, independent of Home ranking period. Name/modified/ascending
+sort, scope and search do not reset it. Fixed summary-card and companion
+co-observation periods remain explicitly seven/thirty days as already defined.
+
+Measure actual inner content width once; search moves to its own row before
+selectors wrap into two columns or a stack. Keep one native search editor and
+all current values visible. Rows label the selected count period, preserve
+pending/zero/unavailable distinctions and never add new indexing/query work.

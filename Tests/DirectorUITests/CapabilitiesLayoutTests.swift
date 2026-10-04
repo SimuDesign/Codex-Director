@@ -131,12 +131,12 @@ final class CapabilitiesLayoutTests: XCTestCase {
     }
 
     func testFilterLayoutUsesOneMeasuredWidthForSearchAndSelectors() {
-        XCTAssertTrue(DirectorFilterLayout.searchAndControlsFit(width: 668, category: .installedPlugins))
-        XCTAssertFalse(DirectorFilterLayout.searchAndControlsFit(width: 667, category: .installedPlugins))
-        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 667, category: .installedPlugins), .row)
-        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 400, category: .installedPlugins), .twoColumns)
+        XCTAssertTrue(DirectorFilterLayout.searchAndControlsFit(width: 956, category: .installedPlugins))
+        XCTAssertFalse(DirectorFilterLayout.searchAndControlsFit(width: 955, category: .installedPlugins))
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 724, category: .installedPlugins), .row)
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 500, category: .installedPlugins), .twoColumns)
         XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 300, category: .installedPlugins), .singleColumn)
-        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 320, category: .customAgents), .row)
+        XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 584, category: .customAgents), .row)
         XCTAssertEqual(DirectorFilterLayout.selectorArrangement(width: 280, category: .customAgents), .singleColumn)
     }
 

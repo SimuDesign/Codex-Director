@@ -85,7 +85,12 @@ role instructions enter the new field.
 
 `CapabilityFolderUsagePreferences` stores only the independent seven/thirty-day
 period; AppLaunchState shares it across windows and validation hosts use memory
-storage. Changing it publishes presentation state only. The existing app-scoped
+storage. The four capability library models now share this same preference;
+their independent presentation period is included in row/text cache identity.
+Usage/name/modified sort changes retain it. The existing Core period-specific
+sort cases remain backward-compatible but are absent from native menus. There
+is no Core query, schema, cache or preference-key migration. Changing the period
+publishes presentation state only. The existing app-scoped
 folder loader obtains both windows in one bounded batch from the normalized
 usage view, with no project filter. Ownership and membership remain separate
 from usage-project scope. Every row, including related-preview Skills, uses its

@@ -284,7 +284,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.5.0 with internal build 33, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.5.0 with internal build 34, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -646,3 +646,21 @@ and existing membership remain unchanged. A synthetic DB observer must prove
 repeated period/sort changes do not query/index/read accounts after the batch
 loads. Author verification and actual VoiceOver or independent QA evidence
 must be reported separately; neither AX presence nor source tests prove speech.
+
+### Unified capability filters — 2026-10-05
+
+Supersedes the old library period-in-sort matrix. Exercise all four libraries
+and folder interiors: shared seven/thirty-day selector, Usage ↓ / Usage ↑ /
+Name A–Z, and custom-library Modified ↓. Select thirty days, then change sort,
+search and scope: keep thirty-day counts, matching labels and unknown-last
+semantics. Switch destinations/windows and relaunch: shared remembered period
+survives, while Home period, fixed summary metrics and members stay unchanged.
+Test opposite period ordering and pending, zero and unavailable plugin values.
+
+Check uniform 36pt fields, 232pt period/176pt sort widths and 12pt gaps at narrow
+and default widths in zh/en Light/Dark. Hit field edges/padding/chevron and use
+native keyboard focus/activation. Selector layout wraps based on inner width,
+not window width; do not clip labels or duplicate search editors. Verify actual
+AX period/count values; record VoiceOver speech and Increase Contrast/Reduce
+Motion/Transparency runtime checks separately. Repeated period/sort operations
+after loading must leave SQLite/index/account query counters unchanged.

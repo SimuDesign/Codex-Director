@@ -19,7 +19,7 @@ folders or evaluations.
 - The Installed Skills total, list, and usage ranking cover independently installed Skills only. Installed plugins have their own count; any observed plugin-provided Skills remain source-labeled in capability folders and do not inflate independent totals.
 - Shows privacy-safe recent usage evidence and data freshness without treating activity as proof of effectiveness.
 - Ranks observed capability calls over either the last 7 or 30 local calendar days. The first launch defaults to 7 days, then remembers the last selected period without starting a new index or query when switched.
-- Agent, Skill and plugin libraries offer **Past 30 days ↓** sorting. All three capability-folder tabs show observed calls with an independent, remembered **Last 7 days / Last 30 days** selector and usage/name sorting. Switching periods or sort uses loaded statistics.
+- Agent, Skill and plugin libraries and all three capability-folder tabs share an independent, remembered **Last 7 days / Last 30 days** selector and **Usage ↓ / Usage ↑ / Name A–Z** sorting. Custom libraries also retain modification-time sorting. Sorting by name or ascending usage keeps the selected period; switching uses loaded statistics.
 - Records lightweight human evaluations alongside the evidence.
 - Exports an open, unencrypted `.codexpack.zip` with manifests, checksums, plugin and dependency lists, and bilingual recovery instructions.
 - Restores a trusted `.codexpack.zip` locally through an isolated verification and preflight flow. It creates missing files only, skips identical files, stops on conflicts, and never executes or installs package content. Before writing, it creates a private mode-0700 quarantine. Failure cleanup and in-session Undo move verified unchanged objects out of their logical paths into that quarantine without deleting them; Codex Director never automatically destroys quarantine contents. The result can reveal the local folder in Finder for manual review and deletion.
@@ -38,7 +38,7 @@ Global and project folders reflect configuration ownership from the current read
 
 The browser uses responsive folder grids, compact outlined lists, brand-outline tabs, consistent section gutters and explicit control spacing, plus an in-place detail sidebar. Search, sort, the selected tab, and expanded relationships stay independent within each folder/tab for the current window session. Skill details link back to related Agents; declarations and seven-day shared-session observations remain separate, and neither implies effectiveness or proves invocation.
 
-Folder row counts cover **all usage projects**, not just the configuration owner or the folder. Each Agent and related-preview Skill shows its own observed count; shared Skills are not added to Agent totals. Pending statistics show `—`; `0` means no observation in the computed period, not proof that a capability was never used. The folder period is remembered independently of Home rankings and does not change membership or source files.
+Folder row counts cover **all usage projects**, not just the configuration owner or the folder. Each Agent and related-preview Skill shows its own observed count; shared Skills are not added to Agent totals. Pending statistics show `—`; `0` means no observation in the computed period, not proof that a capability was never used. Folders and capability libraries share a remembered period independently of Home rankings, without changing membership or source files. Library scope and plugin-status filters remain available.
 
 ## Product screenshots
 

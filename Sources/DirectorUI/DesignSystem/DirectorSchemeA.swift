@@ -522,15 +522,17 @@ public struct DirectorOutlinedSegmentedControl<Selection: Hashable>: View {
 
     private let label: String
     private let options: [Option]
+    private let minimumHeight: CGFloat?
     @Binding private var selection: Selection
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
-    public init(_ label: String, selection: Binding<Selection>, options: [Option]) {
+    public init(_ label: String, selection: Binding<Selection>, options: [Option], minimumHeight: CGFloat? = nil) {
         self.label = label
         self.options = options
         self._selection = selection
+        self.minimumHeight = minimumHeight
     }
 
     public var body: some View {
@@ -540,7 +542,8 @@ public struct DirectorOutlinedSegmentedControl<Selection: Hashable>: View {
             selectedIndex: options.firstIndex(where: { $0.value == selection }) ?? -1,
             isEnabled: isEnabled,
             increasedContrast: contrast == .increased,
-            reduceTransparency: reduceTransparency
+            reduceTransparency: reduceTransparency,
+            minimumHeight: minimumHeight
         ) { index in
             guard options.indices.contains(index) else { return }
             selection = options[index].value
@@ -555,6 +558,7 @@ private struct DirectorNativeSegmentedControlBridge: NSViewRepresentable {
     let isEnabled: Bool
     let increasedContrast: Bool
     let reduceTransparency: Bool
+    let minimumHeight: CGFloat?
     let selectionChanged: (Int) -> Void
 
     func makeNSView(context: Context) -> DirectorNativeOutlinedSegmentedControl {
@@ -569,7 +573,8 @@ private struct DirectorNativeSegmentedControlBridge: NSViewRepresentable {
             selectedIndex: selectedIndex,
             isEnabled: isEnabled,
             increasedContrast: increasedContrast,
-            reduceTransparency: reduceTransparency
+            reduceTransparency: reduceTransparency,
+            minimumHeight: minimumHeight
         )
     }
 
@@ -592,6 +597,7 @@ final class DirectorNativeOutlinedSegmentedControl: NSSegmentedControl {
     var reduceTransparency = false
     var selectionChanged: ((Int) -> Void)?
     private var appliedAccessibilityLabel: String?
+    private var minimumHeight: CGFloat?
     private var hoveredSegment: Int?
     private var pressedSegment: Int?
     private var hoverTrackingArea: NSTrackingArea?
@@ -623,11 +629,13 @@ final class DirectorNativeOutlinedSegmentedControl: NSSegmentedControl {
         selectedIndex: Int,
         isEnabled: Bool,
         increasedContrast: Bool,
-        reduceTransparency: Bool
+        reduceTransparency: Bool,
+        minimumHeight: CGFloat? = nil
     ) -> ConfigurationChanges {
         let countChanged = segmentCount != titles.count
         if countChanged { segmentCount = titles.count }
-        var titlesChanged = countChanged
+        var titlesChanged = countChanged || self.minimumHeight != minimumHeight
+        self.minimumHeight = minimumHeight
         for (index, title) in titles.enumerated() {
             if self.label(forSegment: index) != title {
                 setLabel(title, forSegment: index)
@@ -691,7 +699,9 @@ final class DirectorNativeOutlinedSegmentedControl: NSSegmentedControl {
                 options: [.usesLineFragmentOrigin, .usesFontLeading]
             ).height.rounded(.up)
         }.max() ?? 0
-        return CGSize(width: width, height: max(DirectorCapabilityFolderLayout.segmentHeight, textHeight + padding * 2) + padding * 2)
+        let height = minimumHeight.map { max($0, textHeight + padding * 4) }
+            ?? (max(DirectorCapabilityFolderLayout.segmentHeight, textHeight + padding * 2) + padding * 2)
+        return CGSize(width: width, height: height)
     }
 
     override func updateTrackingAreas() {

@@ -28,7 +28,7 @@ All reusable GitHub Actions are pinned to full commit SHAs. The workflow verifie
 
 The `v<marketing-version>` tag must match `MARKETING_VERSION`. `CURRENT_PROJECT_VERSION` is a monotonically increasing integer. Public release notes must state the exact signing and notarization status.
 
-The public application currently targets `1.5.0` (build `33`). Create a new tag
+The public application currently targets `1.5.0` (build `34`). Create a new tag
 only after the project version and build number are updated together and all
 release gates pass. This local update adds observed folder-row counts and an
 independent remembered seven/thirty-day period, while retaining adaptive

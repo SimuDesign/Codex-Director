@@ -776,6 +776,14 @@
 "library.group.expanded" = "Expanded";
 "library.group.collapsed" = "Collapsed";
 "library.callsLabel" = "calls";
+"library.calls7Label" = "calls · 7 days";
+"capabilityUsage.period" = "Usage period";
+"capabilityUsage.sevenDays" = "Last 7 days";
+"capabilityUsage.thirtyDays" = "Last 30 days";
+"capabilityUsage.sort.descending" = "Usage ↓";
+"capabilityUsage.sort.ascending" = "Usage ↑";
+"capabilityUsage.sort.name" = "Name A–Z";
+"capabilityUsage.sort.modified" = "Modified ↓";
 "library.evidence" = "Evidence";
 "library.eyebrow" = "01 / CAPABILITY LIBRARY";
 "library.filterRibbon" = "Filters";

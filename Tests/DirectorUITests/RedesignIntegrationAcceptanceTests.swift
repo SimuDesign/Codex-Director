@@ -331,7 +331,9 @@ final class RedesignIntegrationAcceptanceTests: XCTestCase {
         XCTAssertTrue(librarySource.contains("scope = \"project:\\(id)\""))
         XCTAssertTrue(librarySource.contains("accessibilityValue(value)"), "shared menu fields must expose their current selection")
         XCTAssertTrue(librarySource.contains("value: scopeLabel"))
-        XCTAssertTrue(librarySource.contains("value: sortLabel"))
+        XCTAssertTrue(librarySource.contains("DirectorUsageSortMenu("))
+        let usageControlsSource = try sourceText("Sources/DirectorUI/DesignSystem/DirectorCapabilityUsageControls.swift")
+        XCTAssertTrue(usageControlsSource.contains("accessibilityValue(selection.title(languageStore.language))"), "shared usage sort must expose its current selection")
         XCTAssertTrue(librarySource.contains("row.attributionUnavailable"), "plugin attribution state must remain explicit")
         XCTAssertTrue(librarySource.contains("copy(\"library.unavailable\", \"Unavailable\")"), "attributed-unavailable counts must remain distinct from pending")
 

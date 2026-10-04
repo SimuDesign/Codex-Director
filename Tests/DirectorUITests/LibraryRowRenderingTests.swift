@@ -26,7 +26,7 @@ final class LibraryRowRenderingTests: XCTestCase {
         XCTAssertEqual(model.rowTextBuildCount, 1)
         #endif
         XCTAssertEqual(first.countValue, "2")
-        XCTAssertEqual(first.accessibilityLabel, "a, 2 calls")
+        XCTAssertEqual(first.accessibilityLabel, "a, 2 calls, Last 7 days")
         XCTAssertEqual(first.summary, "Synthetic purpose")
     }
 
@@ -86,7 +86,7 @@ final class LibraryRowRenderingTests: XCTestCase {
         let updated = model.rowText(for: changed, language: .english)
         XCTAssertNotEqual(updated, first)
         XCTAssertEqual(updated.summary, resource.summary)
-        XCTAssertEqual(updated.accessibilityLabel, "Synthetic renamed capability, 2 calls")
+        XCTAssertEqual(updated.accessibilityLabel, "Synthetic renamed capability, 2 calls, Last 7 days")
     }
 
     private func makeRow(_ id: String, seven: Int? = 2, thirty: Int? = 12) -> CapabilityLibraryRow {

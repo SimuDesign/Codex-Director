@@ -545,7 +545,7 @@ public struct CapabilityFoldersView: View {
     private func folderFilterRow(for folderID: String, width: CGFloat) -> some View {
         // As with the entry search, keep a single native editor per layout.
         VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
-            if width >= DirectorCapabilityFolderLayout.usageFilterInlineBreakpoint {
+            if DirectorCapabilityFolderLayout.contentWidth(for: width) >= DirectorFilterLayout.searchMinimumWidth + DirectorCapabilityFilterMetrics.periodWidth + DirectorCapabilityFilterMetrics.sortWidth + DirectorCapabilityFilterMetrics.gap * 2 {
                 HStack(spacing: DirectorSpacing.space3) {
                     folderSearchField(for: folderID)
                         .frame(maxWidth: .infinity)
@@ -555,7 +555,7 @@ public struct CapabilityFoldersView: View {
             } else {
                 VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
                     folderSearchField(for: folderID)
-                    if DirectorCapabilityFolderLayout.contentWidth(for: width) >= DirectorCapabilityFolderLayout.usageControlsInlineWidth {
+                    if DirectorCapabilityFolderLayout.contentWidth(for: width) >= DirectorCapabilityFilterMetrics.periodWidth + DirectorCapabilityFilterMetrics.sortWidth + DirectorCapabilityFilterMetrics.gap {
                         HStack(spacing: DirectorSpacing.space3) {
                             usagePeriodSelector
                             Spacer(minLength: 0)
@@ -576,16 +576,7 @@ public struct CapabilityFoldersView: View {
     }
 
     private var usagePeriodSelector: some View {
-        DirectorOutlinedSegmentedControl(
-            t("capabilityFolders.usage.period", "Usage period"),
-            selection: Binding(get: { model.capabilityFolderUsagePeriod }, set: { model.setCapabilityFolderUsagePeriod($0) }),
-            options: [
-                .init(value: .sevenDays, title: t("capabilityFolders.usage.sevenDays", "Last 7 days")),
-                .init(value: .thirtyDays, title: t("capabilityFolders.usage.thirtyDays", "Last 30 days"))
-            ]
-        )
-        .frame(width: DirectorCapabilityFolderLayout.usagePeriodFieldWidth)
-        .accessibilityValue(t(model.capabilityFolderUsagePeriod == .thirtyDays ? "capabilityFolders.usage.thirtyDays" : "capabilityFolders.usage.sevenDays", "Usage period"))
+        DirectorUsagePeriodPicker(selection: Binding(get: { model.capabilityFolderUsagePeriod }, set: { model.setCapabilityFolderUsagePeriod($0) }))
     }
 
     private func folderSearchField(for folderID: String) -> some View {
@@ -1355,23 +1346,13 @@ public struct CapabilityFoldersView: View {
     }
 
     private func sortMenu(for folderID: String) -> some View {
-        let selected = folderSort(for: folderID)
-        return DirectorOutlinedMenuField(selected.title(languageStore.language)) {
-            ForEach(CapabilityFolderSort.allCases) { value in
-                Button {
-                    folderSortByKey[sessionKey(for: folderID)] = value
-                } label: {
-                    HStack {
-                        Text(value.title(languageStore.language))
-                        if value == selected { Image(systemName: "checkmark") }
-                    }
-                }
+        DirectorUsageSortMenu(selection: Binding(
+            get: { DirectorUsageSortOption(rawValue: folderSort(for: folderID).rawValue) ?? .nameAscending },
+            set: { value in
+                guard let sort = CapabilityFolderSort(rawValue: value.rawValue) else { return }
+                folderSortByKey[sessionKey(for: folderID)] = sort
             }
-        }
-        .frame(width: DirectorCapabilityFolderLayout.sortFieldWidth)
-        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight, alignment: .leading)
-        .accessibilityLabel(t("capabilityFolders.filter.sort", "Sort"))
-        .accessibilityValue(selected.title(languageStore.language))
+        ))
     }
 
     private func createFolder() {
@@ -1548,11 +1529,7 @@ enum CapabilityFolderSort: String, CaseIterable, Identifiable, Sendable {
     case nameAscending
     var id: String { rawValue }
     func title(_ language: AppLanguage) -> String {
-        switch self {
-        case .usageDescending: return language == .simplifiedChinese ? "调用量 ↓" : "Usage ↓"
-        case .usageAscending: return language == .simplifiedChinese ? "调用量升序" : "Usage ascending"
-        case .nameAscending: return language == .simplifiedChinese ? "名称 A–Z" : "Name A–Z"
-        }
+        (DirectorUsageSortOption(rawValue: rawValue) ?? .nameAscending).title(language)
     }
 }
 

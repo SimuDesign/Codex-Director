@@ -6,10 +6,11 @@ All notable public changes will be documented here. The project follows semantic
 
 ## 1.5.0
 
-Capability-folder usage. Internal build: `33`. Local iteration only; no Tag or GitHub Release is implied.
+Capability usage and unified filters. Internal build: `34`. Local iteration only; no Tag or GitHub Release is implied.
 
 - Shows each capability's observed calls in Agent & Companion Skills, Agent and Skill tabs, including out-of-folder Skill previews without changing membership.
 - Adds an independent, remembered Last 7 days / Last 30 days selector shared across windows. Usage ascending/descending and Name A–Z sorting retain the selected period.
+- Unifies that period selector, sort vocabulary and 36pt native filter geometry across all four libraries and Capability Folders; preserves scope/plugin filters and custom modification-time sorting. Name/ascending/modified sorting no longer silently changes a thirty-day count to seven days.
 - Labels the all-usage-project scope; distinguishes pending statistics from observed zero and keeps partial/inferred evidence qualifications in help, accessibility and details.
 - Reuses the existing bounded batch and in-memory projections. Switching period/sort does not index, read account usage or query SQLite; source files, folder members, parser/schema and manifest v1 remain unchanged.
 

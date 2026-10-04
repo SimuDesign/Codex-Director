@@ -784,6 +784,14 @@
 "library.group.expanded" = "已展开";
 "library.group.collapsed" = "已收起";
 "library.callsLabel" = "次调用";
+"library.calls7Label" = "次调用 · 近 7 天";
+"capabilityUsage.period" = "统计周期";
+"capabilityUsage.sevenDays" = "近 7 天";
+"capabilityUsage.thirtyDays" = "近 30 天";
+"capabilityUsage.sort.descending" = "调用量 ↓";
+"capabilityUsage.sort.ascending" = "调用量 ↑";
+"capabilityUsage.sort.name" = "名称 A–Z";
+"capabilityUsage.sort.modified" = "最近修改 ↓";
 "library.evidence" = "证据";
 "settings.eyebrow" = "设置 / 方案 A";
 "settings.subtitle" = "语言、外观、索引、能力迁移、隐私、诊断和应用信息。";

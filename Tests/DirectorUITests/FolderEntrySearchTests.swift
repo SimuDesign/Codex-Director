@@ -54,7 +54,7 @@ final class FolderEntrySearchTests: XCTestCase {
     func testLibraryUsesSharedActionableFields() throws {
         let source = try readSource("Sources/DirectorUI/Capabilities/CapabilityLibraryView.swift")
         XCTAssertTrue(source.contains("DirectorSearchField("))
-        XCTAssertTrue(source.contains("DirectorOutlinedMenuField(value, height: DirectorSpacing.controlMinHeight)"))
+        XCTAssertTrue(source.contains("DirectorOutlinedMenuField(value, height: DirectorCapabilityFilterMetrics.controlHeight)"))
     }
 
     private func readSource(_ relative: String) throws -> String {

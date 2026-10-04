@@ -52,7 +52,8 @@ network request is used. Folder preferences are retained when derived index
 data is deleted and are not added to capability packages.
 
 The separate `com.peiweitang.CodexDirector.capabilityFolders.usagePeriod`
-preference stores only `7d` or `30d`. Folder counts reuse existing derived
+preference stores only `7d` or `30d` and is shared by folders and capability
+libraries, retaining its existing key for compatibility. Folder counts reuse existing derived
 observations across all usage projects. Changing period or sort starts no
 source scan, account read, analytics request or additional database query.
 No usage content or project paths are added to this preference.

@@ -38,6 +38,9 @@ final class CapabilityFolderUsageTests: XCTestCase {
         XCTAssertNil(model.capabilityFolderUsageCount(for: "a", thirtyDays: false))
         try await model.refresh()
         await model.loadCapabilityFolderUsageIfNeeded()
+        for library in model.libraryModels {
+            await model.reloadLibrary(library.category, scope: .allCapabilities)
+        }
         let queryCount = probe.count
         let periods = model.folderUsagePeriods
         let folders = model.capabilityFolders
@@ -47,6 +50,13 @@ final class CapabilityFolderUsageTests: XCTestCase {
         XCTAssertEqual(model.capabilityFolderUsageCount(for: "shared", thirtyDays: true), 3)
         for _ in 0..<20 {
             model.setCapabilityFolderUsagePeriod(.thirtyDays)
+            for library in model.libraryModels {
+                library.context = library.context.updated(sort: .usageAscending)
+                _ = library.rows
+                library.context = library.context.updated(sort: .nameAscending)
+                _ = library.rows
+                XCTAssertEqual(library.usagePeriod, .thirtyDays)
+            }
             XCTAssertTrue(CapabilityFolderUsageDisplay.compareCounts(model.capabilityFolderUsageCount(for: "a", thirtyDays: true), model.capabilityFolderUsageCount(for: "b", thirtyDays: true), ascending: false) == true)
             model.setCapabilityFolderUsagePeriod(.sevenDays)
             XCTAssertTrue(CapabilityFolderUsageDisplay.compareCounts(model.capabilityFolderUsageCount(for: "a", thirtyDays: false), model.capabilityFolderUsageCount(for: "b", thirtyDays: false), ascending: false) == false)

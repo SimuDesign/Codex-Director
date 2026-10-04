@@ -490,7 +490,11 @@ public final class DirectorAppModel: ObservableObject {
         let initialFolderState = capabilityFolderStore.preferencesState()
         self.capabilityFolderPreferencesState = initialFolderState
         self.capabilityFolderError = initialFolderState == .corrupted ? "capabilityFolders.corrupted" : nil
-        self.libraryModels = CapabilityCategory.allCases.map { CapabilityLibraryViewModel(category: $0) }
+        self.libraryModels = CapabilityCategory.allCases.map {
+            let library = CapabilityLibraryViewModel(category: $0)
+            library.setUsagePeriod(capabilityFolderUsagePreferences.period)
+            return library
+        }
         if usesPreview {
             let catalog = CapabilityCatalog(resources: SyntheticPreviewData.resources, relations: SyntheticPreviewData.relations).entries
             let stats = SyntheticPreviewData.resources.map { CapabilityUsageStats(resourceID: $0.id, callCount: 0, inferredCount: 0, lastUsedAt: nil, coverage: .complete) }
@@ -536,6 +540,7 @@ public final class DirectorAppModel: ObservableObject {
             .sink { [weak self] period in
                 guard let self, self.capabilityFolderUsagePeriod != period else { return }
                 self.capabilityFolderUsagePeriod = period
+                for library in self.libraryModels { library.setUsagePeriod(period) }
             }
     }
 
@@ -547,7 +552,8 @@ public final class DirectorAppModel: ObservableObject {
         homeUsageRankingPreferences.setPeriod(period)
     }
 
-    /// Selection-only: both periods are already supplied by the shared batch.
+    /// Selection-only, shared by folders and the four libraries. Reuses the
+    /// existing preference key and both already-loaded period projections.
     public func setCapabilityFolderUsagePeriod(_ period: CapabilityFolderUsagePeriod) {
         capabilityFolderUsagePreferences.setPeriod(period)
     }
