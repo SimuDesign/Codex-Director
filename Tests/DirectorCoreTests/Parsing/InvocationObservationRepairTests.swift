@@ -149,6 +149,107 @@ final class InvocationObservationRepairTests: XCTestCase {
         XCTAssertEqual(result.calls.first { $0.kind == .skill }?.status, .unknown)
     }
 
+    func testSingleAllSettledReadDoesNotInventPerOperationSuccess() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let input = "await Promise.allSettled([tools.exec_command({cmd: 'cat sample-a/SKILL.md'})]);"
+        let result = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill])).extract(sessionID: "root", envelopes: [
+            event("response_item", ["type": "custom_tool_call", "id": "batch", "call_id": "batch", "name": "exec", "input": input]),
+            event("response_item", ["type": "custom_tool_call_output", "call_id": "batch", "output": "ok"], ordinal: 1)])
+
+        let evidence = result.calls.filter { $0.kind == .skill }
+        XCTAssertEqual(evidence.count, 1)
+        XCTAssertEqual(evidence.first?.resourceID, skill.id)
+        XCTAssertEqual(evidence.first?.status, .unknown)
+    }
+
+    func testAggregateFailureOrInterruptionDoesNotInventPerOperationOutcome() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let input = "await Promise.allSettled([tools.exec_command({cmd: 'cat sample-a/SKILL.md'})]);"
+        let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill]))
+
+        for outerStatus in ["failed", "interrupted"] {
+            let result = extractor.extract(sessionID: outerStatus, envelopes: [
+                event("response_item", ["type": "custom_tool_call", "id": outerStatus, "call_id": outerStatus, "name": "exec", "input": input]),
+                event("event_msg", ["type": "exec_command_end", "call_id": outerStatus, "status": outerStatus], ordinal: 1)])
+            XCTAssertEqual(result.calls.first { $0.kind == .skill }?.status, .unknown, outerStatus)
+        }
+    }
+
+    func testUnawaitedLiteralReadIsObservedWithoutInventingCompletion() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let input = "tools.exec_command({cmd: 'cat sample-a/SKILL.md'});"
+        let result = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill])).extract(sessionID: "root", envelopes: [
+            event("response_item", ["type": "custom_tool_call", "id": "read", "call_id": "read", "name": "exec", "input": input]),
+            event("response_item", ["type": "custom_tool_call_output", "call_id": "read", "output": "ok"], ordinal: 1)])
+
+        let evidence = result.calls.filter { $0.kind == .skill }
+        XCTAssertEqual(evidence.count, 1)
+        XCTAssertEqual(evidence.first?.resourceID, skill.id)
+        XCTAssertEqual(evidence.first?.status, .unknown)
+    }
+
+    func testKnownReadSurvivesUnsupportedOutputWithoutBorrowingOuterFailure() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let input = """
+        const result = await tools.exec_command({cmd: 'cat sample-a/SKILL.md'});
+        result.items.forEach((item) => text(item));
+        """
+        let result = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill])).extract(sessionID: "root", envelopes: [
+            event("response_item", ["type": "custom_tool_call", "id": "read", "call_id": "read", "name": "exec", "input": input]),
+            event("event_msg", ["type": "exec_command_end", "call_id": "read", "status": "failed", "exit_code": 1], ordinal: 1)])
+
+        XCTAssertEqual(result.calls.first { $0.kind == .skill }?.status, .unknown)
+    }
+
+    func testKnownReadBeforeDynamicToolDoesNotBorrowLaterOuterOutcome() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let input = """
+        await tools.exec_command({cmd: 'cat sample-a/SKILL.md'});
+        await tools.exec_command({cmd: dynamicCommand});
+        """
+        let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill]))
+
+        for outerStatus in ["failed", "interrupted"] {
+            let result = extractor.extract(sessionID: outerStatus, envelopes: [
+                event("response_item", ["type": "custom_tool_call", "id": outerStatus, "call_id": outerStatus, "name": "exec", "input": input]),
+                event("event_msg", ["type": "exec_command_end", "call_id": outerStatus, "status": outerStatus], ordinal: 1)])
+            XCTAssertEqual(result.calls.first { $0.kind == .skill }?.status, .unknown, outerStatus)
+        }
+    }
+
+    func testUnknownTopLevelWorkDoesNotCreateLaterEvidenceOrBindFailureToPriorRead() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill]))
+        let unreachable = "await Promise.reject('stop'); await tools.exec_command({cmd: 'cat sample-a/SKILL.md'});"
+        let unreachableResult = extractor.extract(sessionID: "unreachable", envelopes: [
+            event("response_item", ["type": "custom_tool_call", "id": "unreachable", "call_id": "unreachable", "name": "exec", "input": unreachable]),
+            event("event_msg", ["type": "exec_command_end", "call_id": "unreachable", "status": "failed"], ordinal: 1)])
+        XCTAssertFalse(unreachableResult.calls.contains { $0.kind == .skill })
+
+        let limited = "await tools.exec_command({cmd: 'cat sample-a/SKILL.md'}); undefined();"
+        for outerStatus in ["failed", "interrupted"] {
+            let result = extractor.extract(sessionID: outerStatus, envelopes: [
+                event("response_item", ["type": "custom_tool_call", "id": outerStatus, "call_id": outerStatus, "name": "exec", "input": limited]),
+                event("event_msg", ["type": "exec_command_end", "call_id": outerStatus, "status": outerStatus], ordinal: 1)])
+            XCTAssertEqual(result.calls.first { $0.kind == .skill }?.status, .unknown, outerStatus)
+        }
+    }
+
+    func testKnownReadWithMissingOrInterruptedOuterResultRemainsHonest() {
+        let skill = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
+        let input = "await tools.exec_command({cmd: 'cat sample-a/SKILL.md'});"
+        let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: [skill]))
+
+        let missing = extractor.extract(sessionID: "missing", envelopes: [
+            event("response_item", ["type": "custom_tool_call", "id": "missing", "call_id": "missing", "name": "exec", "input": input])])
+        XCTAssertEqual(missing.calls.first { $0.kind == .skill }?.status, .unknown)
+
+        let interrupted = extractor.extract(sessionID: "interrupted", envelopes: [
+            event("response_item", ["type": "custom_tool_call", "id": "interrupted", "call_id": "interrupted", "name": "exec", "input": input]),
+            event("event_msg", ["type": "exec_command_end", "call_id": "interrupted", "status": "interrupted"], ordinal: 1)])
+        XCTAssertEqual(interrupted.calls.first { $0.kind == .skill }?.status, .interrupted)
+    }
+
     func testUnconditionalMultiManifestShellSequenceIsDeduplicatedPerWrapper() {
         let a = resource("skill:a", "sample-a", kind: .skill, path: "sample-a/SKILL.md")
         let b = resource("skill:b", "sample-b", kind: .skill, path: "sample-b/SKILL.md")

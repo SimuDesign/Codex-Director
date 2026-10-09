@@ -1347,7 +1347,7 @@ public struct CapabilityFoldersView: View {
 
     private func sortMenu(for folderID: String) -> some View {
         DirectorUsageSortMenu(selection: Binding(
-            get: { DirectorUsageSortOption(rawValue: folderSort(for: folderID).rawValue) ?? .nameAscending },
+            get: { DirectorUsageSortOption(rawValue: folderSort(for: folderID).rawValue) ?? .usageDescending },
             set: { value in
                 guard let sort = CapabilityFolderSort(rawValue: value.rawValue) else { return }
                 folderSortByKey[sessionKey(for: folderID)] = sort
@@ -1401,7 +1401,7 @@ public struct CapabilityFoldersView: View {
     }
 
     private func folderSort(for folderID: String) -> CapabilityFolderSort {
-        folderSortByKey[sessionKey(for: folderID)] ?? .nameAscending
+        folderSortByKey[sessionKey(for: folderID)] ?? .usageDescending
     }
 
     private func collapsedCompanionAgentIDs(for folderID: String) -> Set<String> {
@@ -1529,7 +1529,7 @@ enum CapabilityFolderSort: String, CaseIterable, Identifiable, Sendable {
     case nameAscending
     var id: String { rawValue }
     func title(_ language: AppLanguage) -> String {
-        (DirectorUsageSortOption(rawValue: rawValue) ?? .nameAscending).title(language)
+        (DirectorUsageSortOption(rawValue: rawValue) ?? .usageDescending).title(language)
     }
 }
 

@@ -9,9 +9,9 @@ public enum HomeUsageRankingPeriod: String, Codable, CaseIterable, Hashable, Ide
     public var id: String { rawValue }
 
     /// Invalid or missing persisted values intentionally resolve to the
-    /// familiar seven-day view for a deterministic first launch.
+    /// thirty-day view for a deterministic first launch.
     public static func resolve(_ rawValue: String?) -> Self {
-        guard let rawValue, let period = Self(rawValue: rawValue) else { return .sevenDays }
+        guard let rawValue, let period = Self(rawValue: rawValue) else { return .thirtyDays }
         return period
     }
 }
@@ -40,7 +40,7 @@ public final class HomeUsageRankingPreferences: ObservableObject, @unchecked Sen
     }
 
     /// Pure-memory construction for tests and the debug validation host.
-    public init(memoryPeriod: HomeUsageRankingPeriod = .sevenDays) {
+    public init(memoryPeriod: HomeUsageRankingPeriod = .thirtyDays) {
         period = memoryPeriod
         writePeriod = { _ in }
     }

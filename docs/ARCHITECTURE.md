@@ -50,17 +50,18 @@ rule, and an incomplete list cannot be marked complete in `plugins.json`.
 Settings diagnostics retain their last valid result during a source refresh
 and reload when that index pass completes.
 
-Rollout parser v1.4.0 recognizes the current top-level `token_usage_record`
+Rollout parser v1.4.1 recognizes the current top-level `token_usage_record`
 and `inter_agent_communication_metadata` envelopes. Token totals use the
 record's cumulative `thread_token_usage`, never its per-response or per-turn
 value, and do not add it to legacy `token_count` totals. Legacy rate-limit
 windows remain a separate evidence stream. On parser upgrade, unchanged 1.2.0
-and 1.3.0 rollouts outside the last 30 local calendar days (by both cached
+through 1.4.0 rollouts outside the last 30 local calendar days (by both cached
 session end and file modification time) retain their checkpoint. Recent files
 are transactionally reparsed once; changed older files continue normal indexing.
-Cancellation does not advance an uncommitted checkpoint. A changing source
-is not stamped fully current, and append parses recover a bounded metadata
-header rather than replaying old calls or token totals.
+This bounded policy repairs recent presentation evidence without replaying years
+of unchanged archives. Cancellation does not advance an uncommitted checkpoint.
+A changing source is not stamped fully current, and append parses recover a
+bounded metadata header rather than replaying old calls or token totals.
 
 Agent identity resolution preserves canonical stable IDs and consumes ephemeral
 TOML/Brief aliases for both scopes. Explicit paths identify their own configured
@@ -69,9 +70,40 @@ global candidate. Ambiguity is not guessed. `agent_path` is not a configuration
 path and is not used as identity evidence. Actual child metadata emits one launch
 observation per child, while `agent_type` supplies request evidence only. Explicit
 source ordinals exclude inherited fork history; missing boundaries remain unknown.
-Literal read extraction is bounded and never executes shell or JavaScript.
-Multiple known manifests are resolved independently; comments, quoted tool names,
-dynamic paths, uncertain control flow and mixed mutations are not use evidence.
+Literal read extraction is bounded and never executes shell or JavaScript. A
+small tokenizer and top-level statement dispatcher accepts only static literal
+declarations/output, allowlisted literal tool calls at supported eager execution
+sites, and literal supported aggregate wrappers. A separate finite grammar proves
+simple unknown call/await barriers and approved output callbacks or loops before
+an earlier prefix may be retained; source outside both grammars is rejected whole,
+even when a full JavaScript parser might accept it. It ignores deferred callback,
+conditional and loop bodies, rejects interpolation and unverified template/string
+escape structure, and stops across supported tagged templates,
+unresolved control or unknown top-level evaluation, and stops after delete, update or rebinding of
+`tools`, `ALL_TOOLS`, `Promise` and output-helper bindings. One strict read-only
+catalog-output grammar may skip `ALL_TOOLS` metadata `filter`/regex `test` plus
+an optional object `map` with a static `description.slice`; executable callbacks,
+unknown functions, trailing expressions, missing separators, assignments and
+regex metasyntax outside literal words, safe separators, grouping, alternation
+and optional correctly placed start/end anchors do not pass that grammar. Malformed lexical,
+delimiter or regex structure plus input, token and nesting overflow reject the
+whole wrapper. Identifier/binding positions, ASCII decimal integers, operators,
+line terminators and object-field separators use finite lexical rules; the one
+approved C-style result-formatting loop is matched exactly rather than treated
+as general loop support. Each synchronous extraction has a local autorelease boundary;
+it does not span async indexing or persistence. Exceeding the 64-call
+budget retains only the first proven bounded prefix and marks its results
+uncertain. A tool call is evidence only when every evaluated argument sibling in
+its literal object is static. A supported dynamic sibling, including a simple
+reference, call, spread or computed key, may throw or mutate state before the
+tool is reached, so the current call is not counted and only earlier proof may
+survive with unknown results. Dynamic tool identity and unsafe Shell mutations
+are not use evidence. Only a syntax-validated limited suffix may retain earlier proven calls
+while marking their result binding uncertain. Aggregate and unawaited calls likewise
+remain result-unknown even if the outer wrapper completes, fails or is
+interrupted; only a single direct awaited operation can inherit that outer
+result. Multiple known manifests are resolved independently. These rules improve
+coverage but do not claim complete historical observability.
 
 Derived schema v6 adds nullable allowlisted `evidence_kind` provenance. Legacy
 rows and cached JSON remain readable. Capability aggregates use an indexed view
@@ -87,7 +119,10 @@ role instructions enter the new field.
 period; AppLaunchState shares it across windows and validation hosts use memory
 storage. The four capability library models now share this same preference;
 their independent presentation period is included in row/text cache identity.
-Usage/name/modified sort changes retain it. The existing Core period-specific
+Missing or invalid period values default to thirty days, and capability lists
+default to descending observed counts; valid remembered periods and in-session
+folder/Tab sort overrides remain authoritative. Usage/name/modified sort changes
+retain the selected period. The existing Core period-specific
 sort cases remain backward-compatible but are absent from native menus. There
 is no Core query, schema, cache or preference-key migration. Changing the period
 publishes presentation state only. The existing app-scoped
@@ -97,9 +132,11 @@ from usage-project scope. Every row, including related-preview Skills, uses its
 own stable resource ID; shared Skill calls are not summed into Agent counts.
 Usage/name sorting consumes this cached dictionary. An absent dictionary means
 pending (`—`); an absent resource/window after successful computation means
-no recorded observation (`0`), not proof of non-use. Evidence qualifiers remain
+no attributed record (`0`), not proof of non-use. Evidence qualifiers remain
 in localized help/AX/details. Companion shared-session evidence stays seven-day
-and noncausal. No schema migration, rollout reparse or new indexer is introduced.
+and noncausal. Parser v1.4.1 may trigger only the bounded recent checkpoint
+repair described above; it does not introduce a schema, cache, manifest or
+preference migration.
 
 ## Capability packages
 
@@ -207,4 +244,5 @@ seven-day compatibility payload and adds an optional thirty-day ranking set.
 `nil` means the older cache has not computed that projection, while a present
 empty set means the query completed with no observed calls. The selected period
 is a separate app-owned UserDefaults value containing only `7d` or `30d`; it
-defaults to seven days and contains no resource metadata or usage evidence.
+defaults to thirty days without overwriting valid remembered choices and contains
+no resource metadata or usage evidence.

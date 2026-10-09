@@ -4,6 +4,18 @@ All notable public changes will be documented here. The project follows semantic
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.5.1
+
+Bounded wrapper-attribution repair. Internal build: `35`. Local iteration only; no Tag or GitHub Release is implied.
+
+- Defaults Home, all four capability libraries and all folder tabs to Last 30 days and descending observed call counts. Valid remembered periods and user-selected session sorting remain unchanged; no indexing, schema or source-data change is required.
+
+- Replaces whole-wrapper syntax vetoes with a bounded, nonexecuting structural recognizer for supported eager literal tool calls, including direct calls and supported aggregate wrappers.
+- Retains proven earlier reads only across a finite, syntax-validated barrier grammar, including simple unknown calls/awaits and approved output callbacks or loops; an unrecognized suffix is rejected whole even when it might be valid JavaScript. A top-level statement allowlist crosses only static literals, supported literal tool/Promise execution sites and one exact read-only `ALL_TOOLS` metadata filter/map output grammar whose regex subset is limited to literal words, safe separators, grouping, alternation and correctly placed boundary anchors. Unknown evaluation, interpolated or unverified escaped templates, deferred/conditional bodies, delete/update/rebinding of protected runtime names, and unsafe shell mutations stop or reject attribution. Tool-object fields use a finite grammar: a supported dynamic sibling may run or throw before the tool call, so that call is not counted and only earlier proof may survive with unknown results. Malformed or unproved lexical, binding, operator, statement, object-field, delimiter, catalog or regex structure plus input, token or nesting-limit violations reject the whole wrapper; exceeding the 64-call budget retains only the proven bounded prefix with unknown results. Each synchronous extraction uses a local autorelease boundary without extending across async or persistence work.
+- Keeps batch, unawaited and limited-wrapper operation results unknown unless a single direct awaited call supplies individual result binding; aggregate completion, failure or interruption is not assigned to every inner operation.
+- Advances the parser marker to `1.4.1` and transactionally reparses unchanged `1.4.0` files only inside the recent 30-local-day window. Unchanged older archives remain deferred; schema v6, cache v1, manifest v1, stable resource IDs, folder memberships, evaluations and source files remain intact.
+- Replaces definite non-use copy with **No attributed records in 30 days** and clarifies that unsupported or incomplete evidence can omit actual use. Pending, unavailable, positive partial and inferred states remain distinct.
+
 ## 1.5.0
 
 Capability usage and unified filters. Internal build: `34`. Local iteration only; no Tag or GitHub Release is implied.

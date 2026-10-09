@@ -755,12 +755,13 @@
 "library.activity" = "Activity";
 "library.activity.all" = "All activity";
 "library.activity.recent7" = "Used in past 7 days";
-"library.activity.notUsed30" = "Not used in past 30 days";
+"library.activity.notUsed30" = "No attributed records in 30 days";
 "library.pluginStatus" = "Plugin status";
 "library.status.all" = "All plugins";
 "library.status.enabled" = "Enabled";
 "library.status.disabled" = "Disabled";
-"library.summary.notUsed30" = "Not used in past 30 days";
+"library.summary.notUsed30" = "No attributed records in 30 days";
+"library.notUsed30.help" = "Unsupported or incomplete evidence can omit actual use; zero means no attributed records were found in the last 30 days.";
 "library.attributionUnavailableCount" = "Attribution unavailable for %lld";
 "library.resultCount" = "%lld results";
 "library.group.global" = "Global";
@@ -941,4 +942,4 @@
 "capabilityFolders.usage.pending" = "Statistics not ready";
 "capabilityFolders.usage.inferred" = "%d inferred";
 "capabilityFolders.usage.partial" = "Evidence coverage partial or unknown";
-"capabilityFolders.usage.help" = "Recorded delegation/read evidence, not successful execution or effectiveness. Zero means no calls were recorded, not that the capability was unused. A companion Skill's count is its own usage, not proof that this Agent called it.";
+"capabilityFolders.usage.help" = "Recorded delegation/read evidence, not successful execution or effectiveness. Unsupported or incomplete evidence can omit actual use; zero means no attributed records were found. A companion Skill's count is its own usage, not proof that this Agent called it.";

@@ -492,13 +492,13 @@ final class InvocationExtractorTests: XCTestCase {
         assertNoSkillInvocation(result)
     }
 
-    func testSkillManifestInUnconditionalReadOnlySecondShellLineResolves() throws {
+    func testRawNewlineInsideQuotedWrapperCommandDoesNotResolve() throws {
         let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: skillResources()))
         let result = extractor.extract(sessionID: sessionID, envelopes: [
             envelope(#"{"type":"response_item","timestamp":"2026-08-15T04:12:05.949Z","payload":{"type":"custom_tool_call","id":"newline-skill","call_id":"newline-skill","name":"exec","input":"const r = await tools.exec_command({command: 'cat unrelated.txt\u000acat sample-skill/SKILL.md'})"}}"#, line: 1),
             output("", callID: "newline-skill"),
         ])
-        XCTAssertTrue(result.calls.contains { $0.kind == .skill && $0.resourceID == "skill:sample-skill" })
+        assertNoSkillInvocation(result)
     }
 
     func testSedMutationOptionsDoNotResolveSkillManifest() throws {

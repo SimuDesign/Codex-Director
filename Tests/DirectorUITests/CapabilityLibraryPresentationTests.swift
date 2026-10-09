@@ -26,10 +26,25 @@ final class CapabilityLibraryPresentationTests: XCTestCase {
             browse30DayStats: []
         )
         XCTAssertEqual(model.summaryCards.map(\.kind), [.global, .project, .recent7, .notUsed30])
+        XCTAssertEqual(model.summaryCards.last?.label, "No attributed records in 30 days")
         XCTAssertEqual(model.summaryCards.map(\.value), [1, 1, 1, 2])
         model.context = CapabilityBrowseContext(search: "Global")
         XCTAssertEqual(model.summaryCards.map(\.value), [1, 1, 1, 2])
         XCTAssertEqual(model.summaryCards.last?.statisticsReady, true)
+    }
+
+    func testThirtyDayZeroTerminologyAndEvidenceLimitAreLocalizedWithoutChangingFilterID() throws {
+        XCTAssertEqual(CapabilityActivityFilter.notUsed30.rawValue, "notUsed30")
+        let english = try readSource("Sources/DirectorUI/Resources/en.lproj/Localizable.strings")
+        let chinese = try readSource("Sources/DirectorUI/Resources/zh-Hans.lproj/Localizable.strings")
+        XCTAssertTrue(english.contains(#""library.activity.notUsed30" = "No attributed records in 30 days";"#))
+        XCTAssertTrue(english.contains(#""library.summary.notUsed30" = "No attributed records in 30 days";"#))
+        XCTAssertTrue(english.contains("Unsupported or incomplete evidence can omit actual use"))
+        XCTAssertTrue(chinese.contains(#""library.activity.notUsed30" = "近 30 天无归因记录";"#))
+        XCTAssertTrue(chinese.contains(#""library.summary.notUsed30" = "近 30 天无归因记录";"#))
+        XCTAssertTrue(chinese.contains("不支持或不完整的证据可能遗漏实际使用"))
+        XCTAssertFalse(english.contains(#""library.activity.notUsed30" = "Not used"#))
+        XCTAssertFalse(chinese.contains(#""library.activity.notUsed30" = "近 30 天未使用"#))
     }
 
     func testActivityAndOwnershipFiltersComposeAndSelectedFilterClears() {
@@ -179,6 +194,11 @@ final class CapabilityLibraryPresentationTests: XCTestCase {
 
     private func resource(_ id: String, _ name: String, _ kind: ResourceKind, _ scope: ResourceScope, _ project: String?, _ ownership: ResourceOwnership) -> CapabilityResource {
         CapabilityResource(id: id, name: name, kind: kind, status: .success, scope: scope, projectID: project, confidence: .exact, summary: "Purpose", sourceRootID: "synthetic", relativeSourcePath: nil, sourcePathHash: nil, lastSeenAt: Date(), ownership: ownership, origin: .local)
+    }
+
+    private func readSource(_ path: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
     }
 
 }

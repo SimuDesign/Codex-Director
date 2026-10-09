@@ -28,14 +28,14 @@ All reusable GitHub Actions are pinned to full commit SHAs. The workflow verifie
 
 The `v<marketing-version>` tag must match `MARKETING_VERSION`. `CURRENT_PROJECT_VERSION` is a monotonically increasing integer. Public release notes must state the exact signing and notarization status.
 
-The public application currently targets `1.5.0` (build `34`). Create a new tag
+The public application currently targets `1.5.1` (build `35`). Create a new tag
 only after the project version and build number are updated together and all
-release gates pass. This local update adds observed folder-row counts and an
-independent remembered seven/thirty-day period, while retaining adaptive
-menu-bar account reads, corrected invocation observations, 30-day rankings,
-capability-data reliability and runtime-path compatibility,
-local-safe restore, Capability Folders, and manifest v1 contracts. No tag or
-release is implied by a source merge.
+release gates pass. This local repair improves bounded literal wrapper
+attribution, preserves uncertain per-operation result semantics and reparses
+only eligible recent 1.4.0 checkpoints. It retains adaptive menu-bar account
+reads, folder-row counts and periods, 30-day rankings, capability-data
+reliability, runtime-path compatibility, local-safe restore, schema v6, cache
+v1 and manifest v1 contracts. No tag or release is implied by a source merge.
 
 ## Workflow security
 

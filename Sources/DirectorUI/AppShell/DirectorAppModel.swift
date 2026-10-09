@@ -410,8 +410,8 @@ public final class DirectorAppModel: ObservableObject {
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
         presentationRefreshCoordinator: RefreshCoordinator? = nil,
         menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
-        homeUsageRankingPreferences: HomeUsageRankingPreferences = HomeUsageRankingPreferences(memoryPeriod: .sevenDays),
-        capabilityFolderUsagePreferences: CapabilityFolderUsagePreferences = CapabilityFolderUsagePreferences(memoryPeriod: .sevenDays),
+        homeUsageRankingPreferences: HomeUsageRankingPreferences = HomeUsageRankingPreferences(memoryPeriod: .thirtyDays),
+        capabilityFolderUsagePreferences: CapabilityFolderUsagePreferences = CapabilityFolderUsagePreferences(memoryPeriod: .thirtyDays),
         accountUsageReading: CodexAccountUsageReading? = nil,
         capabilityFolderStore: CapabilityFolderStore = CapabilityFolderStore.makeMemory()
     ) {

@@ -155,7 +155,7 @@ public enum DirectorFilterLayout {
             if context.sort == .recentUsageDescending { usagePeriod = .sevenDays }
         }
     }
-    @Published public private(set) var usagePeriod: CapabilityFolderUsagePeriod = .sevenDays
+    @Published public private(set) var usagePeriod: CapabilityFolderUsagePeriod = .thirtyDays
 
     public func setUsagePeriod(_ period: CapabilityFolderUsagePeriod) {
         if context.sort == .recentUsageDescending || context.sort == .thirtyDayUsageDescending {
@@ -239,7 +239,7 @@ public enum DirectorFilterLayout {
     public var summaryMetrics: [CapabilitySummaryMetric] { Array(summaryCards.prefix(3)) }
     private func metric(_ kind: CapabilitySummaryMetricKind, _ value: Int, ready: Bool = true) -> CapabilitySummaryMetric {
         let label: String
-        switch kind { case .global: label = "Global"; case .project: label = "Project"; case .recent7: label = "Used in past 7 days"; case .notUsed30: label = "Not used in past 30 days"; case .installed: label = "Installed"; case .enabled: label = "Enabled"; case .attributionUnavailable: label = "Attribution unavailable" }
+        switch kind { case .global: label = "Global"; case .project: label = "Project"; case .recent7: label = "Used in past 7 days"; case .notUsed30: label = "No attributed records in 30 days"; case .installed: label = "Installed"; case .enabled: label = "Enabled"; case .attributionUnavailable: label = "Attribution unavailable" }
         return .init(kind: kind, label: label, value: value, statisticsReady: ready)
     }
     public var rows: [CapabilityLibraryRow] { rows(for: context.scope) }
@@ -1099,7 +1099,7 @@ public struct CapabilityLibraryView: View {
         return DirectorMetricSequence(contentWidth: width) {
             ForEach(model.summaryCards) { item in
                 let minimumHeight: CGFloat = width < 760 ? DirectorSpacing.capabilityMetricHeightCompact : DirectorSpacing.capabilityMetricHeight
-                DirectorMetricCard(symbolName: DirectorSymbol.summaryMetric(item.kind), label: metricLabel(item), value: metricValue(item), selected: selectedMetric(item), tone: metricTone(item.kind), minimumHeight: minimumHeight) { summaryAction(item.kind) }
+                summaryCard(item, minimumHeight: minimumHeight)
             }
             if model.category == .installedPlugins && model.pluginAttributionUnavailableCount > 0 {
                 Text(copy("library.attributionUnavailableCount", "Attribution unavailable for %lld", Int64(model.pluginAttributionUnavailableCount))).font(DirectorTypography.label).foregroundStyle(DirectorColor.textSecondary).frame(maxWidth: .infinity, alignment: .leading)
@@ -1110,6 +1110,15 @@ public struct CapabilityLibraryView: View {
         let key: String
         switch item.kind { case .global: key = "global"; case .project: key = "project"; case .recent7: key = "used"; case .notUsed30: key = "notUsed30"; case .installed: key = "installed"; case .enabled: key = "enabled"; case .attributionUnavailable: key = "attributionUnavailable" }
         return copy("library.summary.\(key)", item.label)
+    }
+    @ViewBuilder private func summaryCard(_ item: CapabilitySummaryMetric, minimumHeight: CGFloat) -> some View {
+        let card = DirectorMetricCard(symbolName: DirectorSymbol.summaryMetric(item.kind), label: metricLabel(item), value: metricValue(item), selected: selectedMetric(item), tone: metricTone(item.kind), minimumHeight: minimumHeight) { summaryAction(item.kind) }
+        if item.kind == .notUsed30 {
+            let evidenceHelp = copy("library.notUsed30.help", "Unsupported or incomplete evidence can omit actual use; zero means no attributed records were found in the last 30 days.")
+            card.help(evidenceHelp).accessibilityHint(evidenceHelp)
+        } else {
+            card
+        }
     }
     private func metricValue(_ item: CapabilitySummaryMetric) -> String { if (item.kind == .installed || item.kind == .enabled) && pluginCountUnknown { return copy("library.pending", "—") }; if !item.statisticsReady && (item.kind == .recent7 || item.kind == .notUsed30) { return copy("library.pending", "—") }; return number(item.value) }
     private var usageStatisticsReady: Bool { model.category == .installedPlugins ? model.pluginStatsReady : model.categoryStatsReady }

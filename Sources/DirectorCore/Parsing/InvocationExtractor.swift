@@ -227,11 +227,18 @@ private struct ExtractionState {
         let input = (payload.json["input"] as? String) ?? (payload.json["arguments"] as? String)
         guard let input else { return }
         let operations: [TransientToolInput.Call]
+        var wrapperExtractionLimited = false
         if name == "exec" {
-            guard let nested = TransientToolInput.literalCalls(input), !nested.isEmpty else {
+            let extraction = TransientToolInput.extractLiteralCalls(input)
+            let nested = extraction.calls
+            guard !nested.isEmpty else {
                 issues.append(InvocationIssue(lineNumber: envelope.lineNumber, message: "nested tool name not recoverable; dynamic or unsupported wrapper"))
                 return
             }
+            if extraction.wasLimited {
+                issues.append(InvocationIssue(lineNumber: envelope.lineNumber, message: "nested tool extraction limited; known literal operations retained"))
+            }
+            wrapperExtractionLimited = extraction.wasLimited
             operations = nested
             for (offset, operation) in nested.enumerated() {
                 let childKind = Self.kind(for: operation.name)
@@ -247,23 +254,24 @@ private struct ExtractionState {
         var emittedSkills = Set<String>()
         var emittedAgents = Set<String>()
         for (operationIndex, operation) in operations.enumerated() {
+            let uncertainResult = wrapperExtractionLimited || uncertainBatch || operation.resultBinding != .direct
             if operation.name == "spawn_agent", let role = TransientToolInput.arguments(operation.input)?["agent_type"] as? String {
                 let resolved = agentResolver.resolveStructuredEvent(agentIdentifier: role, projectID: projectID)
                 appendEvidence(id: "\(id)-delegation-request-\(operationIndex)", parentID: id, envelope: envelope, resourceID: resolved.resourceID,
                     kind: .agent, confidence: resolved.resourceID == nil ? .unknown : .inferred,
-                    evidence: .agentDelegationRequest, uncertain: uncertainBatch)
+                    evidence: .agentDelegationRequest, uncertain: uncertainResult)
             }
             for resolved in skillResolver.resolveManifestReadSignals(input: operation.input, toolName: operation.name,
                 projectID: projectID, workingDirectory: workingDirectory) {
                 guard let resourceID = resolved.resourceID, emittedSkills.insert(resourceID).inserted else { continue }
                 appendEvidence(id: "\(id)-skill-\(resourceID)", parentID: id, envelope: envelope, resourceID: resourceID,
-                    kind: .skill, confidence: resolved.confidence, evidence: .skillManifestRead, uncertain: uncertainBatch)
+                    kind: .skill, confidence: resolved.confidence, evidence: .skillManifestRead, uncertain: uncertainResult)
             }
             for resolved in agentResolver.resolveManifestReadSignals(input: operation.input, toolName: operation.name,
                 projectID: projectID, workingDirectory: workingDirectory) {
                 guard let resourceID = resolved.resourceID, emittedAgents.insert(resourceID).inserted else { continue }
                 appendEvidence(id: "\(id)-agent-\(resourceID)", parentID: id, envelope: envelope, resourceID: resourceID,
-                    kind: .agent, confidence: resolved.confidence, evidence: .agentBriefRead, uncertain: uncertainBatch)
+                    kind: .agent, confidence: resolved.confidence, evidence: .agentBriefRead, uncertain: uncertainResult)
             }
         }
     }
@@ -417,7 +425,7 @@ private struct ExtractionState {
     /// Propagates the parent call's resolved status to derived capability children.
     private static func propagateToSkillChildren(calls: inout [CallRecord], parentID: String, status: InvocationStatus) {
         for index in calls.indices where (calls[index].kind == .skill || calls[index].kind == .agent) && calls[index].parentCallID == parentID {
-            calls[index].status = calls[index].hasUncertainResult && status == .completed ? .unknown : status
+            calls[index].status = calls[index].hasUncertainResult ? .unknown : status
         }
     }
 }

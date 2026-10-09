@@ -2,12 +2,14 @@ import XCTest
 @testable import DirectorCore
 
 final class CapabilityFolderUsagePreferencesTests: XCTestCase {
-    func testDefaultAndInvalidValuesUseSevenDays() {
+    func testDefaultAndInvalidValuesUseThirtyDays() {
         for raw in [nil, "", "future", "30", " 30d "] as [String?] {
-            XCTAssertEqual(CapabilityFolderUsagePeriod.resolve(raw), .sevenDays)
+            XCTAssertEqual(CapabilityFolderUsagePeriod.resolve(raw), .thirtyDays)
         }
         XCTAssertEqual(CapabilityFolderUsagePeriod.resolve("30d"), .thirtyDays)
+        XCTAssertEqual(CapabilityFolderUsagePeriod.resolve("7d"), .sevenDays)
         XCTAssertEqual(CapabilityFolderUsagePreferences(memoryPeriod: .sevenDays).period, .sevenDays)
+        XCTAssertEqual(CapabilityFolderUsagePreferences().period, .thirtyDays)
     }
 
     func testDedicatedKeyDoesNotReuseHomeOrMembershipPreferences() {
@@ -19,13 +21,22 @@ final class CapabilityFolderUsagePreferencesTests: XCTestCase {
         var raw: String?
         var writes: [String] = []
         let preferences = CapabilityFolderUsagePreferences(readPeriod: { raw }, writePeriod: { raw = $0; writes.append($0) })
-        preferences.setPeriod(.thirtyDays)
-        preferences.setPeriod(.thirtyDays)
-        XCTAssertEqual(writes, ["30d"])
+        XCTAssertEqual(preferences.period, .thirtyDays)
+        XCTAssertTrue(writes.isEmpty)
+        preferences.setPeriod(.sevenDays)
+        preferences.setPeriod(.sevenDays)
+        XCTAssertEqual(writes, ["7d"])
         let restored = CapabilityFolderUsagePreferences(readPeriod: { raw }, writePeriod: { raw = $0 })
-        XCTAssertEqual(restored.period, .thirtyDays)
-        restored.setPeriod(.sevenDays)
-        XCTAssertEqual(raw, "7d")
+        XCTAssertEqual(restored.period, .sevenDays)
+        restored.setPeriod(.thirtyDays)
+        XCTAssertEqual(raw, "30d")
+    }
+
+    func testValidRememberedPeriodsRemainAuthoritativeWithoutInitializationWrites() {
+        for period in CapabilityFolderUsagePeriod.allCases {
+            let preferences = CapabilityFolderUsagePreferences(readPeriod: { period.rawValue }, writePeriod: { _ in XCTFail("Initialization must not overwrite a valid choice") })
+            XCTAssertEqual(preferences.period, period)
+        }
     }
 
     func testMemoryStoresDoNotShareOrPersist() {

@@ -763,12 +763,13 @@
 "library.activity" = "使用情况";
 "library.activity.all" = "全部使用情况";
 "library.activity.recent7" = "近 7 天使用";
-"library.activity.notUsed30" = "近 30 天未使用";
+"library.activity.notUsed30" = "近 30 天无归因记录";
 "library.pluginStatus" = "插件状态";
 "library.status.all" = "全部插件";
 "library.status.enabled" = "已启用";
 "library.status.disabled" = "未启用";
-"library.summary.notUsed30" = "30 天未使用";
+"library.summary.notUsed30" = "近 30 天无归因记录";
+"library.notUsed30.help" = "不支持或不完整的证据可能遗漏实际使用；零仅表示近 30 天未找到归因记录。";
 "library.attributionUnavailableCount" = "无法统计 %lld 项";
 "library.resultCount" = "%lld 项结果";
 "library.group.global" = "全局";
@@ -941,4 +942,4 @@
 "capabilityFolders.usage.pending" = "统计尚未就绪";
 "capabilityFolders.usage.inferred" = "%d 次为推断识别";
 "capabilityFolders.usage.partial" = "证据覆盖不完整或未知";
-"capabilityFolders.usage.help" = "这是已记录的委派或文件读取证据，不代表成功执行或能力有效。零表示没有记录到调用，不代表没有使用。配套 Skill 的次数是它自身的使用记录，不证明该 Agent 调用了它。";
+"capabilityFolders.usage.help" = "这是已记录的委派或文件读取证据，不代表成功执行或能力有效。不支持或不完整的证据可能遗漏实际使用；零仅表示未找到归因记录。配套 Skill 的次数是它自身的使用记录，不证明该 Agent 调用了它。";

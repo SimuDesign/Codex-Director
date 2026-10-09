@@ -8,7 +8,7 @@ public enum CapabilityFolderUsagePeriod: String, Codable, CaseIterable, Hashable
     public var id: String { rawValue }
 
     public static func resolve(_ rawValue: String?) -> Self {
-        rawValue.flatMap(Self.init(rawValue:)) ?? .sevenDays
+        rawValue.flatMap(Self.init(rawValue:)) ?? .thirtyDays
     }
 }
 
@@ -24,7 +24,7 @@ public final class CapabilityFolderUsagePreferences: ObservableObject, @unchecke
         writePeriod = { defaults.set($0, forKey: Self.preferenceKey) }
     }
 
-    public init(memoryPeriod: CapabilityFolderUsagePeriod = .sevenDays) {
+    public init(memoryPeriod: CapabilityFolderUsagePeriod = .thirtyDays) {
         period = memoryPeriod
         writePeriod = { _ in }
     }

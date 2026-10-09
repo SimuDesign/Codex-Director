@@ -4,6 +4,24 @@ import DirectorCore
 
 @MainActor
 final class CapabilityFolderUsageTests: XCTestCase {
+    func testStandaloneHomeViewDefaultsToThirtyDays() {
+        let view = HomeOverviewView(
+            model: HomeOverviewModel(catalog: CapabilityCatalog(resources: []), usage: []),
+            quotaModel: QuotaOverviewModel(snapshots: [])
+        )
+        XCTAssertEqual(view.homeUsageRankingPeriod, .thirtyDays)
+    }
+
+    func testFreshAppModelsDefaultToThirtyDaysAcrossHomeAndEveryLibrary() {
+        let stores = TestMemoryPreferences.makeStores()
+        let model = DirectorAppModel(classificationOverrides: stores.0, evaluationStore: stores.1, previewMode: false)
+        XCTAssertEqual(model.homeUsageRankingPeriod, .thirtyDays)
+        XCTAssertEqual(model.capabilityFolderUsagePeriod, .thirtyDays)
+        XCTAssertTrue(model.libraryModels.allSatisfy { $0.usagePeriod == .thirtyDays && $0.context.sort == .usageDescending })
+        XCTAssertFalse(model.isRefreshing)
+        XCTAssertNil(model.accountUsageSnapshot)
+    }
+
     private final class QueryCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var total = 0
@@ -73,10 +91,11 @@ final class CapabilityFolderUsageTests: XCTestCase {
         let first = makeModel(preference)
         let second = makeModel(preference)
         let members = first.capabilityFolders
+        let homePeriod = first.homeUsageRankingPeriod
         first.setCapabilityFolderUsagePeriod(.thirtyDays)
         XCTAssertEqual(first.capabilityFolderUsagePeriod, .thirtyDays)
         XCTAssertEqual(second.capabilityFolderUsagePeriod, .thirtyDays)
-        XCTAssertEqual(first.homeUsageRankingPeriod, .sevenDays)
+        XCTAssertEqual(first.homeUsageRankingPeriod, homePeriod)
         XCTAssertEqual(first.capabilityFolders, members)
         XCTAssertFalse(first.isRefreshing)
         XCTAssertNil(first.accountUsageSnapshot)
@@ -91,7 +110,7 @@ final class CapabilityFolderUsageTests: XCTestCase {
         XCTAssertTrue(pending.accessibilityText.contains("尚未就绪"))
         XCTAssertTrue(zero.accessibilityText.contains("近 30 天"))
         XCTAssertFalse(zero.accessibilityText.contains("未使用"))
-        XCTAssertTrue(zero.help.contains("不代表"))
+        XCTAssertTrue(zero.help.contains("不支持或不完整的证据可能遗漏实际使用"))
     }
 
     func testPartialInferredEvidenceIsNotSuccessfulExecution() {
@@ -133,7 +152,7 @@ final class CapabilityFolderUsageTests: XCTestCase {
         }
         let app = try readSource("Sources/CodexDirectorApp/CodexDirectorApp.swift")
         XCTAssertTrue(app.contains("CapabilityFolderUsagePreferences(defaults: .standard)"))
-        XCTAssertTrue(app.contains("CapabilityFolderUsagePreferences(memoryPeriod: .sevenDays)"))
+        XCTAssertTrue(app.contains("CapabilityFolderUsagePreferences(memoryPeriod: .thirtyDays)"))
     }
 
     private func makeModel(_ preference: CapabilityFolderUsagePreferences) -> DirectorAppModel {

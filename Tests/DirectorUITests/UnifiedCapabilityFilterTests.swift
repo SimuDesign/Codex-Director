@@ -4,6 +4,23 @@ import DirectorCore
 
 @MainActor
 final class UnifiedCapabilityFilterTests: XCTestCase {
+    func testDefaultCallCountsUseThirtyDaysAcrossAllFourLibraries() {
+        for category in CapabilityCategory.allCases {
+            let model = makeLibrary(category)
+            if category == .installedPlugins {
+                model.setPluginData(
+                    [PluginUsageResult(pluginID: "a", callCount: 8), PluginUsageResult(pluginID: "b", callCount: 1)],
+                    category30DayStats: [PluginUsageResult(pluginID: "a", callCount: 9), PluginUsageResult(pluginID: "b", callCount: 12)],
+                    browse30DayStats: [PluginUsageResult(pluginID: "a", callCount: 9), PluginUsageResult(pluginID: "b", callCount: 12)]
+                )
+            }
+            XCTAssertEqual(model.usagePeriod, .thirtyDays)
+            XCTAssertEqual(model.context.sort, .usageDescending)
+            XCTAssertEqual(model.rows.map(\.id), ["b", "a"])
+            XCTAssertEqual(model.rows.map { model.displayedUsageCount(for: $0) }, [12, 9])
+        }
+    }
+
     func testPeriodRemainsIndependentOfAscendingNameAndModifiedSort() throws {
         let model = makeLibrary(.customAgents)
         model.setUsagePeriod(.thirtyDays)
@@ -24,6 +41,7 @@ final class UnifiedCapabilityFilterTests: XCTestCase {
 
     func testSelectedPeriodInvalidatesWarmSortProjectionWithoutChangingData() {
         let model = makeLibrary(.customSkills)
+        model.setUsagePeriod(.sevenDays)
         model.context = model.context.updated(sort: .usageDescending)
         XCTAssertEqual(model.rows.map(\.id), ["a", "b"])
         let stats = model.browseStats
@@ -38,11 +56,12 @@ final class UnifiedCapabilityFilterTests: XCTestCase {
         let first = makeApp(preferences)
         let second = makeApp(preferences)
         let members = first.capabilityFolders
+        let homePeriod = first.homeUsageRankingPeriod
         XCTAssertTrue(first.libraryModels.allSatisfy { $0.usagePeriod == .thirtyDays })
         first.setCapabilityFolderUsagePeriod(.sevenDays)
         XCTAssertTrue((first.libraryModels + second.libraryModels).allSatisfy { $0.usagePeriod == .sevenDays })
         XCTAssertEqual(second.capabilityFolderUsagePeriod, .sevenDays)
-        XCTAssertEqual(first.homeUsageRankingPeriod, .sevenDays)
+        XCTAssertEqual(first.homeUsageRankingPeriod, homePeriod)
         XCTAssertEqual(first.capabilityFolders, members)
         XCTAssertFalse(first.isRefreshing)
         XCTAssertNil(first.accountUsageSnapshot)

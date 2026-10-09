@@ -2,14 +2,18 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.5.0`. Requires macOS 26 or later.
+> Current development version: `1.5.1`. Requires macOS 26 or later.
 
 Usage evidence distinguishes child-Agent delegation, Agent method reads and
-Skill manifest reads. Delegation requests and inherited child history do not
-inflate capability totals. A read or dispatch is not proof of effectiveness;
-dynamic or ambiguous operations may remain unobserved. The first refresh after
-this update repairs recent 30-day evidence in the background without clearing
-folders or evaluations.
+Skill manifest reads. A bounded, nonexecuting recognizer recovers supported
+literal reads from eager wrapper code while ignoring deferred callbacks,
+conditional or loop bodies, interpolated/tagged templates, unknown top-level
+evaluation and unsafe mutations. Delegation requests and
+inherited child history do not inflate capability totals. A read or dispatch is
+not proof of success or effectiveness; dynamic, unsupported or incomplete
+evidence may remain unobserved. The first refresh after this update reparses
+eligible recent 30-day 1.4.0 checkpoints in the background without replaying
+unchanged old archives or clearing folders and evaluations.
 
 [简体中文](README.zh-CN.md) · [Version notes](CHANGELOG.md) · [中文更新说明](CHANGELOG.zh-CN.md)
 
@@ -18,7 +22,7 @@ folders or evaluations.
 - Inventories global, installed, and project-level Agents and Skills, keeping configuration ownership distinct from project usage.
 - The Installed Skills total, list, and usage ranking cover independently installed Skills only. Installed plugins have their own count; any observed plugin-provided Skills remain source-labeled in capability folders and do not inflate independent totals.
 - Shows privacy-safe recent usage evidence and data freshness without treating activity as proof of effectiveness.
-- Ranks observed capability calls over either the last 7 or 30 local calendar days. The first launch defaults to 7 days, then remembers the last selected period without starting a new index or query when switched.
+- Ranks observed capability calls over either the last 7 or 30 local calendar days. Home and all capability browsers default to 30 days and descending call counts, then retain the selected period and in-session sorting without starting a new index or query when switched. Valid remembered period choices are preserved on upgrade.
 - Agent, Skill and plugin libraries and all three capability-folder tabs share an independent, remembered **Last 7 days / Last 30 days** selector and **Usage ↓ / Usage ↑ / Name A–Z** sorting. Custom libraries also retain modification-time sorting. Sorting by name or ascending usage keeps the selected period; switching uses loaded statistics.
 - Records lightweight human evaluations alongside the evidence.
 - Exports an open, unencrypted `.codexpack.zip` with manifests, checksums, plugin and dependency lists, and bilingual recovery instructions.
@@ -38,7 +42,7 @@ Global and project folders reflect configuration ownership from the current read
 
 The browser uses responsive folder grids, compact outlined lists, brand-outline tabs, consistent section gutters and explicit control spacing, plus an in-place detail sidebar. Search, sort, the selected tab, and expanded relationships stay independent within each folder/tab for the current window session. Skill details link back to related Agents; declarations and seven-day shared-session observations remain separate, and neither implies effectiveness or proves invocation.
 
-Folder row counts cover **all usage projects**, not just the configuration owner or the folder. Each Agent and related-preview Skill shows its own observed count; shared Skills are not added to Agent totals. Pending statistics show `—`; `0` means no observation in the computed period, not proof that a capability was never used. Folders and capability libraries share a remembered period independently of Home rankings, without changing membership or source files. Library scope and plugin-status filters remain available.
+Folder row counts cover **all usage projects**, not just the configuration owner or the folder. Each Agent and related-preview Skill shows its own attributed count; shared Skills are not added to Agent totals. Pending statistics show `—`; `0` means no attributed record in the computed period, not proof that a capability was not used. Folders and capability libraries share a remembered period independently of Home rankings, without changing membership or source files. Library scope and plugin-status filters remain available.
 
 ## Product screenshots
 

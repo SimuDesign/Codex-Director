@@ -1,8 +1,8 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.5.0`
+Version: `1.5.1`
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-09-23
+Last updated: 2026-10-07
 
 The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
@@ -284,7 +284,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.5.0 with internal build 34, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.5.1 with internal build 35, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -664,3 +664,17 @@ not window width; do not clip labels or duplicate search editors. Verify actual
 AX period/count values; record VoiceOver speech and Increase Contrast/Reduce
 Motion/Transparency runtime checks separately. Repeated period/sort operations
 after loading must leave SQLite/index/account query counters unchanged.
+
+### Initial usage-default regression — 2026-10-07
+
+Use isolated memory/injected preference fixtures to verify absent/invalid
+period values resolve to Last 30 days and initialization does not write.
+Home and all four library destinations use thirty-day data; every fresh
+folder/tab uses Usage ↓. Fixtures with opposite seven/thirty-day orders must
+prove counts and ordering follow the selected period. Valid remembered seven
+and thirty days and window-local sort overrides must survive; unknown data
+stays pending, never a seven-day fallback or invented zero. Selection changes
+must not index, query SQLite or read accounts. Confirm closed control values
+and AX labels in the installed build without changing real memberships.
+This behavioral check does not claim a new full visual/VoiceOver matrix;
+appearance and accessibility control geometry are unchanged.

@@ -335,7 +335,7 @@ public actor IndexingCoordinator {
             // fully reparsed below.
             let unchanged = checkpoint?.sourceSize == attributes.size &&
                 checkpoint?.sourceMtime == attributes.modificationDate && checkpoint?.byteOffset == attributes.size
-            let priorParserOutsideRankingWindow = ["1.2.0", "1.3.0"].contains(checkpoint?.parserVersion ?? "") &&
+            let priorParserOutsideRankingWindow = ["1.2.0", "1.3.0", "1.4.0"].contains(checkpoint?.parserVersion ?? "") &&
                 attributes.modificationDate < recentStart && (sessionEnds[sourceFileID] ?? 0) < recentStart
             if let checkpoint, unchanged,
                (checkpoint.parserVersion == RolloutEventDecoder.parserVersion || priorParserOutsideRankingWindow) {

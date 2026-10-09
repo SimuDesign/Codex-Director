@@ -111,7 +111,7 @@ final class RolloutEventDecoderTests: XCTestCase {
     }
 
     func testParserVersionTriggersDerivedDataReindexAfterIdentityFix() {
-        XCTAssertEqual(RolloutEventDecoder.parserVersion, "1.4.0")
+        XCTAssertEqual(RolloutEventDecoder.parserVersion, "1.4.1")
     }
 
     func testSourceOrdinalAcceptsOnlyNonnegativeIntegerJSONValues() throws {

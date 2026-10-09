@@ -38,10 +38,10 @@ private final class AppLaunchState: ObservableObject {
             resolvedMenuBarPreferences = MenuBarPreferences(defaults: .standard)
         }
         let homeUsageRankingPreferences = useMemoryPreferences
-            ? HomeUsageRankingPreferences(memoryPeriod: .sevenDays)
+            ? HomeUsageRankingPreferences(memoryPeriod: .thirtyDays)
             : HomeUsageRankingPreferences(defaults: .standard)
         let capabilityFolderUsagePreferences = useMemoryPreferences
-            ? CapabilityFolderUsagePreferences(memoryPeriod: .sevenDays)
+            ? CapabilityFolderUsagePreferences(memoryPeriod: .thirtyDays)
             : CapabilityFolderUsagePreferences(defaults: .standard)
 
         // This model is deliberately service-less but not synthetic. It lets

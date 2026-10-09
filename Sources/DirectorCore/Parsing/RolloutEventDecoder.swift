@@ -40,7 +40,7 @@ public struct RolloutDecodingIssue: Sendable, Equatable {
 /// payload. Malformed lines produce issues and are skipped.
 public struct RolloutEventDecoder: Sendable {
     /// Parser version recorded with every indexed session.
-    public static let parserVersion = "1.4.0"
+    public static let parserVersion = "1.4.1"
 
     /// Top-level event types this parser version understands.
     public static let supportedEventTypes: [String] = [
