@@ -99,7 +99,7 @@ public struct ResourceScanner: Sendable {
             case .skills: scanSkills(root: root, resources: &resources, provenance: &provenance, issues: &issues, seen: &seenIDs)
             case .agents: scanAgents(root: root, resources: &resources, issues: &issues, seen: &seenIDs, pairings: &agentPairings)
             case .plugins: scanPlugins(root: root, resources: &resources, issues: &issues, seen: &seenIDs, relations: &relations)
-            case .projects: scanProject(root: root, resources: &resources, provenance: &provenance, projects: &projects, issues: &issues, seen: &seenIDs)
+            case .projects: scanProject(root: root, resources: &resources, provenance: &provenance, projects: &projects, issues: &issues, seen: &seenIDs, pairings: &agentPairings)
             }
         }
 
@@ -505,7 +505,8 @@ public struct ResourceScanner: Sendable {
         provenance: inout [CapabilityProvenance],
         projects: inout [CapabilityProject],
         issues: inout [DiscoveryIssue],
-        seen: inout Set<String>
+        seen: inout Set<String>,
+        pairings: inout [CapabilityAgentPairing]
     ) {
         let projectName = root.url.lastPathComponent
         projects.append(CapabilityProject(id: root.id, name: projectName, available: fileSystem.exists(root.url)))
@@ -589,6 +590,22 @@ public struct ResourceScanner: Sendable {
                 let modified = previousModified[resourceID] == true
                     || (previousFingerprints[resourceID].map { $0 != fingerprint } ?? false)
                 let manifest = Self.parseTopLevelAgentTOML(text)
+                // Keep the historical TOML identity; the Brief is an alias,
+                // not a new capability. Only an existing bounded companion
+                // directory with a unique matching name is paired.
+                let briefDirectory = entry.deletingPathExtension()
+                if Self.isWithinRoot(briefDirectory, rootURL: root.url) {
+                    // Enumerate actual entries: on case-insensitive APFS,
+                    // exists(agent.md) and exists(Agent.md) can be the same file.
+                    let briefCandidates = fileSystem.contents(briefDirectory)
+                        .filter { ["agent.md", "Agent.md"].contains($0.lastPathComponent) && Self.isWithinRoot($0, rootURL: root.url) }
+                    if briefCandidates.count == 1, let brief = briefCandidates.first {
+                        pairings.append(CapabilityAgentPairing(sourceRootID: root.id,
+                            agentRelativePath: relative,
+                            briefRelativePath: ".codex/agents/\(briefDirectory.lastPathComponent)/\(brief.lastPathComponent)",
+                            configurationRelativePath: relative))
+                    }
+                }
                 add(CapabilityResource(
                     id: resourceID,
                     name: manifest.name ?? entry.deletingPathExtension().lastPathComponent,

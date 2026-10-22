@@ -7,7 +7,7 @@ import Foundation
 /// or unredacted absolute paths.
 public enum DatabaseSchema {
     /// Bumped only by an approved migration.
-    public static let currentVersion = 5
+    public static let currentVersion = 6
 
     public static let createStatements: [String] = [
         """
@@ -102,6 +102,7 @@ public enum DatabaseSchema {
             duration_ms INTEGER,
             confidence TEXT NOT NULL,
             error_category TEXT,
+            evidence_kind TEXT,
             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )
         """,
@@ -195,6 +196,15 @@ public enum DatabaseSchema {
         try connection.beginTransactionOrThrow()
         do {
             if version >= 1 {
+                let info = try connection.prepare("PRAGMA table_info(calls)")
+                var hasEvidence = false
+                var hasTable = false
+                while try info.step() == .row { hasTable = true; hasEvidence = hasEvidence || info.columnText(1) == "evidence_kind" }
+                if hasTable, !hasEvidence, !connection.exec("ALTER TABLE calls ADD COLUMN evidence_kind TEXT") {
+                    throw SQLiteError.statementFailed(connection.lastErrorMessage())
+                }
+            }
+            if version >= 1 {
                 let columns = [
                     "ownership TEXT NOT NULL DEFAULT 'unknown'",
                     "origin TEXT NOT NULL DEFAULT 'unknown'",
@@ -225,6 +235,17 @@ public enum DatabaseSchema {
             for statement in createStatements where !connection.exec(statement) {
                 throw SQLiteError.statementFailed(connection.lastErrorMessage())
             }
+            guard connection.exec("CREATE INDEX IF NOT EXISTS idx_calls_delegation ON calls(session_id, resource_id, evidence_kind)"),
+                  connection.exec("""
+                  CREATE VIEW IF NOT EXISTS capability_usage_calls AS
+                  SELECT c.* FROM calls c
+                  WHERE (c.evidence_kind IS NULL OR c.evidence_kind != 'agent-delegation-request')
+                    AND (c.evidence_kind IS NULL OR c.evidence_kind NOT IN ('agent-brief-read','structured-invocation')
+                         OR c.call_kind != 'agent'
+                         OR NOT EXISTS (SELECT 1 FROM calls d
+                              WHERE d.session_id = c.session_id AND d.resource_id = c.resource_id
+                                AND d.evidence_kind = 'agent-delegation'))
+                  """) else { throw SQLiteError.statementFailed(connection.lastErrorMessage()) }
             try connection.setUserVersionOrThrow(currentVersion)
             try connection.commitOrThrow()
         } catch {

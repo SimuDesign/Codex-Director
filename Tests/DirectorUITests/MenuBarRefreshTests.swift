@@ -6,6 +6,47 @@ import DirectorCore
 
 @MainActor
 final class MenuBarRefreshTests: XCTestCase {
+    func testPopoverReusesRecentSnapshotAndRefreshesAtTwoMinutes() async throws {
+        let stores = TestMemoryPreferences.makeStores()
+        let clock = MenuBarTestClock(Date(timeIntervalSince1970: 2_000_000_000))
+        let calls = CallCounter()
+        let response = try JSONSerialization.data(withJSONObject: [
+            "id": 2,
+            "result": ["rateLimits": ["primary": [
+                "usedPercent": 28,
+                "windowDurationMins": 10_080,
+                "resetsAt": 2_000_086_400
+            ]]]
+        ])
+        let reading = CodexAccountUsageReading(
+            transport: { _, _, _, _ in
+                await calls.increment()
+                return response
+            },
+            executableURL: URL(fileURLWithPath: "/synthetic/codex"),
+            now: { clock.value }
+        )
+        let model = DirectorAppModel(
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            nowProvider: { clock.value },
+            menuBarPreferences: MenuBarPreferences(memoryEnabled: true),
+            accountUsageReading: reading
+        )
+
+        let first = await model.refreshMenuBarIfNeeded()
+        XCTAssertEqual(first, .completed)
+        clock.advance(by: 119)
+        let recent = await model.refreshMenuBarIfNeeded()
+        XCTAssertEqual(recent, .notDue)
+        clock.advance(by: 1)
+        let due = await model.refreshMenuBarIfNeeded()
+        XCTAssertEqual(due, .completed)
+        let readCount = await calls.value()
+        XCTAssertEqual(readCount, 2)
+        XCTAssertEqual(model.accountUsageSnapshot?.capturedAt, clock.value)
+    }
+
     func testFailedAccountReadWithoutSnapshotRemainsUnavailable() async {
         let stores = TestMemoryPreferences.makeStores()
         let model = DirectorAppModel(
@@ -150,4 +191,17 @@ private actor CallCounter {
 
     func increment() { count += 1 }
     func value() -> Int { count }
+}
+
+private final class MenuBarTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Date
+
+    init(_ value: Date) { storage = value }
+    var value: Date { lock.lock(); defer { lock.unlock() }; return storage }
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        storage = storage.addingTimeInterval(interval)
+    }
 }

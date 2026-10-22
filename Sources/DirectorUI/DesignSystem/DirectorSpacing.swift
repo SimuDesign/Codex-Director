@@ -84,11 +84,16 @@ public enum DirectorPageLayout {
     }
 }
 
-/// Local geometry for the Capability Folders browsing surface.
-///
-/// This is intentionally a page-scoped variant of the shared workspace grid:
-/// the compact folder browser is denser than the editorial library pages, but
-/// it must not change the global 1440pt/4-2-1 rules used elsewhere.
+/// Shared native filter geometry for folders and all four libraries.
+public enum DirectorCapabilityFilterMetrics {
+    public static let controlHeight: CGFloat = 36
+    public static let periodWidth: CGFloat = 232
+    public static let sortWidth: CGFloat = 176
+    public static let gap: CGFloat = DirectorSpacing.space3
+}
+
+/// Folder-local geometry; shared filter controls use the metrics above without
+/// changing the global 1440pt page measure or metric-grid breakpoints.
 public enum DirectorCapabilityFolderLayout {
     public static let entryInlineBreakpoint: CGFloat = 900
     public static let maxContentWidth: CGFloat = 1280
@@ -101,9 +106,13 @@ public enum DirectorCapabilityFolderLayout {
     public static let folderCardHeight: CGFloat = 128
     public static let folderCardHeightCompact: CGFloat = 120
     public static let folderCardHeightNarrow: CGFloat = 112
-    public static let controlHeight: CGFloat = 36
+    public static let controlHeight = DirectorCapabilityFilterMetrics.controlHeight
     public static let segmentHeight: CGFloat = 32
-    public static let sortFieldWidth: CGFloat = 176
+    public static let sortFieldWidth = DirectorCapabilityFilterMetrics.sortWidth
+    public static let usageFilterInlineBreakpoint: CGFloat = 1000
+    public static let usageControlsInlineWidth: CGFloat = 440
+    public static let usagePeriodFieldWidth = DirectorCapabilityFilterMetrics.periodWidth
+    public static let usageCountColumnWidth: CGFloat = 128
     /// Explicit rhythm for the folder browser. These values are applied by
     /// the owning structural row exactly once; they do not rely on native
     /// List section spacing, which is not aligned with ordinary rows on macOS.

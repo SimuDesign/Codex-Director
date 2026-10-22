@@ -16,6 +16,7 @@ final class LibraryRowRenderingTests: XCTestCase {
     func testWarmTextCacheSurvivesSelectionSearchAndSevenDaySortChanges() {
         let row = makeRow("a")
         let model = CapabilityLibraryViewModel(category: .customAgents, catalog: [row.entry])
+        model.setUsagePeriod(.sevenDays)
         let first = model.rowText(for: row, language: .english)
         for _ in 0..<30 {
             model.selectedID = "a"
@@ -26,13 +27,14 @@ final class LibraryRowRenderingTests: XCTestCase {
         XCTAssertEqual(model.rowTextBuildCount, 1)
         #endif
         XCTAssertEqual(first.countValue, "2")
-        XCTAssertEqual(first.accessibilityLabel, "a, 2 calls")
+        XCTAssertEqual(first.accessibilityLabel, "a, 2 calls, Last 7 days")
         XCTAssertEqual(first.summary, "Synthetic purpose")
     }
 
     func testTextInvalidatesForLanguagePeriodDataAndTimeZone() {
         let row = makeRow("a")
         let model = CapabilityLibraryViewModel(category: .customAgents, catalog: [row.entry])
+        model.setUsagePeriod(.sevenDays)
         let english = model.rowText(for: row, language: .english, timeZone: TimeZone(secondsFromGMT: 0)!)
         let chinese = model.rowText(for: row, language: .simplifiedChinese, timeZone: TimeZone(secondsFromGMT: 0)!)
         XCTAssertNotEqual(english.metadata, chinese.metadata)
@@ -52,6 +54,7 @@ final class LibraryRowRenderingTests: XCTestCase {
     func testUnknownExplicitZeroAndChangedCountsRemainDistinct() {
         let unknown = makeRow("a", seven: nil, thirty: nil)
         let model = CapabilityLibraryViewModel(category: .customAgents, catalog: [unknown.entry])
+        model.setUsagePeriod(.sevenDays)
         XCTAssertEqual(model.rowText(for: unknown, language: .english).countValue, "—")
         let zero = makeRow("a", seven: 0, thirty: 0)
         XCTAssertEqual(model.rowText(for: zero, language: .english).countValue, "0")
@@ -64,6 +67,7 @@ final class LibraryRowRenderingTests: XCTestCase {
     func testPluginUnavailableAndReadyTransitionInvalidateText() {
         let row = makeRow("plugin", seven: nil, thirty: nil)
         let model = CapabilityLibraryViewModel(category: .installedPlugins, catalog: [row.entry])
+        model.setUsagePeriod(.sevenDays)
         XCTAssertEqual(model.rowText(for: row, language: .english).countValue, "—")
         model.setPluginData([])
         XCTAssertEqual(model.rowText(for: row, language: .english).countValue, "Unavailable")
@@ -86,7 +90,7 @@ final class LibraryRowRenderingTests: XCTestCase {
         let updated = model.rowText(for: changed, language: .english)
         XCTAssertNotEqual(updated, first)
         XCTAssertEqual(updated.summary, resource.summary)
-        XCTAssertEqual(updated.accessibilityLabel, "Synthetic renamed capability, 2 calls")
+        XCTAssertEqual(updated.accessibilityLabel, "Synthetic renamed capability, 12 calls, Last 30 days")
     }
 
     private func makeRow(_ id: String, seven: Int? = 2, thirty: Int? = 12) -> CapabilityLibraryRow {

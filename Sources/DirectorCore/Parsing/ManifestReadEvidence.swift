@@ -7,56 +7,115 @@ struct ManifestReadCandidate: Sendable {
     let key: String
     let relativePath: String
     let absolutePath: String?
+    var projectID: String? = nil
 }
 
 /// Shared, conservative read evidence parser for Agent and Skill manifests.
-/// It intentionally rejects shell composition and mutation syntax: a false
-/// negative is safer than attributing a capability from a mixed command.
+/// Allows unconditional read-only sequences, rejecting conditional or mixed
+/// mutation syntax. False negatives are safer than invented use evidence.
 enum ManifestReadEvidence {
-    private static let directReadTools: Set<String> = ["read", "cat", "less", "more", "head", "tail", "wc", "open", "file", "mdcat"]
+    private static let directReadTools: Set<String> = ["read", "read_file", "read_text_file", "cat", "less", "more", "head", "tail", "mdcat"]
     private static let shellTools: Set<String> = ["exec_command", "bash", "shell", "sh", "zsh"]
 
     static func matchingCandidateKeys(
         input: String,
         toolName: String?,
-        candidates: [ManifestReadCandidate]
+        candidates: [ManifestReadCandidate],
+        projectID: String? = nil,
+        workingDirectory: String? = nil
     ) -> Set<String>? {
         guard let toolName, let pathArguments = readPathArguments(input: input, toolName: toolName) else {
             return nil
         }
         let normalizedArguments = Set(pathArguments.compactMap(normalizedPathToken))
         guard !normalizedArguments.isEmpty else { return nil }
-        return Set(candidates.compactMap { candidate in
-            let relative = normalizedPathToken(candidate.relativePath)
-            let absolute = candidate.absolutePath.flatMap(normalizedPathToken)
-            guard normalizedArguments.contains(where: { $0 == relative || ($0.hasPrefix("/") && $0 == absolute) }) else {
-                return nil
+        let explicitWorkdir = TransientToolInput.arguments(input)?["workdir"] as? String
+        let directory = explicitWorkdir ?? workingDirectory
+        var keys = Set<String>()
+        for argument in normalizedArguments {
+            let full = argument.hasPrefix("/") ? argument : directory.flatMap { dir in
+                dir.hasPrefix("/") ? URL(fileURLWithPath: dir).appendingPathComponent(argument).standardizedFileURL.path : nil
             }
-            return candidate.key
-        })
+            let absoluteMatches = full.map { full in candidates.filter { $0.absolutePath.flatMap(normalizedPathToken) == full } } ?? []
+            let matches: [ManifestReadCandidate]
+            if !absoluteMatches.isEmpty || argument.hasPrefix("/") || directory != nil {
+                matches = absoluteMatches
+            } else {
+                let relative = candidates.filter { normalizedPathToken($0.relativePath) == argument }
+                // Without project context, a relative collision stays
+                // ambiguous instead of silently choosing the global copy.
+                if let projectID {
+                    let local = relative.filter { $0.projectID == projectID }
+                    matches = local.isEmpty ? relative.filter { $0.projectID == nil } : local
+                } else { matches = relative }
+            }
+            let ids = Set(matches.map(\.key))
+            if ids.count == 1 { keys.formUnion(ids) }
+        }
+        return keys
     }
 
     private static func readPathArguments(input: String, toolName: String) -> [String]? {
         let command: String
         let isDirect = directReadTools.contains(toolName)
         if isDirect {
+            if let arguments = TransientToolInput.arguments(input) {
+                guard let path = (arguments["path"] ?? arguments["file_path"]) as? String else { return nil }
+                return [path]
+            }
             command = input
         } else if shellTools.contains(toolName) {
-            command = shellCommand(fromInput: input) ?? input
+            if let arguments = TransientToolInput.arguments(input) {
+                guard arguments["workdir"] == nil || arguments["workdir"] is String else { return nil }
+                guard let value = (arguments["cmd"] ?? arguments["command"]) as? String else { return nil }
+                command = value
+            } else { command = shellCommand(fromInput: input) ?? input }
         } else {
             return nil
         }
 
-        guard !containsUnsafeShellSyntax(command) else { return nil }
-        let words = shellWords(command)
-        guard !words.isEmpty else { return nil }
+        guard command.utf8.count <= 262_144, let segments = readSegments(command) else { return nil }
+        let groups = segments.map(shellWords)
+        guard groups.allSatisfy({ !$0.isEmpty }) else { return nil }
         if isDirect {
             // Direct read tools may receive either a complete command-like
             // input (`read path`) or just the path argument.
-            return words
+            return groups.flatMap { $0 }
         }
-        guard isReadExecutable(words) else { return nil }
-        return Array(words.dropFirst())
+        guard groups.allSatisfy(isReadExecutable) else { return nil }
+        for words in groups where words.first == "sed" {
+            let operands = words.dropFirst().filter { !$0.hasPrefix("-") }
+            guard let program = operands.first,
+                  program.range(of: #"^(\d+|\$)(,(\d+|\$))?p$"#, options: .regularExpression) != nil else { return nil }
+        }
+        return groups.flatMap { $0.dropFirst() }
+    }
+
+    /// Accept only unconditional sequences of read-only commands. `&&` and
+    /// `||` remain excluded: a later read might never have executed.
+    private static func readSegments(_ command: String) -> [String]? {
+        var result: [String] = []
+        var current = ""
+        var quote: Character?
+        var escaped = false
+        for character in command {
+            if escaped { current.append(character); escaped = false; continue }
+            if character == "\\" { current.append(character); escaped = true; continue }
+            if let active = quote {
+                if character == active { quote = nil }
+                // Substitution executes even inside double quotes.
+                if active == "\"", character == "$" || character == "`" { return nil }
+                current.append(character); continue
+            }
+            if character == "'" || character == "\"" { quote = character; current.append(character); continue }
+            if "|&><`#$(){}".contains(character) { return nil }
+            if character == ";" || character == "\n" || character == "\r" {
+                if !current.trimmingCharacters(in: .whitespaces).isEmpty { result.append(current); current = "" }
+            } else { current.append(character) }
+        }
+        guard quote == nil, !escaped else { return nil }
+        if !current.trimmingCharacters(in: .whitespaces).isEmpty { result.append(current) }
+        return result.isEmpty || result.count > 64 ? nil : result
     }
 
     private static func isReadExecutable(_ words: [String]) -> Bool {
@@ -75,42 +134,6 @@ enum ManifestReadEvidence {
             }
         }
         return false
-    }
-
-    private static func containsUnsafeShellSyntax(_ command: String) -> Bool {
-        var single = false
-        var double = false
-        var escaped = false
-        var index = command.startIndex
-        while index < command.endIndex {
-            let character = command[index]
-            // Newlines begin another shell command, and an unquoted hash
-            // starts a comment. Reject both so a manifest path in a later or
-            // non-executing context cannot be mistaken for read evidence.
-            if character == "\n" || character == "\r" {
-                return true
-            }
-            if escaped {
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if single {
-                if character == "'" { single = false }
-            } else if double {
-                if character == "\"" { double = false }
-            } else if character == "'" {
-                single = true
-            } else if character == "\"" {
-                double = true
-            } else if ";|&><`#".contains(character) {
-                return true
-            } else if character == "$", command.index(after: index) < command.endIndex,
-                      command[command.index(after: index)] == "(" {
-                return true
-            }
-            index = command.index(after: index)
-        }
-        return single || double || escaped
     }
 
     private static func normalizedPathToken(_ token: String) -> String? {

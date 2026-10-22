@@ -325,7 +325,14 @@ public struct CodexAccountUsageReading: Sendable {
 }
 
 enum CodexAppServerProcess {
-    static func exchange(executableURL: URL, request: Data, timeout: TimeInterval, maxOutputBytes: Int) async throws -> Data {
+    static func exchange(
+        executableURL: URL,
+        request: Data,
+        timeout: TimeInterval,
+        maxOutputBytes: Int,
+        beforeStartupLock: (@Sendable () -> Void)? = nil,
+        onCancellationHandled: (@Sendable () -> Void)? = nil
+    ) async throws -> Data {
         let holder = SessionHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -334,6 +341,7 @@ enum CodexAppServerProcess {
                     request: request,
                     timeout: timeout,
                     maxOutputBytes: maxOutputBytes,
+                    beforeStartupLock: beforeStartupLock,
                     continuation: continuation
                 )
                 holder.set(session)
@@ -341,6 +349,7 @@ enum CodexAppServerProcess {
             }
         } onCancel: {
             holder.cancel()
+            onCancellationHandled?()
         }
     }
 
@@ -366,6 +375,7 @@ enum CodexAppServerProcess {
 
     private final class Session: @unchecked Sendable {
         private let lock = NSLock()
+        private let startupLock = NSLock()
         private let process: Process
         private let input: Pipe
         private let output: Pipe
@@ -375,6 +385,7 @@ enum CodexAppServerProcess {
         private let request: Data
         private let timeout: TimeInterval
         private let maxOutputBytes: Int
+        private let beforeStartupLock: (@Sendable () -> Void)?
         private let initialRequest: Data
         private let usageRequest: Data
         private var finished = false
@@ -401,13 +412,21 @@ enum CodexAppServerProcess {
         private var timeoutWork: DispatchWorkItem?
         private let continuation: CheckedContinuation<Data, Error>
 
-        init(executableURL: URL, request: Data, timeout: TimeInterval, maxOutputBytes: Int, continuation: CheckedContinuation<Data, Error>) {
+        init(
+            executableURL: URL,
+            request: Data,
+            timeout: TimeInterval,
+            maxOutputBytes: Int,
+            beforeStartupLock: (@Sendable () -> Void)?,
+            continuation: CheckedContinuation<Data, Error>
+        ) {
             process = Process()
             input = Pipe()
             output = Pipe()
             self.request = request
             self.timeout = timeout
             self.maxOutputBytes = maxOutputBytes
+            self.beforeStartupLock = beforeStartupLock
             self.continuation = continuation
             let lines = request.split(separator: 0x0A, omittingEmptySubsequences: true)
             initialRequest = lines.first.map { Data($0) + Data([0x0A]) } ?? Data()
@@ -429,10 +448,20 @@ enum CodexAppServerProcess {
         }
 
         func start() {
-            guard !isFinished else { return }
+            // Cancellation can arrive after the first finished check but
+            // before Process.run(). Keep startup and finish cleanup ordered so
+            // a pre-launch cancellation cannot close the pipe and then allow
+            // this method to launch an unowned child against that closed pipe.
+            beforeStartupLock?()
+            startupLock.lock()
+            guard !isFinished else {
+                startupLock.unlock()
+                return
+            }
             do {
                 try process.run()
             } catch {
+                startupLock.unlock()
                 finish(.failure(CodexAccountUsageReadError.launchFailed))
                 return
             }
@@ -440,11 +469,18 @@ enum CodexAppServerProcess {
             process.terminationHandler = { [weak self] _ in
                 self?.processDidTerminate()
             }
-            startOutputReader()
-            guard !isFinished else { return }
+            guard startOutputReader(), !isFinished else {
+                let shouldReportSetupFailure = !isFinished
+                startupLock.unlock()
+                if shouldReportSetupFailure {
+                    finish(.failure(CodexAccountUsageReadError.unavailable))
+                }
+                return
+            }
             do {
                 try input.fileHandleForWriting.write(contentsOf: initialRequest)
             } catch {
+                startupLock.unlock()
                 finish(.failure(CodexAccountUsageReadError.unavailable))
                 return
             }
@@ -455,15 +491,16 @@ enum CodexAppServerProcess {
             if let timeoutWork {
                 DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout, execute: timeoutWork)
             }
+            startupLock.unlock()
         }
 
-        private func startOutputReader() {
+        private func startOutputReader() -> Bool {
 #if canImport(Darwin)
+            guard !isFinished else { return false }
             let descriptor = output.fileHandleForReading.fileDescriptor
             let flags = fcntl(descriptor, F_GETFL)
             guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
-                finish(.failure(CodexAccountUsageReadError.unavailable))
-                return
+                return false
             }
 
             let source = DispatchSource.makeReadSource(
@@ -473,12 +510,12 @@ enum CodexAppServerProcess {
             source.setEventHandler { [weak self] in
                 self?.readAvailableOutput()
             }
-            let handle = output.fileHandleForReading
-            source.setCancelHandler {
-                try? handle.close()
+            source.setCancelHandler { [weak self] in
+                self?.closeOutputReaderHandle()
             }
             outputReadSource = source
             source.resume()
+            return true
 #else
             // The supported product platform uses the non-blocking Darwin
             // path above. Keep a portable fallback for package-only builds.
@@ -498,6 +535,7 @@ enum CodexAppServerProcess {
                     self.finish(.failure(CodexAccountUsageReadError.unavailable))
                 }
             }
+            return true
 #endif
         }
 
@@ -505,6 +543,12 @@ enum CodexAppServerProcess {
         private func readAvailableOutput() {
             outputReadLock.lock()
             defer { outputReadLock.unlock() }
+            // A termination callback can pass its initial finished check,
+            // wait behind the source handler, and resume after that handler
+            // has completed the exchange. Re-check while holding the same
+            // lock used to close the handle so FileHandle.fileDescriptor is
+            // never queried after cancellation has closed it.
+            guard !isFinished else { return }
             let descriptor = output.fileHandleForReading.fileDescriptor
             var bytes = [UInt8](repeating: 0, count: 16_384)
             while !isFinished {
@@ -602,10 +646,20 @@ enum CodexAppServerProcess {
         }
 
         private func finish(_ result: Result<Data, Error>) {
+            // startupLock is the launch/cancel linearization point. If finish
+            // wins it, start observes finished and never launches. If start
+            // wins it, Process.run() commits the launch before finish can
+            // mark the session, and the cleanup below owns that child.
+            startupLock.lock()
             lock.lock()
-            guard !finished else { lock.unlock(); return }
+            guard !finished else {
+                lock.unlock()
+                startupLock.unlock()
+                return
+            }
             finished = true
             lock.unlock()
+            startupLock.unlock()
             timeoutWork?.cancel()
             stopOutputReader()
             terminateProcessTree()
@@ -646,12 +700,20 @@ enum CodexAppServerProcess {
                 outputReadSource = nil
                 source.cancel()
             } else {
-                try? output.fileHandleForReading.close()
+                closeOutputReaderHandle()
             }
 #else
             try? output.fileHandleForReading.close()
 #endif
         }
+
+#if canImport(Darwin)
+        private func closeOutputReaderHandle() {
+            outputReadLock.lock()
+            defer { outputReadLock.unlock() }
+            try? output.fileHandleForReading.close()
+        }
+#endif
 
         /// Stop the app-server and any descendants before the caller is
         /// released. A continuation must not be resumed while a timed-out

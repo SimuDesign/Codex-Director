@@ -37,7 +37,7 @@ public enum PersistenceAllowlist {
     public static let callKeys: Set<String> = [
         "id", "session_id", "parent_call_id", "ordinal", "timestamp",
         "actor_name", "resource_id", "call_kind", "status", "duration_ms",
-        "confidence", "error_category",
+        "confidence", "error_category", "evidence_kind",
     ]
 
     /// Keys allowed in persisted token snapshots.

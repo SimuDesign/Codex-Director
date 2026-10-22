@@ -73,7 +73,7 @@ public struct CapabilityBrowseContext: Codable, Sendable, Equatable, Hashable {
     public init(
         scope: CapabilityBrowseScope = .allCapabilities,
         search: String = "",
-        sort: CapabilitySort = .recentUsageDescending,
+        sort: CapabilitySort = .usageDescending,
         activityFilter: CapabilityActivityFilter = .all,
         pluginStatusFilter: CapabilityPluginStatusFilter = .all
     ) {

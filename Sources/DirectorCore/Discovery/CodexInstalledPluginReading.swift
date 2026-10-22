@@ -172,7 +172,7 @@ public struct CodexInstalledPluginReading: CodexInstalledPluginInventoryReading,
     private static func requestPayload() -> Data {
         let messages: [[String: Any]] = [
             ["id": 1, "method": "initialize", "params": [
-                "clientInfo": ["name": "codex_director", "title": "Codex Director", "version": "1.4.1"],
+                "clientInfo": ["name": "codex_director", "title": "Codex Director", "version": "1.4.3"],
                 "capabilities": ["experimentalApi": true]
             ]],
             ["method": "initialized", "params": [:]],

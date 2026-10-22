@@ -91,13 +91,14 @@ public enum DirectorFilterLayout {
     public static let searchMinimumWidth: CGFloat = 220
     public static let controlGap: CGFloat = DirectorSpacing.space3
     public static let viewMinimumWidth: CGFloat = 152
-    public static let sortMinimumWidth: CGFloat = 132
+    public static let sortMinimumWidth = DirectorCapabilityFilterMetrics.sortWidth
+    public static let periodWidth = DirectorCapabilityFilterMetrics.periodWidth
     public static let pluginStatusMinimumWidth: CGFloat = 128
 
     public static func controlsMinimumWidth(for category: CapabilityCategory) -> CGFloat {
         let isPlugin = category == .installedPlugins
-        let count = isPlugin ? 3 : 2
-        let widths = viewMinimumWidth + sortMinimumWidth + (isPlugin ? pluginStatusMinimumWidth : 0)
+        let count = isPlugin ? 4 : 3
+        let widths = viewMinimumWidth + periodWidth + sortMinimumWidth + (isPlugin ? pluginStatusMinimumWidth : 0)
         return widths + CGFloat(count - 1) * controlGap
     }
 
@@ -110,7 +111,7 @@ public enum DirectorFilterLayout {
         // Keep the selectors on one line whenever their own minimum widths fit;
         // only then collapse to a two-column or single-column stack.
         guard width < controlsMinimumWidth(for: category) else { return .row }
-        return width >= viewMinimumWidth * 2 + controlGap ? .twoColumns : .singleColumn
+        return width >= periodWidth * 2 + controlGap ? .twoColumns : .singleColumn
     }
 }
 
@@ -120,6 +121,7 @@ public enum DirectorFilterLayout {
         let context: CapabilityBrowseContext
         let language: AppLanguage
         let dataRevision: Int
+        let usagePeriod: CapabilityFolderUsagePeriod
     }
 
     private struct RowProjection {
@@ -144,7 +146,23 @@ public enum DirectorFilterLayout {
     internal private(set) var rowTextBuildCount = 0
     #endif
 
-    @Published public var context = CapabilityBrowseContext()
+    @Published public var context = CapabilityBrowseContext() {
+        didSet {
+            // Compatibility for clients using the old period-in-sort options.
+            // Scope/search changes must never reset the independent period.
+            guard context.sort != oldValue.sort else { return }
+            if context.sort == .thirtyDayUsageDescending { usagePeriod = .thirtyDays }
+            if context.sort == .recentUsageDescending { usagePeriod = .sevenDays }
+        }
+    }
+    @Published public private(set) var usagePeriod: CapabilityFolderUsagePeriod = .thirtyDays
+
+    public func setUsagePeriod(_ period: CapabilityFolderUsagePeriod) {
+        if context.sort == .recentUsageDescending || context.sort == .thirtyDayUsageDescending {
+            context = context.updated(sort: .usageDescending)
+        }
+        if usagePeriod != period { usagePeriod = period }
+    }
     @Published public var selectedID: String?
     @Published public private(set) var catalog: [CapabilityCatalogEntry]
     @Published public private(set) var recentStats: [CapabilityUsageStats]
@@ -221,7 +239,7 @@ public enum DirectorFilterLayout {
     public var summaryMetrics: [CapabilitySummaryMetric] { Array(summaryCards.prefix(3)) }
     private func metric(_ kind: CapabilitySummaryMetricKind, _ value: Int, ready: Bool = true) -> CapabilitySummaryMetric {
         let label: String
-        switch kind { case .global: label = "Global"; case .project: label = "Project"; case .recent7: label = "Used in past 7 days"; case .notUsed30: label = "Not used in past 30 days"; case .installed: label = "Installed"; case .enabled: label = "Enabled"; case .attributionUnavailable: label = "Attribution unavailable" }
+        switch kind { case .global: label = "Global"; case .project: label = "Project"; case .recent7: label = "Used in past 7 days"; case .notUsed30: label = "No attributed records in 30 days"; case .installed: label = "Installed"; case .enabled: label = "Enabled"; case .attributionUnavailable: label = "Attribution unavailable" }
         return .init(kind: kind, label: label, value: value, statisticsReady: ready)
     }
     public var rows: [CapabilityLibraryRow] { rows(for: context.scope) }
@@ -236,7 +254,7 @@ public enum DirectorFilterLayout {
     }
 
     private func rowProjection(for scope: CapabilityBrowseScope) -> RowProjection {
-        let key = RowProjectionKey(scope: scope, context: context, language: language, dataRevision: dataRevision)
+        let key = RowProjectionKey(scope: scope, context: context, language: language, dataRevision: dataRevision, usagePeriod: usagePeriod)
         if let cachedRowProjection, cachedRowProjection.key == key { return cachedRowProjection.value }
         #if DIRECTOR_INTERACTION_PERFORMANCE
         let projectionStart = DispatchTime.now().uptimeNanoseconds
@@ -287,20 +305,20 @@ public enum DirectorFilterLayout {
     private func matchesActivity(_ row: CapabilityLibraryRow) -> Bool { switch context.activityFilter { case .all: return true; case .recent7: return row.recent7Count.map { $0 > 0 } ?? false; case .notUsed30: return !row.attributionUnavailable && row.recent30Count.map { $0 == 0 } ?? false } }
     private func matchesPluginStatus(_ entry: CapabilityCatalogEntry) -> Bool { guard category == .installedPlugins else { return true }; switch context.pluginStatusFilter { case .all: return true; case .enabled: return entry.resource.status != .blocked && entry.resource.status != .warning; case .disabled: return entry.resource.status == .blocked } }
     public func displayedUsageCount(for row: CapabilityLibraryRow) -> Int? {
-        context.sort == .thirtyDayUsageDescending ? row.recent30Count : row.recent7Count
+        usagePeriod == .thirtyDays ? row.recent30Count : row.recent7Count
     }
 
     public var displayedUsageReady: Bool {
         if category == .installedPlugins {
-            return context.sort == .thirtyDayUsageDescending ? browsePlugin30StatsReady : browsePluginStatsReady
+            return usagePeriod == .thirtyDays ? browsePlugin30StatsReady : browsePluginStatsReady
         }
-        return context.sort == .thirtyDayUsageDescending ? browse30StatsReady : browseStatsReady
+        return usagePeriod == .thirtyDays ? browse30StatsReady : browseStatsReady
     }
 
     /// Lazy, bounded to the current directory: warm navigation and selection
     /// reuse display strings; no eager formatting of offscreen capabilities.
     internal func rowText(for row: CapabilityLibraryRow, language: AppLanguage, timeZone: TimeZone = .current) -> CapabilityLibraryRowText {
-        let key = RowTextKey(row: row, language: language, isThirtyDay: context.sort == .thirtyDayUsageDescending, ready: displayedUsageReady, timeZone: timeZone)
+        let key = RowTextKey(row: row, language: language, isThirtyDay: usagePeriod == .thirtyDays, ready: displayedUsageReady, timeZone: timeZone)
         if let cached = cachedRowText[row.id], cached.key == key { return cached.value }
         if rowLocalizer?.language != language { rowLocalizer = DirectorLocalizer(language: language) }
         let localizer = rowLocalizer!
@@ -326,8 +344,8 @@ public enum DirectorFilterLayout {
             summary: CapabilityPurposeLocalization.localizedSummary(for: resource, language: language) ?? copy("library.purposeUnavailable", "Purpose unavailable"),
             metadata: metadata,
             countValue: usage.map { copy("library.number", "%lld", Int64($0)) } ?? unknown,
-            countLabel: usage == nil ? copy("library.evidence", "Evidence") : key.isThirtyDay ? copy("library.calls30Label", "calls · 30 days") : copy("library.callsLabel", "calls"),
-            accessibilityLabel: "\(resource.name), \(count)", inferredLabel: inferred
+            countLabel: usage == nil ? copy("library.evidence", "Evidence") : key.isThirtyDay ? copy("library.calls30Label", "calls · 30 days") : copy("library.calls7Label", "calls · 7 days"),
+            accessibilityLabel: "\(resource.name), \(count), \(copy(key.isThirtyDay ? "capabilityUsage.thirtyDays" : "capabilityUsage.sevenDays", key.isThirtyDay ? "Last 30 days" : "Last 7 days"))", inferredLabel: inferred
         )
         #if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
         rowTextBuildCount += 1
@@ -458,6 +476,7 @@ public struct CapabilityLibraryView: View {
     public var folderDefinitions: [CapabilityFolderDefinition]
     public var folderMembership: ((String, String) -> Bool)?
     public var onToggleFolderMembership: ((String, String, Bool) -> Void)?
+    public var onUsagePeriodChanged: ((CapabilityFolderUsagePeriod) -> Void)?
     public let presentationState: DirectorPresentationState
     public let pluginInventoryAvailable: Bool?
     public let queryStatus: DirectorLibraryQueryStatus?
@@ -470,7 +489,7 @@ public struct CapabilityLibraryView: View {
     @State private var cachedDetailKey = ""
     @State private var selectedRowEmphasized = false
     @State private var groupDisclosure = CapabilityLibraryDisclosureState()
-    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, pluginInventoryAvailable: Bool? = nil, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.pluginInventoryAvailable = pluginInventoryAvailable; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership }
+    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, pluginInventoryAvailable: Bool? = nil, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil, onUsagePeriodChanged: ((CapabilityFolderUsagePeriod) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.pluginInventoryAvailable = pluginInventoryAvailable; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership; self.onUsagePeriodChanged = onUsagePeriodChanged }
     public var body: some View {
         DirectorEditorialFrame {
             GeometryReader { proxy in
@@ -811,7 +830,8 @@ public struct CapabilityLibraryView: View {
 
     private var filterSearchField: some View {
         DirectorSearchField(copy("filter.searchCapabilities", "Search capabilities"),
-                            text: Binding(get: { model.context.search }, set: { model.context = model.context.updated(search: $0) }))
+                            text: Binding(get: { model.context.search }, set: { model.context = model.context.updated(search: $0) }),
+                            height: DirectorCapabilityFilterMetrics.controlHeight)
     }
 
     private func menuField<Content: View>(
@@ -822,7 +842,7 @@ public struct CapabilityLibraryView: View {
         maxWidth: CGFloat,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        DirectorOutlinedMenuField(value, height: DirectorSpacing.controlMinHeight) {
+        DirectorOutlinedMenuField(value, height: DirectorCapabilityFilterMetrics.controlHeight) {
             content()
         }
         .frame(minWidth: minWidth, idealWidth: idealWidth, maxWidth: maxWidth)
@@ -1079,7 +1099,7 @@ public struct CapabilityLibraryView: View {
         return DirectorMetricSequence(contentWidth: width) {
             ForEach(model.summaryCards) { item in
                 let minimumHeight: CGFloat = width < 760 ? DirectorSpacing.capabilityMetricHeightCompact : DirectorSpacing.capabilityMetricHeight
-                DirectorMetricCard(symbolName: DirectorSymbol.summaryMetric(item.kind), label: metricLabel(item), value: metricValue(item), selected: selectedMetric(item), tone: metricTone(item.kind), minimumHeight: minimumHeight) { summaryAction(item.kind) }
+                summaryCard(item, minimumHeight: minimumHeight)
             }
             if model.category == .installedPlugins && model.pluginAttributionUnavailableCount > 0 {
                 Text(copy("library.attributionUnavailableCount", "Attribution unavailable for %lld", Int64(model.pluginAttributionUnavailableCount))).font(DirectorTypography.label).foregroundStyle(DirectorColor.textSecondary).frame(maxWidth: .infinity, alignment: .leading)
@@ -1090,6 +1110,15 @@ public struct CapabilityLibraryView: View {
         let key: String
         switch item.kind { case .global: key = "global"; case .project: key = "project"; case .recent7: key = "used"; case .notUsed30: key = "notUsed30"; case .installed: key = "installed"; case .enabled: key = "enabled"; case .attributionUnavailable: key = "attributionUnavailable" }
         return copy("library.summary.\(key)", item.label)
+    }
+    @ViewBuilder private func summaryCard(_ item: CapabilitySummaryMetric, minimumHeight: CGFloat) -> some View {
+        let card = DirectorMetricCard(symbolName: DirectorSymbol.summaryMetric(item.kind), label: metricLabel(item), value: metricValue(item), selected: selectedMetric(item), tone: metricTone(item.kind), minimumHeight: minimumHeight) { summaryAction(item.kind) }
+        if item.kind == .notUsed30 {
+            let evidenceHelp = copy("library.notUsed30.help", "Unsupported or incomplete evidence can omit actual use; zero means no attributed records were found in the last 30 days.")
+            card.help(evidenceHelp).accessibilityHint(evidenceHelp)
+        } else {
+            card
+        }
     }
     private func metricValue(_ item: CapabilitySummaryMetric) -> String { if (item.kind == .installed || item.kind == .enabled) && pluginCountUnknown { return copy("library.pending", "—") }; if !item.statisticsReady && (item.kind == .recent7 || item.kind == .notUsed30) { return copy("library.pending", "—") }; return number(item.value) }
     private var usageStatisticsReady: Bool { model.category == .installedPlugins ? model.pluginStatsReady : model.categoryStatsReady }
@@ -1172,25 +1201,28 @@ public struct CapabilityLibraryView: View {
         case .row:
             HStack(alignment: .center, spacing: DirectorSpacing.space3) {
                 viewPicker
+                usagePeriodPicker
                 sortPicker
                 if model.category == .installedPlugins { pluginStatusPicker }
             }
         case .twoColumns:
             LazyVGrid(
                 columns: [
-                    GridItem(.flexible(minimum: DirectorFilterLayout.viewMinimumWidth), spacing: DirectorSpacing.space3),
-                    GridItem(.flexible(minimum: DirectorFilterLayout.viewMinimumWidth), spacing: DirectorSpacing.space3)
+                    GridItem(.flexible(minimum: DirectorFilterLayout.periodWidth), spacing: DirectorSpacing.space3),
+                    GridItem(.flexible(minimum: DirectorFilterLayout.periodWidth), spacing: DirectorSpacing.space3)
                 ],
                 alignment: .leading,
                 spacing: DirectorSpacing.space2
             ) {
                 viewPicker
+                usagePeriodPicker
                 sortPicker
                 if model.category == .installedPlugins { pluginStatusPicker }
             }
         case .singleColumn:
             VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
                 viewPicker
+                usagePeriodPicker
                 sortPicker
                 if model.category == .installedPlugins { pluginStatusPicker }
             }
@@ -1247,40 +1279,21 @@ public struct CapabilityLibraryView: View {
     }
     private var pluginStatusLabel: String { pluginStatusLabel(model.context.pluginStatusFilter) }
 
-    private var sortPicker: some View {
-        menuField(
-            value: sortLabel,
-            accessibilityLabel: copy("library.sort", "Sort"),
-            minWidth: 132,
-            idealWidth: 152,
-            maxWidth: 176
-        ) {
-            menuOption(copy("library.sort.recentDescending", "Past 7 days ↓"), selected: effectiveSort == .recentUsageDescending) {
-                selectSort(.recentUsageDescending)
-            }
-            menuOption(copy("library.sort.thirtyDescending", "Past 30 days ↓"), selected: effectiveSort == .thirtyDayUsageDescending) {
-                selectSort(.thirtyDayUsageDescending)
-            }
-            menuOption(copy("library.sort.usageAscending", "Usage ↑"), selected: effectiveSort == .usageAscending) {
-                selectSort(.usageAscending)
-            }
-            menuOption(copy("library.sort.name", "Name A–Z"), selected: effectiveSort == .nameAscending) {
-                selectSort(.nameAscending)
-            }
-            if model.modifiedSortAllowed {
-                menuOption(copy("library.sort.modified", "Modified ↓"), selected: effectiveSort == .modifiedDescending) {
-                    selectSort(.modifiedDescending)
-                }
-            }
-        }
+    private var usagePeriodPicker: some View {
+        DirectorUsagePeriodPicker(selection: Binding(get: { model.usagePeriod }, set: { period in
+            model.setUsagePeriod(period)
+            onUsagePeriodChanged?(period)
+        }))
     }
 
-    private var effectiveSort: CapabilitySort {
-        model.context.sort == .usageDescending ? .recentUsageDescending : model.context.sort
+    private var sortPicker: some View {
+        DirectorUsageSortMenu(selection: Binding(
+            get: { DirectorUsageSortOption(model.context.sort) },
+            set: { selectSort($0.capabilitySort) }
+        ), allowsModified: model.modifiedSortAllowed)
     }
     private var scopeLabel: String { scopeLabel(model.context.scope) }
     private func scopeLabel(_ scope: CapabilityBrowseScope) -> String { switch scope { case .global: return copy("library.scope.global", "Global configuration"); case .allProjects: return copy("library.scope.projects", "Project configuration"); case .allCapabilities: return copy("library.scope.all", "All capabilities"); case .project(let id): return model.projects.first { $0.id == id }.map { copy("library.scope.projectUsage", "%@ · Usage", $0.name) } ?? id } }
-    private var sortLabel: String { switch model.context.sort { case .thirtyDayUsageDescending: return copy("library.sort.thirtyDescending", "Past 30 days ↓"); case .usageAscending: return copy("library.sort.usageAscending", "Usage ↑"); case .nameAscending: return copy("library.sort.name", "Name A–Z"); case .modifiedDescending where model.modifiedSortAllowed: return copy("library.sort.modified", "Modified ↓"); default: return copy("library.sort.recentDescending", "Past 7 days ↓") } }
     private func selectedMetric(_ metric: CapabilitySummaryMetric) -> Bool {
         switch metric.kind {
         case .global: return model.context.scope == .global

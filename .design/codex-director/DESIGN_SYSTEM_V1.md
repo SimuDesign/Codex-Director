@@ -1,9 +1,9 @@
 # Codex Director Design System v1
 
-Version: `1.4.1` (visible marketing version; internal build `29`)  
+Version: `1.5.1` (visible marketing version; internal build `35`)
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-09-23
+Last updated: 2026-10-07
 
 ## 1. Purpose
 
@@ -332,8 +332,9 @@ decorative folder symbol and one purpose line, an inline wide/stacked narrow
 folder-name search field, two aligned folder sections without a thick divider, and opaque
 folder cards. Folder interiors use breadcrumb, compact 32/28pt title, counts,
 three tabs and unboxed search/sort controls. Agent companions share one
-continuous bordered group; list rows omit zero/noisy usage evidence and keep
-that detail in the inspector. This local variant does not replace the shared
+continuous bordered group; rows show period-labelled observed calls, including
+zero after computation and `—` while pending. Noisy coverage details stay in
+help/AX and the inspector. This local variant does not replace the shared
 1440pt page measure, 52/36pt editorial titles or global 4/2/1 metric rules.
 While the directory is pending, counts use an em dash and the page shows a
 native loading state; an active refresh or safe stale/failure signal is a
@@ -364,7 +365,7 @@ Keep 32pt library and 36pt folder control heights and native keyboard/AX behavio
 - Use Swift Charts with native dynamic colors. Content charts are not glass panels.
 - Quota: a weekly outer ring (216pt / 20pt) and, when a valid same-source five-hour window exists, a concentric inner ring (154pt / 12pt). The center presents five-hour then weekly values with a 40pt divider; a single valid window uses one appropriately sized ring, and an expired/missing window is hidden independently. Reset time(s) sit below the centered ring. The quota-column heading aligns to the leading content edge; the ring and reset group remain centered. Recorded time and an extra evidence heading are omitted. If a current observation expired, show “waiting for a new quota record”, not a newly full allowance. Multiple sources use an outlined segmented switch whose selected border uses the shared brand gradient; no system-blue selected fill is allowed.
 - Daily weekly-quota usage bars: seven local calendar dates, each containing the reset-aware percentage-point increase observed from consecutive same-source weekly allowance reports. Retain use observed before and after a reported reset within one day. A day without an observation, an adjacent-day baseline, or sufficient reset evidence is unavailable rather than zero; only a confirmed flat sequence displays 0%. The current day ends at its latest report. Use the shared vertical brand gradient, a data-dependent percentage axis with annotation headroom, horizontal grid lines only, and centered date/bar columns whose labels and marks share the exact categorical center. If only a five-hour window is available, show “weekly quota history unavailable” rather than creating bars from the short window. Do not add ambiguous per-day reset text.
-- Rankings: current category resources with positive calls in the selected local natural-day window only, descending count, up to ten, proportional bars and explicit inferred labels. The Home ledger exposes a two-choice outlined Scheme A control for `Last 7 days` and `Last 30 days`; a fresh or invalid preference defaults to seven days and a valid user choice is restored on the next launch. The selected value remains visible at all widths. The control stays inline with the module title at wide widths and wraps below it at compact widths. A missing thirty-day projection is a pending state, never an empty or seven-day fallback; a successfully computed empty window is a separate confirmed-empty state. Switching the period is an in-memory projection over the cached Home snapshot and must not start indexing, SQLite reads, account reads or refresh work. Home ranking row labels and VoiceOver values include the full selected period name, and capability details reached from Home may show both seven-day and thirty-day counts.
+- Rankings: current category resources with positive calls in the selected local natural-day window only, descending count, up to ten, proportional bars and explicit inferred labels. The Home ledger exposes a two-choice outlined Scheme A control for `Last 7 days` and `Last 30 days`; a fresh or invalid preference defaults to thirty days and a valid user choice is restored on the next launch. The selected value remains visible at all widths. The control stays inline with the module title at wide widths and wraps below it at compact widths. A missing thirty-day projection is a pending state, never an empty or seven-day fallback; a successfully computed empty window is a separate confirmed-empty state. Switching the period is an in-memory projection over the cached Home snapshot and must not start indexing, SQLite reads, account reads or refresh work. Home ranking row labels and VoiceOver values include the full selected period name, and capability details reached from Home may show both seven-day and thirty-day counts.
 - Provide accessible labels and textual counts/time/missing states without hover. Do not use decorative symbols as extra AX content.
 - Distinguish loading, unindexed, no inventory, filter empty, not observed, attribution unavailable and update failure.
 
@@ -640,17 +641,25 @@ branded Refresh data control, and Open main window. An unavailable or expired
 window contributes neither a persistent label value nor popover rows.
 The refresh control uses the existing indeterminate native progress indicator
 and cannot be activated twice. Opening the popover may request one account-usage
-read when the cached reading is missing, older than thirty minutes, or past its
+read when the cached reading is missing, at least two minutes old, or past its
 reported reset; it never starts a capability indexer.
 
 When enabled, the app schedules only account-usage reads after the normal
-startup grace. While the Mac is awake, unlocked and not in Low Power Mode, an
-active session uses a five-minute cadence and an aggregate idle duration of at
-least 30 minutes uses a 30-minute cadence. Locked, sleeping and Low Power Mode
-states cancel the account schedule until the next OS state notification. Read
-failures back off to 5, 15 and 30 minutes and reset after a successful read.
-The scheduler has one bounded next-due wake-up, reads no event contents, and
-does not poll, read SQLite, or start a second indexer.
+startup grace. While the Mac is awake, unlocked and not in Low Power Mode, the
+exact `com.openai.codex` foreground identity uses a one-minute cadence. A
+confirmed departure uses two minutes for ten minutes, another foreground app
+outside that grace uses five minutes, and unknown foreground identity uses a
+conservative two minutes. Aggregate idle duration of at least 30 minutes takes
+priority and uses 30 minutes. Foreground means the keyboard-receiving app; it
+does not indicate whether a Codex task is running in the background. Locked,
+sleeping and Low Power Mode states cancel the account schedule until the next
+OS state notification. Read failures back off to stable 5, 15 and 30 minute
+deadlines and reset after a successful read. The scheduler has one bounded
+wake-up. During idle periods it checks aggregate idle duration at most once per
+minute when needed to detect resumed input, without starting Codex until an
+account read is due. It keeps only a safe foreground enum and last confirmed
+departure in memory, reads no window, task or input-event contents or SQLite,
+persists no application-activity history, and does not start a second indexer.
 
 Account values come only from the local Codex app-server read boundary and are
 reduced to validated five-hour and weekly percentages, their independent reset
@@ -798,6 +807,23 @@ caption for thirty-day sorting. Summary metrics and companion shared-session
 evidence retain their explicitly labeled seven-day meaning. Unknown results
 remain unavailable and sort after known values; changing sort uses memory.
 
+### 1.5.0 capability-folder usage extension
+
+This supersedes only the folder portion of the 1.4.1 sort contract. All three
+tabs use an independent outlined Last 7 days / Last 30 days selector, a visible
+All usage projects scope label and Usage descending / Usage ascending / Name
+A–Z menu. Keep one native search editor. Wide filters place the selector and
+sort alongside search; narrow filters stack using folder-local tokens.
+Wide member and companion rows place a nonwrapping 128pt count/caption column
+before trailing actions; compact rows put the same count below metadata.
+Use the existing monospaced count and observed-calls caption roles, no new
+glass/card/chart. Related-preview Skills show their own counts without joining
+the folder or Agent total. `—` is pending and computed `0` is no observed call,
+not non-use proof. AX/help include period, all-project scope and evidence limits.
+The remembered period is app-shared, not coupled to Home rankings or the
+per-window/folder/tab search, sort, expanded state and scroll position.
+Seven-day companion co-observation remains separate and noncausal.
+
 ### Pending proposal — four-library renderer experiment (not approved)
 
 The diagnostic-only AppKit table under `Sources/DirectorUI/Validation/` is a
@@ -812,3 +838,38 @@ the viewport-pinned detail Sheet. Compare actual input-to-first-correct-paint,
 memory, scroll smoothness, Light/Dark, Increase Contrast, Reduce Motion and
 actual VoiceOver reading on the complete page. A faster stripped-down table
 alone does not satisfy these conditions or authorize production replacement.
+
+### Unified capability filters — 2026-10-05
+
+Supersedes the 1.4.1 period-in-sort contract and the old 32pt library filter
+height only. All four libraries and all folder interiors share
+`DirectorUsagePeriodPicker`, `DirectorUsageSortMenu` and
+`DirectorCapabilityFilterMetrics`: 36pt outer fields, 232pt period selector,
+176pt sort field, 12pt horizontal gaps, existing neutral outline/brand-selected
+rail, native focus/keyboard/AX and full painted hit bounds. The period control
+uses a scoped native fitting height; other tabs/Settings retain their metrics.
+
+Order: search, applicable configuration/usage scope, Last 7/30 days, sort,
+applicable plugin status. An enclosing folder needs no redundant scope picker.
+Sort uses the identical Usage ↓ / Usage ↑ / Name A–Z labels; only custom
+libraries add Modified ↓. Both periods and all sort directions use cached
+projections. Period selection is app-shared and remembered through the existing
+preference key, independent of Home ranking period. Name/modified/ascending
+sort, scope and search do not reset it. Fixed summary-card and companion
+co-observation periods remain explicitly seven/thirty days as already defined.
+
+### Initial usage defaults — 2026-10-07
+
+Home rankings, all four libraries and all three folder tabs default to Last
+30 days; library and folder lists default to Usage ↓. Missing or invalid
+period preferences resolve to thirty days without writing on initialization.
+Valid remembered seven/thirty-day choices and window-local sort overrides
+remain intact. This supersedes the earlier fresh seven-day ranking default,
+not fixed-period summary cards, detail evidence or companion co-observation.
+It changes behavior only: existing Scheme A tokens, geometry, Light/Dark,
+contrast, native keyboard and accessibility controls remain unchanged.
+
+Measure actual inner content width once; search moves to its own row before
+selectors wrap into two columns or a stack. Keep one native search editor and
+all current values visible. Rows label the selected count period, preserve
+pending/zero/unavailable distinctions and never add new indexing/query work.

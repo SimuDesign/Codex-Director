@@ -3,6 +3,34 @@ import XCTest
 
 final class ResourceScannerTests: XCTestCase {
 
+    func testProjectBriefPairingKeepsTomlIdentityAndRejectsEscapedSymlink() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("director-pairing-\(UUID().uuidString)")
+        let project = directory.appendingPathComponent("project")
+        let agents = project.appendingPathComponent(".codex/agents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let toml = agents.appendingPathComponent("sample-agent.toml")
+        try "name = \"Sample Agent\"\ndescription = \"Synthetic role\"\n".write(to: toml, atomically: true, encoding: .utf8)
+        let root = ScanRoot(id: "synthetic-project", url: project, scope: .project, kind: .projects)
+        let before = ResourceScanner(roots: [root]).scan()
+        let original = try XCTUnwrap(before.resources.first { $0.kind == .agent })
+        let briefDirectory = agents.appendingPathComponent("sample-agent")
+        try FileManager.default.createDirectory(at: briefDirectory, withIntermediateDirectories: true)
+        let brief = briefDirectory.appendingPathComponent("agent.md")
+        try "# Synthetic Brief\nRead only.\n".write(to: brief, atomically: true, encoding: .utf8)
+        let after = ResourceScanner(roots: [root]).scan()
+        XCTAssertEqual(after.resources.filter { $0.kind == .agent }.map(\.id), [original.id])
+        XCTAssertEqual(after.agentPairings.count, 1)
+        XCTAssertEqual(after.agentPairings.first?.briefRelativePath, ".codex/agents/sample-agent/agent.md")
+        XCTAssertEqual(after.resources.first { $0.id == original.id }?.contentFingerprint, original.contentFingerprint)
+        try FileManager.default.removeItem(at: brief)
+        let outside = directory.appendingPathComponent("outside.md")
+        try "Outside synthetic root".write(to: outside, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: brief, withDestinationURL: outside)
+        XCTAssertTrue(ResourceScanner(roots: [root]).scan().agentPairings.isEmpty)
+        XCTAssertEqual(try String(contentsOf: toml, encoding: .utf8), "name = \"Sample Agent\"\ndescription = \"Synthetic role\"\n")
+    }
+
     func testSkillPurposeSupportsBlockScalarsAndOpeningProseWithoutChangingSources() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("director-purpose-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

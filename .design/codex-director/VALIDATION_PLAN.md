@@ -1,8 +1,8 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.4.1`  
+Version: `1.5.1`
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-09-23
+Last updated: 2026-10-07
 
 The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
@@ -284,7 +284,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.4.1 with internal build 29, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.5.1 with internal build 35, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -444,11 +444,23 @@ contain no account identifier, model/provider/source label, GPT-5.3 string,
 prompt, task title, path, argument, token or credential. Verify that opening a
 stale popover coalesces one account-usage request and that Refresh data reuses
 the app-scoped coordinator without a second indexer. With the menu bar enabled,
-verify the injected adaptive schedule: active/unlocked/awake/normal-power
-states use 5 minutes, aggregate idle at least 30 minutes uses 30 minutes,
-failure backoff is 5/15/30 minutes, and lock/sleep/Low Power Mode cancel and
-resume the schedule. The menu-bar tick must not read SQLite or index source
+verify the injected adaptive schedule: exact `com.openai.codex` foreground uses
+1 minute, confirmed departure under 10 minutes uses 2 minutes, another active
+app outside grace uses 5 minutes, unknown foreground uses 2 minutes, and
+aggregate idle at least 30 minutes uses 30 minutes. Verify exact 10- and
+30-minute boundaries, initial known-other state without invented grace,
+same-name or similarly named impostors, clock rollback, rapid switching and
+foreground-versus-background wording. Failure backoff is 5/15/30 minutes, and
+lock/sleep/Low Power Mode cancel and resume the schedule. Repeated activation,
+power and cache notifications must not move an anchored retry or postpone an
+earlier activity check; an older fast wake must reevaluate a slower policy and
+perform no early read. The menu-bar tick must not read SQLite or index source
 files, and a disabled menu bar must register no schedule or OS observers.
+Verify stop/re-enable observer generations, one bounded wake, idle checks no
+more than once per minute without starting Codex, and a popover that reuses
+data younger than two minutes but refreshes at two minutes. Confirm foreground
+identity and departure remain memory-only and no window, task or input-event
+contents or application-activity history enter persistence or evidence.
 
 For the canonical Codex source, inject an indexed weekly value followed by a
 newer sanitized account snapshot with different five-hour and weekly values.
@@ -616,3 +628,53 @@ attribution. Check the closed menu value and matching library row count after
 switching. Warm-cache folder entry must load one shared bounded batch; repeated
 sorting/tab/member actions must not query or index. Derived-data deletion clears
 the loaded folder period statistics. Preserve fixed seven-day summary labels.
+
+### 1.5.0 capability-folder observed counts
+
+The folder portion supersedes the period-in-sort control above. Verify all
+three tabs, real members and out-of-folder companion previews, with the
+independent outlined seven/thirty-day selector and visible all-usage-project
+scope. Name sorting must not hide/reset counts or period. Use opposite period
+orders, pending `—`, computed `0`, partial/inferred observations and a shared
+Skill associated with two Agents; show each resource's own count, never a sum
+of Agent and Skill observations. Wide counts sit before membership actions;
+compact counts remain legible below metadata with no horizontal overflow.
+Verify zh/en, Light/Dark, 720×480 and 1280×800, keyboard and real native AX
+period/count semantics, hover help, Increase Contrast and Reduce Motion.
+Shared stores and relaunch retain only the period; folder/tab browsing state
+and existing membership remain unchanged. A synthetic DB observer must prove
+repeated period/sort changes do not query/index/read accounts after the batch
+loads. Author verification and actual VoiceOver or independent QA evidence
+must be reported separately; neither AX presence nor source tests prove speech.
+
+### Unified capability filters — 2026-10-05
+
+Supersedes the old library period-in-sort matrix. Exercise all four libraries
+and folder interiors: shared seven/thirty-day selector, Usage ↓ / Usage ↑ /
+Name A–Z, and custom-library Modified ↓. Select thirty days, then change sort,
+search and scope: keep thirty-day counts, matching labels and unknown-last
+semantics. Switch destinations/windows and relaunch: shared remembered period
+survives, while Home period, fixed summary metrics and members stay unchanged.
+Test opposite period ordering and pending, zero and unavailable plugin values.
+
+Check uniform 36pt fields, 232pt period/176pt sort widths and 12pt gaps at narrow
+and default widths in zh/en Light/Dark. Hit field edges/padding/chevron and use
+native keyboard focus/activation. Selector layout wraps based on inner width,
+not window width; do not clip labels or duplicate search editors. Verify actual
+AX period/count values; record VoiceOver speech and Increase Contrast/Reduce
+Motion/Transparency runtime checks separately. Repeated period/sort operations
+after loading must leave SQLite/index/account query counters unchanged.
+
+### Initial usage-default regression — 2026-10-07
+
+Use isolated memory/injected preference fixtures to verify absent/invalid
+period values resolve to Last 30 days and initialization does not write.
+Home and all four library destinations use thirty-day data; every fresh
+folder/tab uses Usage ↓. Fixtures with opposite seven/thirty-day orders must
+prove counts and ordering follow the selected period. Valid remembered seven
+and thirty days and window-local sort overrides must survive; unknown data
+stays pending, never a seven-day fallback or invented zero. Selection changes
+must not index, query SQLite or read accounts. Confirm closed control values
+and AX labels in the installed build without changing real memberships.
+This behavioral check does not claim a new full visual/VoiceOver matrix;
+appearance and accessibility control geometry are unchanged.

@@ -2,10 +2,17 @@ import XCTest
 @testable import DirectorCore
 
 final class HomeUsageRankingPreferencesTests: XCTestCase {
-    func testMissingAndInvalidValuesResolveToSevenDays() {
-        XCTAssertEqual(HomeUsageRankingPeriod.resolve(nil), .sevenDays)
-        XCTAssertEqual(HomeUsageRankingPeriod.resolve("future"), .sevenDays)
+    func testMissingAndInvalidValuesResolveToThirtyDays() {
+        for raw in [nil, "", "future", "30", " 30d "] as [String?] {
+            XCTAssertEqual(HomeUsageRankingPeriod.resolve(raw), .thirtyDays)
+        }
+        XCTAssertEqual(HomeUsageRankingPreferences(memoryPeriod: .thirtyDays).period, .thirtyDays)
         XCTAssertEqual(HomeUsageRankingPreferences(memoryPeriod: .sevenDays).period, .sevenDays)
+    }
+
+    func testInjectedMissingValueDefaultsToThirtyDaysWithoutWriting() {
+        let store = HomeUsageRankingPreferences(readPeriod: { nil }, writePeriod: { _ in XCTFail("Initialization must not write preferences") })
+        XCTAssertEqual(store.period, .thirtyDays)
     }
 
     func testClosureStorePersistsOnlyTheSelectedPeriod() {
@@ -15,13 +22,27 @@ final class HomeUsageRankingPreferencesTests: XCTestCase {
             writePeriod: { rawValue = $0 }
         )
 
-        XCTAssertEqual(store.period, .sevenDays)
-        store.setPeriod(.thirtyDays)
         XCTAssertEqual(store.period, .thirtyDays)
-        XCTAssertEqual(rawValue, HomeUsageRankingPeriod.thirtyDays.rawValue)
+        XCTAssertNil(rawValue)
+        store.setPeriod(.sevenDays)
+        XCTAssertEqual(store.period, .sevenDays)
+        XCTAssertEqual(rawValue, HomeUsageRankingPeriod.sevenDays.rawValue)
 
         let restored = HomeUsageRankingPreferences(readPeriod: { rawValue }, writePeriod: { rawValue = $0 })
-        XCTAssertEqual(restored.period, .thirtyDays)
+        XCTAssertEqual(restored.period, .sevenDays)
+    }
+
+    func testIsolatedDefaultsRestoreBothValidPeriodsWithoutOverwritingThem() throws {
+        let suite = "director-home-period-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertEqual(HomeUsageRankingPreferences(defaults: defaults).period, .thirtyDays)
+        XCTAssertNil(defaults.string(forKey: HomeUsageRankingPreferences.preferenceKey))
+        for period in HomeUsageRankingPeriod.allCases {
+            defaults.set(period.rawValue, forKey: HomeUsageRankingPreferences.preferenceKey)
+            XCTAssertEqual(HomeUsageRankingPreferences(defaults: defaults).period, period)
+            XCTAssertEqual(defaults.string(forKey: HomeUsageRankingPreferences.preferenceKey), period.rawValue)
+        }
     }
 
     func testMemoryStoresAreIsolated() {

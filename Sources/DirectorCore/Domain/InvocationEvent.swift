@@ -25,6 +25,15 @@ public enum InvocationStatus: String, Codable, Sendable, CaseIterable {
     case unknown
 }
 
+/// Fixed provenance only. No source text, command or private path is retained.
+public enum InvocationEvidenceKind: String, Codable, Sendable, CaseIterable {
+    case agentDelegation = "agent-delegation"
+    case agentDelegationRequest = "agent-delegation-request"
+    case agentBriefRead = "agent-brief-read"
+    case skillManifestRead = "skill-manifest-read"
+    case structuredInvocation = "structured-invocation"
+}
+
 /// One normalized call record reconstructed from rollout JSONL evidence.
 /// The event carries identity, order, nesting, outcome, and confidence, but
 /// never raw arguments, outputs, or conversation text.
@@ -41,6 +50,8 @@ public struct InvocationEvent: Codable, Sendable, Equatable, Identifiable {
     public let durationMs: Int?
     public let confidence: EvidenceConfidence
     public let errorCategory: String?
+    /// Nil for legacy records; old cached JSON remains decodable.
+    public let evidenceKind: InvocationEvidenceKind?
 
     public init(
         id: String,
@@ -54,7 +65,8 @@ public struct InvocationEvent: Codable, Sendable, Equatable, Identifiable {
         status: InvocationStatus,
         durationMs: Int?,
         confidence: EvidenceConfidence,
-        errorCategory: String?
+        errorCategory: String?,
+        evidenceKind: InvocationEvidenceKind? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
@@ -68,5 +80,6 @@ public struct InvocationEvent: Codable, Sendable, Equatable, Identifiable {
         self.durationMs = durationMs
         self.confidence = confidence
         self.errorCategory = errorCategory
+        self.evidenceKind = evidenceKind
     }
 }

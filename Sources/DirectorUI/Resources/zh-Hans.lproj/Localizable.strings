@@ -763,12 +763,13 @@
 "library.activity" = "使用情况";
 "library.activity.all" = "全部使用情况";
 "library.activity.recent7" = "近 7 天使用";
-"library.activity.notUsed30" = "近 30 天未使用";
+"library.activity.notUsed30" = "近 30 天无归因记录";
 "library.pluginStatus" = "插件状态";
 "library.status.all" = "全部插件";
 "library.status.enabled" = "已启用";
 "library.status.disabled" = "未启用";
-"library.summary.notUsed30" = "30 天未使用";
+"library.summary.notUsed30" = "近 30 天无归因记录";
+"library.notUsed30.help" = "不支持或不完整的证据可能遗漏实际使用；零仅表示近 30 天未找到归因记录。";
 "library.attributionUnavailableCount" = "无法统计 %lld 项";
 "library.resultCount" = "%lld 项结果";
 "library.group.global" = "全局";
@@ -784,6 +785,14 @@
 "library.group.expanded" = "已展开";
 "library.group.collapsed" = "已收起";
 "library.callsLabel" = "次调用";
+"library.calls7Label" = "次调用 · 近 7 天";
+"capabilityUsage.period" = "统计周期";
+"capabilityUsage.sevenDays" = "近 7 天";
+"capabilityUsage.thirtyDays" = "近 30 天";
+"capabilityUsage.sort.descending" = "调用量 ↓";
+"capabilityUsage.sort.ascending" = "调用量 ↑";
+"capabilityUsage.sort.name" = "名称 A–Z";
+"capabilityUsage.sort.modified" = "最近修改 ↓";
 "library.evidence" = "证据";
 "settings.eyebrow" = "设置 / 方案 A";
 "settings.subtitle" = "语言、外观、索引、能力迁移、隐私、诊断和应用信息。";
@@ -921,3 +930,16 @@
 "settings.migration.error.unavailable" = "导出服务尚未就绪。请关闭此窗口，等待启动完成后重试。";
 "settings.migration.error.preflight" = "预检未能完成。源文件没有被修改。";
 "settings.migration.error.save" = "能力包未能创建或校验，所选位置没有留下半成品。";
+
+"capabilityFolders.usage.period" = "统计周期";
+"capabilityFolders.usage.sevenDays" = "近 7 天";
+"capabilityFolders.usage.thirtyDays" = "近 30 天";
+"capabilityFolders.usage.allProjects" = "全部使用项目";
+"capabilityFolders.usage.scopeHelp" = "文件夹按配置归属组织能力；次数统计覆盖所有已索引的使用项目。";
+"capabilityFolders.usage.recorded" = "次已记录调用";
+"capabilityFolders.usage.captionSeven" = "已记录 · 近 7 天";
+"capabilityFolders.usage.captionThirty" = "已记录 · 近 30 天";
+"capabilityFolders.usage.pending" = "统计尚未就绪";
+"capabilityFolders.usage.inferred" = "%d 次为推断识别";
+"capabilityFolders.usage.partial" = "证据覆盖不完整或未知";
+"capabilityFolders.usage.help" = "这是已记录的委派或文件读取证据，不代表成功执行或能力有效。不支持或不完整的证据可能遗漏实际使用；零仅表示未找到归因记录。配套 Skill 的次数是它自身的使用记录，不证明该 Agent 调用了它。";

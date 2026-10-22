@@ -544,24 +544,39 @@ public struct CapabilityFoldersView: View {
 
     private func folderFilterRow(for folderID: String, width: CGFloat) -> some View {
         // As with the entry search, keep a single native editor per layout.
-        Group {
-            if width >= DirectorCapabilityFolderLayout.compactBreakpoint {
+        VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
+            if DirectorCapabilityFolderLayout.contentWidth(for: width) >= DirectorFilterLayout.searchMinimumWidth + DirectorCapabilityFilterMetrics.periodWidth + DirectorCapabilityFilterMetrics.sortWidth + DirectorCapabilityFilterMetrics.gap * 2 {
                 HStack(spacing: DirectorSpacing.space3) {
                     folderSearchField(for: folderID)
                         .frame(maxWidth: .infinity)
+                    usagePeriodSelector
                     sortMenu(for: folderID)
                 }
             } else {
                 VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
                     folderSearchField(for: folderID)
-                    HStack {
-                        Spacer()
+                    if DirectorCapabilityFolderLayout.contentWidth(for: width) >= DirectorCapabilityFilterMetrics.periodWidth + DirectorCapabilityFilterMetrics.sortWidth + DirectorCapabilityFilterMetrics.gap {
+                        HStack(spacing: DirectorSpacing.space3) {
+                            usagePeriodSelector
+                            Spacer(minLength: 0)
+                            sortMenu(for: folderID)
+                        }
+                    } else {
+                        usagePeriodSelector
                         sortMenu(for: folderID)
                     }
                 }
             }
+            Text(t("capabilityFolders.usage.allProjects", "All usage projects"))
+                .font(DirectorTypography.label)
+                .foregroundStyle(DirectorColor.textSecondary)
+                .help(t("capabilityFolders.usage.scopeHelp", "Folder membership follows configuration ownership; recorded counts cover all indexed usage projects."))
         }
         .padding(.bottom, DirectorCapabilityFolderLayout.filterContentGap)
+    }
+
+    private var usagePeriodSelector: some View {
+        DirectorUsagePeriodPicker(selection: Binding(get: { model.capabilityFolderUsagePeriod }, set: { model.setCapabilityFolderUsagePeriod($0) }))
     }
 
     private func folderSearchField(for folderID: String) -> some View {
@@ -761,7 +776,8 @@ public struct CapabilityFoldersView: View {
     }
 
     private func memberRow(_ member: CapabilityFolderMember, folder: CapabilityFolderDefinition?, width: CGFloat) -> some View {
-        HStack(alignment: .top, spacing: DirectorSpacing.space3) {
+        let display = usageDisplay(for: member.id)
+        return HStack(alignment: .top, spacing: DirectorSpacing.space3) {
             Button { selectResource(member.id) } label: {
                 HStack(alignment: .top, spacing: DirectorSpacing.space3) {
                     Image(systemName: DirectorSymbol.resource(member.resource.kind))
@@ -787,13 +803,21 @@ public struct CapabilityFoldersView: View {
                             .font(DirectorTypography.label)
                             .foregroundStyle(DirectorColor.textTertiary)
                             .lineLimit(1)
+                        if width < DirectorCapabilityFolderLayout.compactBreakpoint {
+                            usageSummary(display, compact: true)
+                        }
                     }
                     Spacer(minLength: DirectorSpacing.space2)
+                    if width >= DirectorCapabilityFolderLayout.compactBreakpoint {
+                        usageSummary(display, compact: false)
+                    }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(member.resource.name), \(member.resource.kind == .agent ? t("capabilityFolders.agent", "Agent") : t("capabilityFolders.skill", "Skill"))")
+            .accessibilityValue(display.accessibilityText)
+            .help(display.help)
             folderMembershipMenu(member.resource, currentFolder: folder)
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
@@ -838,6 +862,7 @@ public struct CapabilityFoldersView: View {
                     if !isCollapsed {
                         VStack(alignment: .leading, spacing: DirectorSpacing.space2) {
                             ForEach(Array(relations.enumerated()), id: \.offset) { _, item in
+                                let display = usageDisplay(for: item.resource.id)
                                 Button {
                                     selectResource(item.resource.id)
                                 } label: {
@@ -851,6 +876,9 @@ public struct CapabilityFoldersView: View {
                                                 .foregroundStyle(DirectorColor.textPrimary)
                                                 .lineLimit(2)
                                             Spacer()
+                                            if width >= DirectorCapabilityFolderLayout.compactBreakpoint {
+                                                usageSummary(display, compact: false)
+                                            }
                                             Image(systemName: "chevron.right")
                                                 .font(.caption)
                                                 .foregroundStyle(DirectorColor.textTertiary)
@@ -873,11 +901,16 @@ public struct CapabilityFoldersView: View {
                                         }
                                         .font(DirectorTypography.label)
                                         .foregroundStyle(DirectorColor.textTertiary)
+                                        if width < DirectorCapabilityFolderLayout.compactBreakpoint {
+                                            usageSummary(display, compact: true)
+                                        }
                                     }
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityLabel("\(item.resource.name), \(t("capabilityFolders.skill", "Skill"))")
+                                .accessibilityValue(display.accessibilityText)
+                                .help(display.help)
                             }
                         }
                         .padding(.leading, DirectorCapabilityFolderLayout.skillIndent + DirectorCapabilityFolderLayout.skillRuleInset)
@@ -1151,10 +1184,8 @@ public struct CapabilityFoldersView: View {
             switch sort {
             case .usageAscending:
                 if let result = compareUsage(lhs.resource.id, rhs.resource.id, ascending: true) { return result }
-            case .recentUsageDescending:
+            case .usageDescending:
                 if let result = compareUsage(lhs.resource.id, rhs.resource.id, ascending: false) { return result }
-            case .thirtyDayUsageDescending:
-                if let result = compareUsage(lhs.resource.id, rhs.resource.id, ascending: false, thirtyDays: true) { return result }
             case .nameAscending: break
             }
             let compare = lhs.resource.name.localizedStandardCompare(rhs.resource.name)
@@ -1162,28 +1193,43 @@ public struct CapabilityFoldersView: View {
         }
     }
 
-    private func recentCount(for id: String, thirtyDays: Bool = false) -> Int? {
-        model.capabilityFolderUsageCount(for: id, thirtyDays: thirtyDays)
+    private func recentCount(for id: String) -> Int? {
+        model.capabilityFolderUsageCount(for: id, thirtyDays: model.capabilityFolderUsagePeriod == .thirtyDays)
     }
 
-    private func recentUsageText(for id: String) -> String {
-        "\(t("capabilityFolders.recentUsage", "Last 7 days")): \(recentCount(for: id).map(String.init) ?? "—")"
+    private func usageDisplay(for id: String) -> CapabilityFolderUsageDisplay {
+        let period = model.folderUsagePeriods?[id]
+        let stats = model.capabilityFolderUsagePeriod == .thirtyDays ? period?.thirtyDay : period?.sevenDay
+        return CapabilityFolderUsageDisplay(count: recentCount(for: id), stats: stats, period: model.capabilityFolderUsagePeriod, language: languageStore.language)
+    }
+
+    private func usageSummary(_ display: CapabilityFolderUsageDisplay, compact: Bool) -> some View {
+        Group {
+            if compact {
+                HStack(spacing: DirectorSpacing.space2) {
+                    Text(display.value).font(DirectorTypography.capabilityRowCount)
+                    Text(display.caption).font(DirectorTypography.capabilityRowCountLabel)
+                }
+            } else {
+                VStack(alignment: .trailing, spacing: DirectorSpacing.space1) {
+                    Text(display.value).font(DirectorTypography.capabilityRowCount)
+                    Text(display.caption).font(DirectorTypography.capabilityRowCountLabel)
+                }
+                .frame(width: DirectorCapabilityFolderLayout.usageCountColumnWidth, alignment: .trailing)
+            }
+        }
+        .foregroundStyle(DirectorColor.dataText)
+        .fixedSize(horizontal: true, vertical: true)
+        // The real detail button announces one combined value, without a
+        // duplicate virtual count control or an extra keyboard stop.
+        .accessibilityHidden(true)
     }
 
     /// Unknown statistics are kept after known values rather than being
     /// silently treated as zero. The final name/ID tie-breaker remains
     /// deterministic for both known and unknown rows.
-    private func compareUsage(_ lhsID: String, _ rhsID: String, ascending: Bool, thirtyDays: Bool = false) -> Bool? {
-        let lhs = recentCount(for: lhsID, thirtyDays: thirtyDays)
-        let rhs = recentCount(for: rhsID, thirtyDays: thirtyDays)
-        switch (lhs, rhs) {
-        case let (left?, right?):
-            if left == right { return nil }
-            return ascending ? left < right : left > right
-        case (_?, nil): return true
-        case (nil, _?): return false
-        case (nil, nil): return nil
-        }
+    private func compareUsage(_ lhsID: String, _ rhsID: String, ascending: Bool) -> Bool? {
+        CapabilityFolderUsageDisplay.compareCounts(recentCount(for: lhsID), recentCount(for: rhsID), ascending: ascending)
     }
 
     private func folderTitle(_ folder: CapabilityFolderDefinition) -> String {
@@ -1300,23 +1346,13 @@ public struct CapabilityFoldersView: View {
     }
 
     private func sortMenu(for folderID: String) -> some View {
-        let selected = folderSort(for: folderID)
-        return DirectorOutlinedMenuField(selected.title(languageStore.language)) {
-            ForEach(CapabilityFolderSort.allCases) { value in
-                Button {
-                    folderSortByKey[sessionKey(for: folderID)] = value
-                } label: {
-                    HStack {
-                        Text(value.title(languageStore.language))
-                        if value == selected { Image(systemName: "checkmark") }
-                    }
-                }
+        DirectorUsageSortMenu(selection: Binding(
+            get: { DirectorUsageSortOption(rawValue: folderSort(for: folderID).rawValue) ?? .usageDescending },
+            set: { value in
+                guard let sort = CapabilityFolderSort(rawValue: value.rawValue) else { return }
+                folderSortByKey[sessionKey(for: folderID)] = sort
             }
-        }
-        .frame(width: DirectorCapabilityFolderLayout.sortFieldWidth)
-        .frame(minHeight: DirectorCapabilityFolderLayout.controlHeight, alignment: .leading)
-        .accessibilityLabel(t("capabilityFolders.filter.sort", "Sort"))
-        .accessibilityValue(selected.title(languageStore.language))
+        ))
     }
 
     private func createFolder() {
@@ -1365,7 +1401,7 @@ public struct CapabilityFoldersView: View {
     }
 
     private func folderSort(for folderID: String) -> CapabilityFolderSort {
-        folderSortByKey[sessionKey(for: folderID)] ?? .nameAscending
+        folderSortByKey[sessionKey(for: folderID)] ?? .usageDescending
     }
 
     private func collapsedCompanionAgentIDs(for folderID: String) -> Set<String> {
@@ -1488,18 +1524,12 @@ private struct FolderUsageRequest: Equatable {
 }
 
 enum CapabilityFolderSort: String, CaseIterable, Identifiable, Sendable {
-    case recentUsageDescending
-    case thirtyDayUsageDescending
+    case usageDescending
     case usageAscending
     case nameAscending
     var id: String { rawValue }
     func title(_ language: AppLanguage) -> String {
-        switch self {
-        case .recentUsageDescending: return language == .simplifiedChinese ? "近 7 天调用" : "Recent usage"
-        case .thirtyDayUsageDescending: return language == .simplifiedChinese ? "近 30 天调用 ↓" : "Past 30 days ↓"
-        case .usageAscending: return language == .simplifiedChinese ? "调用量升序" : "Usage ascending"
-        case .nameAscending: return language == .simplifiedChinese ? "名称 A–Z" : "Name A–Z"
-        }
+        (DirectorUsageSortOption(rawValue: rawValue) ?? .usageDescending).title(language)
     }
 }
 

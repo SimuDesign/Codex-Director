@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import DirectorCore
 
@@ -65,8 +66,9 @@ final class IndexingCoordinatorTests: XCTestCase {
         try handle.close()
     }
 
-    private func makeCoordinator(store: DatabaseStore) -> IndexingCoordinator {
-        IndexingCoordinator(store: store)
+    private func makeCoordinator(store: DatabaseStore, now: Date? = nil) -> IndexingCoordinator {
+        if let now { return IndexingCoordinator(store: store, now: { now }) }
+        return IndexingCoordinator(store: store)
     }
 
     private func configuration(
@@ -200,6 +202,292 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(result.indexedSessions, 1)
         let checkpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
         XCTAssertEqual(checkpoint?.parserVersion, RolloutEventDecoder.parserVersion)
+    }
+
+    func testParser140UpgradeReparsesRecentSessionDespiteOldFileMtimeExactlyOnce() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("observation-upgrade")
+        let url = active.appendingPathComponent("recent-old-mtime.jsonl")
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-05T04:00:00Z"))
+        let stamp = ISO8601DateFormatter().string(from: now.addingTimeInterval(-60))
+        try write([metaLine(id: "session:recent-evidence").replacingOccurrences(of: "2026-08-15T04:11:50.973Z", with: stamp)], to: url)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-50 * 86_400)], ofItemAtPath: url.path)
+        let coordinator = makeCoordinator(store: store, now: now)
+        _ = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        let storedCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        let checkpoint = try XCTUnwrap(storedCheckpoint)
+        try await store.upsertCheckpoint(IndexCheckpoint(sourceFileID: checkpoint.sourceFileID, sourceSize: checkpoint.sourceSize,
+            sourceMtime: checkpoint.sourceMtime, byteOffset: checkpoint.byteOffset, parserVersion: "1.4.0", indexedAt: now))
+        let repaired = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        XCTAssertEqual(repaired.indexedSessions, 1)
+        let repairedCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        XCTAssertEqual(repairedCheckpoint?.parserVersion, "1.4.1")
+        let repeated = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        XCTAssertEqual(repeated.skippedFiles, 1)
+    }
+
+    func testParser140UpgradeDefersUnchangedSessionOlderThanThirtyLocalDays() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("observation-old-deferred")
+        let url = active.appendingPathComponent("old-unchanged.jsonl")
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-05T04:00:00Z"))
+        let oldDate = now.addingTimeInterval(-45 * 86_400)
+        let stamp = ISO8601DateFormatter().string(from: oldDate)
+        try write([metaLine(id: "session:old-deferred").replacingOccurrences(of: "2026-08-15T04:11:50.973Z", with: stamp)], to: url)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: url.path)
+        let coordinator = makeCoordinator(store: store, now: now)
+        _ = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        let storedCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        let checkpoint = try XCTUnwrap(storedCheckpoint)
+        try await store.upsertCheckpoint(.init(sourceFileID: checkpoint.sourceFileID, sourceSize: checkpoint.sourceSize,
+            sourceMtime: checkpoint.sourceMtime, byteOffset: checkpoint.byteOffset, parserVersion: "1.4.0", indexedAt: now))
+
+        let deferred = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+
+        XCTAssertEqual(deferred.skippedFiles, 1)
+        XCTAssertEqual(deferred.indexedSessions, 0)
+        let deferredCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        XCTAssertEqual(deferredCheckpoint?.parserVersion, "1.4.0")
+    }
+
+    func testChangedOldParser140SessionStillReparsesNormally() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("observation-old-changed")
+        let url = active.appendingPathComponent("old-changed.jsonl")
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-05T04:00:00Z"))
+        let oldDate = now.addingTimeInterval(-45 * 86_400)
+        let stamp = ISO8601DateFormatter().string(from: oldDate)
+        try write([metaLine(id: "session:old-changed").replacingOccurrences(of: "2026-08-15T04:11:50.973Z", with: stamp)], to: url)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: url.path)
+        let coordinator = makeCoordinator(store: store, now: now)
+        _ = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+        let storedCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        let checkpoint = try XCTUnwrap(storedCheckpoint)
+        try await store.upsertCheckpoint(.init(sourceFileID: checkpoint.sourceFileID, sourceSize: checkpoint.sourceSize,
+            sourceMtime: checkpoint.sourceMtime, byteOffset: checkpoint.byteOffset, parserVersion: "1.4.0", indexedAt: now))
+        try append([callLine(callID: "changed", name: "read"), outputLine(callID: "changed")], to: url)
+        try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: url.path)
+
+        let repaired = try await coordinator.run(configuration: configuration(activeRoots: [active]))
+
+        XCTAssertEqual(repaired.indexedSessions, 1)
+        let calls = try await store.fetchCalls(sessionID: "session:old-changed")
+        let repairedCheckpoint = try await store.fetchCheckpoint(sourceFileID: url.lastPathComponent)
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(repairedCheckpoint?.parserVersion, "1.4.1")
+    }
+
+    func testSyntheticWrapperRepairReplaysAcrossProjectsAndGlobalScopeIdempotently() async throws {
+        final class EvaluationDataBox {
+            var data: Data?
+        }
+
+        let store = try makeStore()
+        let active = try tempDirectory("wrapper-replay-active")
+        let projectA = try tempDirectory("wrapper-project-a")
+        let projectB = try tempDirectory("wrapper-project-b")
+        let globalSkills = try tempDirectory("wrapper-global-skills")
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-05T04:00:00Z"))
+
+        func writeSkill(_ root: URL, relativeDirectory: String, name: String) throws -> URL {
+            let directory = root.appendingPathComponent(relativeDirectory, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("SKILL.md")
+            try "---\nname: \(name)\ndescription: Synthetic fixture.\n---\n".write(to: url, atomically: true, encoding: .utf8)
+            return url
+        }
+        func writeAgent(_ project: URL) throws -> [URL] {
+            let configuration = project.appendingPathComponent(".codex/agents/project-agent.toml")
+            let briefDirectory = project.appendingPathComponent(".codex/agents/project-agent", isDirectory: true)
+            try FileManager.default.createDirectory(at: briefDirectory, withIntermediateDirectories: true)
+            let brief = briefDirectory.appendingPathComponent("agent.md")
+            try "name = \"Project Agent\"\n".write(to: configuration, atomically: true, encoding: .utf8)
+            try "# Project Agent\n\nSynthetic method.\n".write(to: brief, atomically: true, encoding: .utf8)
+            return [configuration, brief]
+        }
+        func line(_ type: String, _ payload: [String: Any], ordinal: Int) throws -> String {
+            let object: [String: Any] = [
+                "type": type,
+                "timestamp": "2026-10-05T03:00:00Z",
+                "ordinal": ordinal,
+                "payload": payload,
+            ]
+            return String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
+        }
+        func wrapper(_ id: String, _ input: String, ordinal: Int) throws -> [String] {
+            [
+                try line("response_item", ["type": "custom_tool_call", "id": id, "call_id": id, "name": "exec", "input": input], ordinal: ordinal),
+                try line("response_item", ["type": "custom_tool_call_output", "call_id": id, "output": "synthetic"], ordinal: ordinal + 1),
+            ]
+        }
+        func digest(_ url: URL) throws -> String {
+            SHA256.hash(data: try Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
+        }
+
+        let skillAURL = try writeSkill(projectA, relativeDirectory: ".agents/skills/shared-skill", name: "shared-skill")
+        let skillBURL = try writeSkill(projectB, relativeDirectory: ".agents/skills/shared-skill", name: "shared-skill")
+        let globalSkillURL = try writeSkill(globalSkills, relativeDirectory: "global-tool", name: "global-tool")
+        let agentAURLs = try writeAgent(projectA)
+        let agentBURLs = try writeAgent(projectB)
+        let capabilityFiles = [skillAURL, skillBURL, globalSkillURL] + agentAURLs + agentBURLs
+        let sourceHashesBefore = try capabilityFiles.map(digest)
+
+        let sessionA = active.appendingPathComponent("synthetic-a.jsonl")
+        var sessionALines = [try line("session_meta", ["id": "session:synthetic-a", "cwd": projectA.path], ordinal: 0)]
+        sessionALines += try wrapper("wrapper-a-batch", """
+        const values = await Promise.allSettled([
+          tools.exec_command({cmd: 'cat .agents/skills/shared-skill/SKILL.md'}),
+          tools.exec_command({cmd: 'cat global-tool/SKILL.md', workdir: '\(globalSkills.path)'})
+        ]);
+        values.forEach((value, index) => text({index, value}));
+        """, ordinal: 1)
+        sessionALines += try wrapper("wrapper-a-catalog", """
+        text(await tools.exec_command({cmd: 'cat .codex/agents/project-agent/agent.md'}));
+        text(ALL_TOOLS.filter(x => /synthetic/.test(x.name)).map(x => ({name:x.name})));
+        """, ordinal: 3)
+        try write(sessionALines, to: sessionA)
+
+        let sessionB = active.appendingPathComponent("synthetic-b.jsonl")
+        var sessionBLines = [try line("session_meta", ["id": "session:synthetic-b", "cwd": projectB.path], ordinal: 0)]
+        sessionBLines += try wrapper("wrapper-b-loop", """
+        const result = await tools.exec_command({cmd: 'cat .agents/skills/shared-skill/SKILL.md'});
+        for (const item of result.output) { text(item); }
+        """, ordinal: 1)
+        sessionBLines += try wrapper("wrapper-b-workdir", """
+        await Promise.all([
+          tools.exec_command({cmd: 'cat .agents/skills/shared-skill/SKILL.md', workdir: '\(projectA.path)'}),
+          tools.exec_command({cmd: dynamicCommand})
+        ]);
+        """, ordinal: 3)
+        try write(sessionBLines, to: sessionB)
+
+        let child = active.appendingPathComponent("synthetic-child.jsonl")
+        var childLines = [try line("session_meta", [
+            "id": "session:synthetic-child", "cwd": projectB.path, "agent_role": "Project Agent",
+            "parent_thread_id": "session:synthetic-b", "forked_from_id": "session:synthetic-b",
+            "subagent_history_start_ordinal": 3,
+        ], ordinal: 0)]
+        childLines += try wrapper("wrapper-child-inherited", "await tools.exec_command({cmd: 'cat .agents/skills/shared-skill/SKILL.md'});", ordinal: 1)
+        childLines += try wrapper("wrapper-child-own", """
+        const values = await Promise.allSettled([
+          tools.exec_command({cmd: 'cat .codex/agents/project-agent/agent.md'}),
+          tools.exec_command({cmd: 'cat .agents/skills/shared-skill/SKILL.md'})
+        ]);
+        values.forEach(value => text(value));
+        """, ordinal: 3)
+        try write(childLines, to: child)
+
+        let configuration = IndexingCoordinator.Configuration(
+            scanRoots: [
+                .init(id: "project-a", url: projectA, scope: .project, kind: .projects),
+                .init(id: "project-b", url: projectB, scope: .project, kind: .projects),
+                .init(id: "global-skills", url: globalSkills, scope: .global, kind: .skills),
+            ],
+            activeSessionRoots: [active],
+            archivedSessionRoot: nil
+        )
+        let coordinator = makeCoordinator(store: store, now: now)
+        let first = try await coordinator.run(configuration: configuration)
+        XCTAssertEqual(first.indexedSessions, 3)
+
+        let resources = try await store.fetchAllResources()
+        let projectASkill = try XCTUnwrap(resources.first { $0.kind == .skill && $0.projectID == "project-a" && $0.name == "shared-skill" })
+        let projectBSkill = try XCTUnwrap(resources.first { $0.kind == .skill && $0.projectID == "project-b" && $0.name == "shared-skill" })
+        let globalSkill = try XCTUnwrap(resources.first { $0.kind == .skill && $0.scope == .global && $0.name == "global-tool" })
+        let projectAAgent = try XCTUnwrap(resources.first { $0.kind == .agent && $0.projectID == "project-a" && $0.name == "Project Agent" })
+        let projectBAgent = try XCTUnwrap(resources.first { $0.kind == .agent && $0.projectID == "project-b" && $0.name == "Project Agent" })
+        XCTAssertNotEqual(projectASkill.id, projectBSkill.id)
+        XCTAssertNotEqual(projectAAgent.id, projectBAgent.id)
+
+        let callsBefore = try await store.fetchInvocationsBySession()
+        let allBefore = callsBefore.values.flatMap { $0 }
+        XCTAssertTrue(allBefore.contains { $0.resourceID == projectASkill.id && $0.evidenceKind == .skillManifestRead })
+        XCTAssertTrue(allBefore.contains { $0.resourceID == projectBSkill.id && $0.evidenceKind == .skillManifestRead })
+        XCTAssertTrue(allBefore.contains { $0.resourceID == globalSkill.id && $0.evidenceKind == .skillManifestRead })
+        XCTAssertTrue(allBefore.contains { $0.resourceID == projectAAgent.id && $0.evidenceKind == .agentBriefRead })
+        XCTAssertTrue(allBefore.contains { $0.resourceID == projectBAgent.id && $0.evidenceKind == .agentDelegation })
+        XCTAssertFalse(callsBefore["session:synthetic-child", default: []].contains { $0.id.contains("inherited") })
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 8 * 3_600)!
+        let usage = try await store.fetchCapabilityUsageStats(window: .recent30(now: now, calendar: calendar))
+        let usageIDs = Set(usage.filter { $0.callCount > 0 }.map(\.resourceID))
+        XCTAssertTrue(usageIDs.isSuperset(of: [projectASkill.id, projectBSkill.id, globalSkill.id, projectAAgent.id, projectBAgent.id]))
+
+        let checkpointA = try await store.fetchCheckpoint(sourceFileID: sessionA.lastPathComponent)
+        let checkpointB = try await store.fetchCheckpoint(sourceFileID: sessionB.lastPathComponent)
+        let checkpointChild = try await store.fetchCheckpoint(sourceFileID: child.lastPathComponent)
+        let evaluationBox = EvaluationDataBox()
+        let evaluationStore = InvocationEvaluationStore(
+            readData: { evaluationBox.data },
+            writeData: { evaluationBox.data = $0; return true },
+            removeData: { evaluationBox.data = nil; return true }
+        )
+        let evaluatedCall = try XCTUnwrap(allBefore.first { $0.resourceID == projectASkill.id && $0.evidenceKind == .skillManifestRead })
+        let evaluation = InvocationEvaluation(invocationID: evaluatedCall.id, sessionID: evaluatedCall.sessionID,
+            resourceID: evaluatedCall.resourceID, label: .uncertain, updatedAt: now)
+        XCTAssertTrue(evaluationStore.set(evaluation))
+
+        let second = try await coordinator.run(configuration: configuration)
+        let callsAfter = try await store.fetchInvocationsBySession()
+        let resourcesAfter = try await store.fetchAllResources()
+        XCTAssertEqual(second.skippedFiles, 3)
+        XCTAssertEqual(callsAfter, callsBefore)
+        XCTAssertEqual(Set(resourcesAfter.map(\.id)), Set(resources.map(\.id)))
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: resourcesAfter.map { ($0.id, $0.contentFingerprint) }),
+                       Dictionary(uniqueKeysWithValues: resources.map { ($0.id, $0.contentFingerprint) }))
+        let checkpointAAfter = try await store.fetchCheckpoint(sourceFileID: sessionA.lastPathComponent)
+        let checkpointBAfter = try await store.fetchCheckpoint(sourceFileID: sessionB.lastPathComponent)
+        let checkpointChildAfter = try await store.fetchCheckpoint(sourceFileID: child.lastPathComponent)
+        XCTAssertEqual(checkpointAAfter, checkpointA)
+        XCTAssertEqual(checkpointBAfter, checkpointB)
+        XCTAssertEqual(checkpointChildAfter, checkpointChild)
+        XCTAssertEqual(evaluationStore.evaluation(for: evaluatedCall.id), evaluation)
+        XCTAssertEqual(try capabilityFiles.map(digest), sourceHashesBefore)
+    }
+
+    func testAppendedChildSessionRestoresRoleScopeAliasesAndHistoryBoundary() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("child-append")
+        let project = try tempDirectory("child-project")
+        let agentDir = project.appendingPathComponent(".codex/agents/sample-agent")
+        let skillDir = project.appendingPathComponent(".agents/skills/sample-skill")
+        try FileManager.default.createDirectory(at: agentDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        try "name = \"Sample Agent\"\n".write(to: project.appendingPathComponent(".codex/agents/sample-agent.toml"), atomically: true, encoding: .utf8)
+        try "# Sample Agent\nSynthetic method.\n".write(to: agentDir.appendingPathComponent("agent.md"), atomically: true, encoding: .utf8)
+        try "---\nname: sample-skill\n---\n".write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        func line(_ type: String, _ payload: [String: Any], _ ordinal: Int) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: ["type": type, "timestamp": "2026-10-03T00:00:00Z", "ordinal": ordinal, "payload": payload]), as: UTF8.self)
+        }
+        let url = active.appendingPathComponent("child.jsonl")
+        try write([
+            line("session_meta", ["id": "session:child", "cwd": project.path, "agent_role": "Sample Agent", "parent_thread_id": "parent", "forked_from_id": "parent", "subagent_history_start_ordinal": 3], 0),
+            line("response_item", ["type": "custom_tool_call", "id": "inherited", "call_id": "inherited", "name": "read", "input": ".agents/skills/sample-skill/SKILL.md"], 1),
+            line("response_item", ["type": "custom_tool_call", "id": "brief", "call_id": "brief", "name": "read", "input": ".codex/agents/sample-agent/agent.md"], 3),
+            line("response_item", ["type": "custom_tool_call_output", "call_id": "brief", "output": "synthetic"], 4)
+        ], to: url)
+        let config = IndexingCoordinator.Configuration(scanRoots: [ScanRoot(id: "project", url: project, scope: .project, kind: .projects)], activeSessionRoots: [active], archivedSessionRoot: nil)
+        let discovery = ResourceScanner(roots: config.scanRoots).scan()
+        XCTAssertEqual(discovery.agentPairings.count, 1)
+        let resolution = AgentEvidenceResolver(resources: discovery.resources, roots: config.scanRoots, pairings: discovery.agentPairings)
+            .resolveManifestReadSignals(input: ".codex/agents/sample-agent/agent.md", toolName: "read", projectID: "project", workingDirectory: project.path)
+        XCTAssertEqual(resolution.count, 1)
+        let coordinator = makeCoordinator(store: store)
+        _ = try await coordinator.run(configuration: config)
+        try append([
+            line("response_item", ["type": "function_call", "id": "skill", "call_id": "skill", "name": "exec_command", "arguments": "{\"cmd\":\"cat .agents/skills/sample-skill/SKILL.md\"}"], 5),
+            line("response_item", ["type": "function_call_output", "call_id": "skill", "output": "synthetic"], 6)
+        ], to: url)
+        _ = try await coordinator.run(configuration: config)
+        let calls = try await store.fetchCalls(sessionID: "session:child")
+        XCTAssertEqual(calls.filter { $0.evidenceKind == .agentDelegation }.count, 1)
+        XCTAssertEqual(calls.filter { $0.evidenceKind == .agentBriefRead }.count, 1)
+        XCTAssertEqual(calls.filter { $0.evidenceKind == .skillManifestRead }.count, 1)
+        XCTAssertFalse(calls.contains { $0.id.contains("inherited") })
+        let usage = try await store.fetchCapabilityHistory(through: Date(timeIntervalSince1970: 1_800_000_000))
+        let agentUsage = usage.filter { $0.resourceID.hasPrefix("agent:") }
+        XCTAssertEqual(agentUsage.first?.callCount, 1)
     }
 
     func testCurrentTokenUpgradeDefersUnchangedRolloutOlderThanThirtyDays() async throws {
@@ -377,6 +665,37 @@ final class IndexingCoordinatorTests: XCTestCase {
         XCTAssertEqual(count_sessions, 0)
         let count_calls = try await store.count("calls");
         XCTAssertEqual(count_calls, 0)
+    }
+
+    func testCancellationDuringAppendPreservesCommittedCheckpointAndRetryEvidence() async throws {
+        let store = try makeStore()
+        let active = try tempDirectory("cancel-append")
+        let file = active.appendingPathComponent("synthetic-cancel.jsonl")
+        try write([metaLine(id: "cancel-child"), callLine(callID: "first", name: "read"), outputLine(callID: "first")], to: file)
+        let coordinator = makeCoordinator(store: store)
+        let config = configuration(activeRoots: [active])
+        _ = try await coordinator.run(configuration: config)
+        let before = try await store.fetchCheckpoint(sourceFileID: file.lastPathComponent)
+        let padding = #"{"type":"response_item","payload":{"type":"message","text":"\#(String(repeating: "x", count: 1_100_000))"}}"#
+        try append([padding, callLine(callID: "second", name: "read"), outputLine(callID: "second")], to: file)
+        let progress = ProgressBox()
+        let task = Task {
+            try await coordinator.run(configuration: config) { event in
+                progress.append(event)
+                if event.currentFileBytesRead != nil { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        do { _ = try await task.value; XCTFail("expected mid-file cancellation") }
+        catch is CancellationError { }
+        XCTAssertTrue(progress.snapshot.contains { $0.currentFileBytesRead != nil })
+        let cancelledCheckpoint = try await store.fetchCheckpoint(sourceFileID: file.lastPathComponent)
+        let cancelledCalls = try await store.fetchCalls(sessionID: "cancel-child")
+        XCTAssertEqual(cancelledCheckpoint, before)
+        XCTAssertEqual(cancelledCalls.count, 1)
+        _ = try await coordinator.run(configuration: config)
+        let retriedCalls = try await store.fetchCalls(sessionID: "cancel-child")
+        XCTAssertEqual(retriedCalls.count, 2)
+        XCTAssertEqual(Set(retriedCalls.map(\.id)).count, 2)
     }
 
     private var fixturesResourcesRoot: URL {

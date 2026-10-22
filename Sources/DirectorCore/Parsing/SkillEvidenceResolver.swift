@@ -5,9 +5,9 @@ import Foundation
 /// Only these production signals are allowed:
 /// - `exact`: a structured `skill_invoked` event identifies exactly one
 ///   currently discovered Skill.
-/// - `inferred`: an actual tool-call input transiently references exactly one
-///   currently discovered `SKILL.md` manifest. The tool call is execution
-///   evidence; the manifest path is used only in memory to resolve the Skill.
+/// - `inferred`: a literal read operation references uniquely resolved
+///   discovered `SKILL.md` manifests. Paths are used only in memory; a batch
+///   result does not establish success of each individual read.
 /// - `unknown`: a structured event or actual manifest-read signal exists, but
 ///   zero or multiple current Skills can be resolved.
 ///
@@ -22,12 +22,14 @@ public struct SkillEvidenceResolver: Sendable {
         public let name: String
         public let relativeSourcePath: String
         fileprivate let absoluteSourcePath: String?
+        fileprivate let projectID: String?
 
-        public init(resourceID: String, name: String, relativeSourcePath: String, absoluteSourcePath: String? = nil) {
+        public init(resourceID: String, name: String, relativeSourcePath: String, absoluteSourcePath: String? = nil, projectID: String? = nil) {
             self.resourceID = resourceID
             self.name = name
             self.relativeSourcePath = relativeSourcePath
             self.absoluteSourcePath = absoluteSourcePath
+            self.projectID = projectID
         }
     }
 
@@ -55,7 +57,7 @@ public struct SkillEvidenceResolver: Sendable {
                     resourceID: resource.id,
                     name: resource.name,
                     relativeSourcePath: relative.replacingOccurrences(of: "\\", with: "/").replacingOccurrences(of: "./", with: ""),
-                    absoluteSourcePath: Self.absolutePath(relative: relative, sourceRootID: resource.sourceRootID, rootsByID: rootsByID, transientRoots: transientRoots)
+                    absoluteSourcePath: Self.absolutePath(relative: relative, sourceRootID: resource.sourceRootID, rootsByID: rootsByID, transientRoots: transientRoots), projectID: resource.projectID
                 )
             }
     }
@@ -71,8 +73,12 @@ public struct SkillEvidenceResolver: Sendable {
 
     /// Structured `skill_invoked` event: exact when exactly one current Skill
     /// matches by name, otherwise unknown.
-    public func resolveStructuredEvent(skillName: String) -> ResolvedSkill {
-        let matches = candidates.filter { $0.name == skillName }
+    public func resolveStructuredEvent(skillName: String, projectID: String? = nil) -> ResolvedSkill {
+        let explicit = candidates.filter { $0.resourceID == skillName }
+        if explicit.count == 1 { return ResolvedSkill(resourceID: explicit[0].resourceID, confidence: .exact) }
+        let all = candidates.filter { $0.name == skillName }
+        let local = projectID.map { project in all.filter { $0.projectID == project } } ?? []
+        let matches = local.isEmpty ? all.filter { $0.projectID == nil } : local
         switch matches.count {
         case 1:
             return ResolvedSkill(resourceID: matches[0].resourceID, confidence: .exact)
@@ -88,15 +94,18 @@ public struct SkillEvidenceResolver: Sendable {
     /// evidence. Returns nil when there is no read signal; otherwise inferred
     /// for exactly one matching candidate, unknown for zero or multiple.
     public func resolveManifestReadSignal(input: String, toolName: String?) -> ResolvedSkill? {
+        let results = resolveManifestReadSignals(input: input, toolName: toolName)
+        if results.count > 1 { return ResolvedSkill(resourceID: nil, confidence: .unknown) }
+        return results.first
+    }
+
+    public func resolveManifestReadSignals(input: String, toolName: String?, projectID: String? = nil, workingDirectory: String? = nil) -> [ResolvedSkill] {
         let paths = candidates.map {
-            ManifestReadCandidate(key: $0.resourceID, relativePath: $0.relativeSourcePath, absolutePath: $0.absoluteSourcePath)
+            ManifestReadCandidate(key: $0.resourceID, relativePath: $0.relativeSourcePath, absolutePath: $0.absoluteSourcePath, projectID: $0.projectID)
         }
-        guard let keys = ManifestReadEvidence.matchingCandidateKeys(input: input, toolName: toolName, candidates: paths), !keys.isEmpty else {
-            return nil
+        guard let keys = ManifestReadEvidence.matchingCandidateKeys(input: input, toolName: toolName, candidates: paths, projectID: projectID, workingDirectory: workingDirectory), !keys.isEmpty else {
+            return []
         }
-        guard keys.count == 1, let resourceID = keys.first else {
-            return ResolvedSkill(resourceID: nil, confidence: .unknown)
-        }
-        return ResolvedSkill(resourceID: resourceID, confidence: .inferred)
+        return keys.sorted().map { ResolvedSkill(resourceID: $0, confidence: .inferred) }
     }
 }

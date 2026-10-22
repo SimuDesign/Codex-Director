@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// Known rollout top-level event types observed across April–August 2026
 /// samples. Anything else is recorded as an `UnknownEventRecord`.
@@ -33,19 +34,32 @@ public struct RolloutEnvelope: Sendable {
     public let lineNumber: Int
     public let byteOffset: UInt64
     public let payload: TransientPayload?
+    /// Original history ordinal, transiently used to exclude inherited history.
+    public let sourceOrdinal: Int?
+
+    /// JSON booleans must not bridge to 0/1 history positions.
+    static func validatedOrdinal(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              let ordinal = value as? Int, ordinal >= 0,
+              number.doubleValue == Double(ordinal) else { return nil }
+        return ordinal
+    }
 
     public init(
         type: RolloutEventType,
         timestamp: Date?,
         lineNumber: Int,
         byteOffset: UInt64,
-        payload: TransientPayload?
+        payload: TransientPayload?,
+        sourceOrdinal: Int? = nil
     ) {
         self.type = type
         self.timestamp = timestamp
         self.lineNumber = lineNumber
         self.byteOffset = byteOffset
         self.payload = payload
+        self.sourceOrdinal = sourceOrdinal
     }
 }
 

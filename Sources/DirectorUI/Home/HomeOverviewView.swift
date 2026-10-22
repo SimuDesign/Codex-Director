@@ -19,7 +19,7 @@ public struct HomeOverviewView: View {
     public let onHomeUsageRankingPeriodChange: (HomeUsageRankingPeriod) -> Void
     @EnvironmentObject private var languageStore: AppLanguageStore
 
-    public init(model: HomeOverviewModel, quotaModel: QuotaOverviewModel, presentationState: DirectorPresentationState = .loaded, directoryLoaded: Bool = true, hasComputedStatistics: Bool = true, hasCachedHomeSummary: Bool = false, pluginInventoryAvailable: Bool? = nil, lastUpdatedAt: Date? = nil, homeUsageRankingPeriod: HomeUsageRankingPeriod = .sevenDays, onHomeUsageRankingPeriodChange: @escaping (HomeUsageRankingPeriod) -> Void = { _ in }, onQuotaSourceChange: @escaping (String) -> Void = { _ in }, onOpenCategory: @escaping (CapabilityCategory) -> Void = { _ in }, onOpenCapability: @escaping (CapabilityCategory, String) -> Void = { _, _ in }) {
+    public init(model: HomeOverviewModel, quotaModel: QuotaOverviewModel, presentationState: DirectorPresentationState = .loaded, directoryLoaded: Bool = true, hasComputedStatistics: Bool = true, hasCachedHomeSummary: Bool = false, pluginInventoryAvailable: Bool? = nil, lastUpdatedAt: Date? = nil, homeUsageRankingPeriod: HomeUsageRankingPeriod = .thirtyDays, onHomeUsageRankingPeriodChange: @escaping (HomeUsageRankingPeriod) -> Void = { _ in }, onQuotaSourceChange: @escaping (String) -> Void = { _ in }, onOpenCategory: @escaping (CapabilityCategory) -> Void = { _ in }, onOpenCapability: @escaping (CapabilityCategory, String) -> Void = { _, _ in }) {
         self.model = model
         self.quotaModel = quotaModel
         self.presentationState = presentationState

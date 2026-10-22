@@ -4,12 +4,32 @@ import XCTest
 
 @MainActor
 final class CapabilityLibraryStateTests: XCTestCase {
+    func testFreshLibrariesDefaultToThirtyDayUsageDescending() {
+        XCTAssertEqual(CapabilityBrowseContext().sort, .usageDescending)
+        for category in CapabilityCategory.allCases {
+            let model = CapabilityLibraryViewModel(category: category)
+            XCTAssertEqual(model.context.sort, .usageDescending)
+            XCTAssertEqual(model.usagePeriod, .thirtyDays)
+            XCTAssertFalse(model.displayedUsageReady)
+            model.context = model.context.updated(scope: .global, search: "synthetic")
+            XCTAssertEqual(model.context.sort, .usageDescending)
+            XCTAssertEqual(model.usagePeriod, .thirtyDays)
+        }
+    }
+
+    func testFolderSortFallbackDefaultsToUsageDescending() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(contentsOf: root.appendingPathComponent("Sources/DirectorUI/Capabilities/CapabilityFoldersView.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("folderSortByKey[sessionKey(for: folderID)] ?? .usageDescending"))
+    }
+
     func testThirtyDaySortUsesItsOwnCountsAndPreservesSevenDayRows() {
         let entries = ["a", "b"].map { CapabilityCatalogEntry(resource: resource($0, project: nil), category: .customAgents, parentPluginID: nil) }
         let model = CapabilityLibraryViewModel(category: .customAgents)
         let seven = [CapabilityUsageStats(resourceID: "a", callCount: 5, inferredCount: 0, lastUsedAt: date(0), coverage: .complete)]
         let thirty = [CapabilityUsageStats(resourceID: "a", callCount: 5, inferredCount: 0, lastUsedAt: date(0), coverage: .complete), CapabilityUsageStats(resourceID: "b", callCount: 20, inferredCount: 0, lastUsedAt: date(-864000), coverage: .complete)]
         model.setData(catalog: entries, categoryStats: seven, browseHistory: [], category30DayStats: thirty, browse30DayStats: thirty)
+        model.setUsagePeriod(.sevenDays)
         XCTAssertEqual(model.rows.map(\.id), ["a", "b"])
         model.context = model.context.updated(sort: .thirtyDayUsageDescending)
         XCTAssertEqual(model.rows.map(\.id), ["b", "a"])
@@ -85,6 +105,35 @@ final class CapabilityLibraryStateTests: XCTestCase {
         XCTAssertTrue(model.displayedUsageReady)
     }
 
+    func testThirtyDayFilterDistinguishesPendingObservedZeroAndPositivePartialEvidence() throws {
+        let pending = CapabilityCatalogEntry(resource: resource("pending", project: nil), category: .customAgents, parentPluginID: nil)
+        let zero = CapabilityCatalogEntry(resource: resource("zero", project: nil), category: .customAgents, parentPluginID: nil)
+        let partial = CapabilityCatalogEntry(resource: resource("partial", project: nil), category: .customAgents, parentPluginID: nil)
+        let model = CapabilityLibraryViewModel(category: .customAgents)
+        model.setDirectory(catalog: [pending, zero, partial], projects: [])
+        model.context = model.context.updated(activityFilter: .notUsed30)
+        XCTAssertTrue(model.rows.isEmpty)
+        XCTAssertFalse(model.summaryCards.last?.statisticsReady ?? true)
+
+        let positive = CapabilityUsageStats(resourceID: "partial", callCount: 3, inferredCount: 2, lastUsedAt: date(0), coverage: .partial)
+        model.setData(catalog: [pending, zero, partial], categoryStats: [positive], browseStats: [positive], browseHistory: [], category30DayStats: [positive], browse30DayStats: [positive])
+        XCTAssertEqual(model.rows.map(\.id), ["pending", "zero"])
+        XCTAssertFalse(model.rows.contains { $0.id == "partial" })
+
+        model.context = model.context.updated(activityFilter: .all)
+        model.setUsagePeriod(.thirtyDays)
+        let partialRow = try XCTUnwrap(model.rows.first { $0.id == "partial" })
+        XCTAssertEqual(partialRow.recent30Count, 3)
+        XCTAssertEqual(partialRow.coverage, .partial)
+        XCTAssertEqual(partialRow.inferredCount, 2)
+        let zeroRow = try XCTUnwrap(model.rows.first { $0.id == "zero" })
+        let zeroAX = model.rowText(for: zeroRow, language: .english).accessibilityLabel
+        XCTAssertTrue(zeroAX.contains("0 calls"))
+        XCTAssertFalse(zeroAX.localizedCaseInsensitiveContains("unused"))
+        XCTAssertFalse(zeroAX.contains("root"))
+        XCTAssertFalse(zeroAX.contains("payload"))
+    }
+
     func testThirtyDayPluginSortKeepsUnknownAfterExplicitZero() {
         let entries = ["a", "b", "c"].map { CapabilityCatalogEntry(resource: resource($0, project: nil), category: .installedPlugins, parentPluginID: nil) }
         let model = CapabilityLibraryViewModel(category: .installedPlugins, catalog: entries)
@@ -95,17 +144,20 @@ final class CapabilityLibraryStateTests: XCTestCase {
         XCTAssertEqual(model.rows.map { model.displayedUsageCount(for: $0) }, [8, 0, nil])
     }
 
-    func testFolderSortOffersBothPeriodsAndLocalizedCurrentValue() {
-        XCTAssertEqual(CapabilityFolderSort.allCases.map(\.rawValue), ["recentUsageDescending", "thirtyDayUsageDescending", "usageAscending", "nameAscending"])
-        XCTAssertEqual(CapabilityFolderSort.thirtyDayUsageDescending.title(.simplifiedChinese), "近 30 天调用 ↓")
-        XCTAssertEqual(CapabilityFolderSort.thirtyDayUsageDescending.title(.english), "Past 30 days ↓")
+    func testFolderSortIsIndependentOfPeriodAndHasLocalizedCurrentValue() {
+        XCTAssertEqual(CapabilityFolderSort.allCases.map(\.rawValue), ["usageDescending", "usageAscending", "nameAscending"])
+        XCTAssertEqual(CapabilityFolderSort.usageDescending.title(.simplifiedChinese), "调用量 ↓")
+        XCTAssertEqual(CapabilityFolderSort.usageDescending.title(.english), "Usage ↓")
     }
-    func testDefaultSortUsesSevenDayCountBeforeHistoryDate() {
+    func testDefaultSortUsesThirtyDayCountBeforeHistoryDate() {
         let a = CapabilityCatalogEntry(resource: resource("a", project: nil), category: .customAgents, parentPluginID: nil)
         let b = CapabilityCatalogEntry(resource: resource("b", project: nil), category: .customAgents, parentPluginID: nil)
         let model = CapabilityLibraryViewModel(category: .customAgents)
-        model.setData(catalog: [a, b], categoryStats: [CapabilityUsageStats(resourceID: "a", callCount: 10, inferredCount: 0, lastUsedAt: date(-100), coverage: .complete), CapabilityUsageStats(resourceID: "b", callCount: 1, inferredCount: 0, lastUsedAt: date(-1), coverage: .complete)], browseHistory: [])
+        let thirty = [CapabilityUsageStats(resourceID: "a", callCount: 10, inferredCount: 0, lastUsedAt: date(-100), coverage: .complete), CapabilityUsageStats(resourceID: "b", callCount: 1, inferredCount: 0, lastUsedAt: date(-1), coverage: .complete)]
+        let seven = [CapabilityUsageStats(resourceID: "a", callCount: 1, inferredCount: 0, lastUsedAt: date(-100), coverage: .complete), CapabilityUsageStats(resourceID: "b", callCount: 10, inferredCount: 0, lastUsedAt: date(-1), coverage: .complete)]
+        model.setData(catalog: [a, b], categoryStats: seven, browseHistory: [], category30DayStats: thirty, browse30DayStats: thirty)
         XCTAssertEqual(model.rows.map(\.id), ["a", "b"])
+        XCTAssertEqual(model.rows.map { model.displayedUsageCount(for: $0) }, [10, 1])
     }
     func testScopeAndSearchDoNotChangeCategoryCountOrUsedCount() {
         let entries = ["a", "b"].map { CapabilityCatalogEntry(resource: resource($0, project: $0 == "a" ? nil : "p"), category: .customAgents, parentPluginID: nil) }

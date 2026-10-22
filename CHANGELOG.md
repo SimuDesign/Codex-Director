@@ -4,6 +4,55 @@ All notable public changes will be documented here. The project follows semantic
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.5.1
+
+Bounded wrapper-attribution repair. Internal build: `35`. Local iteration only; no Tag or GitHub Release is implied.
+
+- Defaults Home, all four capability libraries and all folder tabs to Last 30 days and descending observed call counts. Valid remembered periods and user-selected session sorting remain unchanged; no indexing, schema or source-data change is required.
+
+- Replaces whole-wrapper syntax vetoes with a bounded, nonexecuting structural recognizer for supported eager literal tool calls, including direct calls and supported aggregate wrappers.
+- Retains proven earlier reads only across a finite, syntax-validated barrier grammar, including simple unknown calls/awaits and approved output callbacks or loops; an unrecognized suffix is rejected whole even when it might be valid JavaScript. A top-level statement allowlist crosses only static literals, supported literal tool/Promise execution sites and one exact read-only `ALL_TOOLS` metadata filter/map output grammar whose regex subset is limited to literal words, safe separators, grouping, alternation and correctly placed boundary anchors. Unknown evaluation, interpolated or unverified escaped templates, deferred/conditional bodies, delete/update/rebinding of protected runtime names, and unsafe shell mutations stop or reject attribution. Tool-object fields use a finite grammar: a supported dynamic sibling may run or throw before the tool call, so that call is not counted and only earlier proof may survive with unknown results. Malformed or unproved lexical, binding, operator, statement, object-field, delimiter, catalog or regex structure plus input, token or nesting-limit violations reject the whole wrapper; exceeding the 64-call budget retains only the proven bounded prefix with unknown results. Each synchronous extraction uses a local autorelease boundary without extending across async or persistence work.
+- Keeps batch, unawaited and limited-wrapper operation results unknown unless a single direct awaited call supplies individual result binding; aggregate completion, failure or interruption is not assigned to every inner operation.
+- Advances the parser marker to `1.4.1` and transactionally reparses unchanged `1.4.0` files only inside the recent 30-local-day window. Unchanged older archives remain deferred; schema v6, cache v1, manifest v1, stable resource IDs, folder memberships, evaluations and source files remain intact.
+- Replaces definite non-use copy with **No attributed records in 30 days** and clarifies that unsupported or incomplete evidence can omit actual use. Pending, unavailable, positive partial and inferred states remain distinct.
+
+## 1.5.0
+
+Capability usage and unified filters. Internal build: `34`. Local iteration only; no Tag or GitHub Release is implied.
+
+- Shows each capability's observed calls in Agent & Companion Skills, Agent and Skill tabs, including out-of-folder Skill previews without changing membership.
+- Adds an independent, remembered Last 7 days / Last 30 days selector shared across windows. Usage ascending/descending and Name A–Z sorting retain the selected period.
+- Unifies that period selector, sort vocabulary and 36pt native filter geometry across all four libraries and Capability Folders; preserves scope/plugin filters and custom modification-time sorting. Name/ascending/modified sorting no longer silently changes a thirty-day count to seven days.
+- Labels the all-usage-project scope; distinguishes pending statistics from observed zero and keeps partial/inferred evidence qualifications in help, accessibility and details.
+- Reuses the existing bounded batch and in-memory projections. Switching period/sort does not index, read account usage or query SQLite; source files, folder members, parser/schema and manifest v1 remain unchanged.
+
+## 1.4.4
+
+Local invocation-observation repair. Internal build: `32`. No Tag or GitHub Release is implied.
+
+- Recognizes actual child-session Agent roles with project-aware identity resolution; keeps delegation requests separate from confirmed child launches.
+- Maps project/global Agent configurations and companion Briefs to the existing stable resource identity without changing folder memberships or evaluations.
+- Recognizes literal batch tool reads, JSON function arguments and multiple known manifests; uncertain branches, dynamic inputs and mixed mutations remain unattributed.
+- Excludes inherited child history and redundant own-Agent reads from usage totals, while retaining fixed evidence provenance. Read/dispatch completion does not prove capability effectiveness.
+- Upgrades the derived schema transactionally and reparses recent old-parser sessions once in the background. Unchanged older archives remain deferred; cancellation cannot advance an uncommitted checkpoint.
+
+## 1.4.3
+
+Adaptive menu-bar allowance refresh. Internal build: `31`. No Tag or GitHub Release is implied.
+
+- Uses the exact `com.openai.codex` foreground application identity for a one-minute cadence, a two-minute cadence for ten minutes after confirmed departure, and a five-minute cadence while another application remains active after that grace period.
+- Keeps a conservative two-minute fallback when foreground identity is unknown and a thirty-minute cadence after thirty minutes of aggregate input idle time. Foreground status is not treated as evidence of background Codex task activity.
+- Keeps foreground state and the last confirmed Codex departure only in memory. No window, task or input-event contents and no application-activity history are read or persisted.
+- Preserves pause/disable gates, the two-minute popover freshness rule, reset-aware reads, one shared coordinator, cached values, and stable 5/15/30-minute failure deadlines under repeated system or cache notifications.
+
+## 1.4.2
+
+Local account-refresh patch. Internal build: `30`. No Tag or GitHub Release is implied.
+
+- Refreshes menu-bar account allowance every two minutes during active use without opening the popover; idle account reads remain thirty minutes apart.
+- Detects resumed aggregate input activity using the existing single wake-up, without starting Codex, reading SQLite or indexing capabilities during idle checks.
+- Restores the two-minute popover freshness threshold and preserves reset deadlines, shared refresh coalescing, pause states, cached values and 5/15/30-minute failure backoff.
+
 ## 1.4.1
 
 Source update; this merge does not create a Tag or GitHub Release. Internal build: `29`.

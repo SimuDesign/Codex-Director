@@ -256,7 +256,8 @@ public struct DirectorRootView: View {
             },
             onToggleFolderMembership: { resourceID, folderID, included in
                 self.model.setCapabilityFolderMembership(resourceID: resourceID, folderID: folderID, included: included)
-            })
+            },
+            onUsagePeriodChanged: { period in self.model.setCapabilityFolderUsagePeriod(period) })
         .navigationTitle(languageStore.localizer.text(titleKey, fallback: fallback))
     }
 
