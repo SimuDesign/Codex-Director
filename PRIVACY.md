@@ -58,6 +58,36 @@ observations across all usage projects. Changing period or sort starts no
 source scan, account read, analytics request or additional database query.
 No usage content or project paths are added to this preference.
 
+## Capability change history
+
+History is a separate Director-owned, local schema-v1 JSON store, independent
+of the disposable SQLite index. A normal inventory refresh reads at most 2 MiB
+per tracked document to verify its signature; opening history does not scan
+source files. Only eligible Agent configuration/method documents and the
+`SKILL.md` of custom or independently installed Skills are tracked. Bodies,
+diffs, source paths, usernames, prompts, credentials and tool arguments do not
+enter history. Retained fields are safe short names, stable IDs, fixed scope,
+document and event labels, signatures, observation times and coverage status.
+
+The directory is private (0700), files are 0600, and the history file is limited
+to 16 MiB. Retention is bounded to 180 days, 100 events per capability and
+20,000 events overall. Current baselines are not silently discarded to fit the
+budget. Corrupt, unsupported or over-budget storage is not silently reset.
+Only one process can write; other instances remain read-only. No history is
+uploaded or included in capability packages or the presentation cache.
+
+An explicit confirmed action in Settings → Privacy clears history only. Early
+observations cannot be reconstructed from current documents. The next normal
+refresh establishes a fresh baseline. Deleting derived index data does not
+clear history; unavailable call data is shown as unknown, not zero. A selected
+event can request one bounded read-only call/evaluation summary; evaluation
+edit times, source bodies and per-row eager queries are not used.
+
+能力变更记录独立保存在本机，只保留安全名称、稳定 ID、固定类型、文档签名、
+观察时间和覆盖状态，不保存正文、差异、源路径或凭证，也不上传或进入能力包。
+删除派生索引保留历史；只有隐私页的单独确认操作才清除历史，且不会改变源文件、
+人工评价或文件夹。历史时间不是实际编辑时间，调用与评价摘要也不证明修改效果。
+
 ## Exports
 
 Capability packages are unencrypted local ZIP files written only to a location selected by the user. Export preflight blocks recognized credentials and unredacted personal paths. Binary resources may be included but are marked as not content-scanned. Users are responsible for protecting exported packages and restoring only trusted packages.

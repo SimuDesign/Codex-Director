@@ -14,10 +14,12 @@ public struct CapabilityDetailView: View {
     /// model or duplicating the evidence surface.
     public let contextualContent: AnyView?
     @EnvironmentObject private var languageStore: AppLanguageStore
+    @Environment(\.capabilityHistoryPresentationSource) private var historySource
     @State private var showTechnical = false
     @State private var showClassification = false
     @State private var showFindings = false
     @State private var showEvidence = false
+    @State private var showHistory = false
 
     public init(model: CapabilityDetailViewModel, onBack: @escaping () -> Void = {}, showsBackButton: Bool = true, contextualContent: AnyView? = nil) { self.model = model; self.onBack = onBack; self.showsBackButton = showsBackButton; self.contextualContent = contextualContent }
     public var body: some View {
@@ -34,6 +36,13 @@ public struct CapabilityDetailView: View {
                 .foregroundStyle(DirectorColor.textPrimary)
             identity
             if let contextualContent { contextualContent }
+            if let historySource, (model.row.entry.resource.kind == .agent || model.row.entry.resource.kind == .skill) {
+                CapabilityHistoryDisclosure(resourceID: model.row.id, source: historySource, isExpanded: $showHistory)
+                    // A side-detail host may reuse this view while switching
+                    // resources. Re-key the disclosure so its StateObject,
+                    // loaded page and selection cannot leak across IDs.
+                    .id("capability-history-\(model.row.id)")
+            }
             usage; evidenceControl
             if showEvidence { calls }
             if let error = model.persistenceError { VStack(alignment: .leading, spacing: DirectorSpacing.space1) {
@@ -45,6 +54,9 @@ public struct CapabilityDetailView: View {
             disclosure(copy("detail.findings", "Related review findings"), isExpanded: $showFindings) { findings }
         }.padding(DirectorSpacing.space5).frame(maxWidth: .infinity, alignment: .leading) }
         .task(id: showFindings) { if showFindings { await model.loadFindingsIfNeeded() } else { model.cancelFindingsLoading() } }
+        .onChange(of: model.row.id) { _, _ in
+            showHistory = false
+        }
         .onDisappear {
             model.cancelLoading()
             model.cancelFindingsLoading()

@@ -1,11 +1,61 @@
 import XCTest
 @testable import DirectorUI
-import DirectorCore
+@testable import DirectorCore
 
 @MainActor
 final class AppModelLibraryIntegrationTests: XCTestCase {
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+
+        func increment() {
+            lock.lock()
+            value += 1
+            lock.unlock()
+        }
+
+        func read() -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+    }
+
     private final class MemoryData {
         var value: Data?
+    }
+
+    private final class SessionInventoryGate: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var entered = false
+        private var released = false
+        private var timedOut = false
+        private var enteredOnMainThread = false
+
+        func pause() {
+            condition.lock()
+            defer { condition.unlock() }
+            entered = true
+            enteredOnMainThread = Thread.isMainThread
+            guard !enteredOnMainThread else { return }
+            let deadline = Date().addingTimeInterval(5)
+            while !released {
+                if !condition.wait(until: deadline) { timedOut = true; break }
+            }
+        }
+
+        func release() {
+            condition.lock()
+            released = true
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        var snapshot: (entered: Bool, timedOut: Bool, onMainThread: Bool) {
+            condition.lock()
+            defer { condition.unlock() }
+            return (entered, timedOut, enteredOnMainThread)
+        }
     }
 
     private final class MigrationProbe: @unchecked Sendable {
@@ -619,6 +669,274 @@ final class AppModelLibraryIntegrationTests: XCTestCase {
 
         try await model.deleteDerivedData()
         XCTAssertEqual(model.evaluationStore.evaluation(for: event.id)?.label, .effective)
+    }
+
+    func testHistoryServiceStaysLazyAcrossOrdinaryPresentationMutations() async throws {
+        let historyStore = try CapabilityHistoryStore.memory(initialEpoch: 41)
+        let accesses = LockedCounter()
+        let history = CapabilityHistoryCoordinator(store: historyStore) { _ in
+            accesses.increment()
+        }
+        let prefs = makePreferenceStores()
+        let model = DirectorAppModel(
+            capabilityHistoryService: history,
+            classificationOverrides: prefs.0,
+            evaluationStore: prefs.1
+        )
+
+        model.selection = .customAgents
+        model.setHomeUsageRankingPeriod(.sevenDays)
+        model.setCapabilityFolderUsagePeriod(.sevenDays)
+        model.selection = .settings
+
+        XCTAssertNil(model.capabilityHistoryRevision)
+        XCTAssertEqual(model.capabilityHistoryMutationRevision, 0)
+        XCTAssertNil(model.capabilityHistoryStatusSignal.isInitialized)
+        XCTAssertEqual(accesses.read(), 0)
+
+        let page = try await model.capabilityHistoryPage(.init(limit: 20))
+        XCTAssertTrue(page.events.isEmpty)
+        XCTAssertEqual(page.epoch, 41)
+        XCTAssertEqual(model.capabilityHistoryRevision, 0)
+        XCTAssertEqual(model.capabilityHistoryStatusSignal.isInitialized, false)
+        XCTAssertEqual(model.capabilityHistoryMutationRevision, 1)
+        XCTAssertGreaterThan(accesses.read(), 0)
+    }
+
+    func testDatabaseUnavailableInstallationKeepsInjectedHistoryReadable() async throws {
+        let historyStore = try CapabilityHistoryStore.memory(initialEpoch: 73)
+        let history = CapabilityHistoryCoordinator(store: historyStore)
+        let prefs = makePreferenceStores()
+        let model = DirectorAppModel(
+            classificationOverrides: prefs.0,
+            evaluationStore: prefs.1,
+            previewMode: false,
+            bootstrapPending: true
+        )
+
+        model.installServices(
+            store: nil,
+            coordinator: nil,
+            configuration: nil,
+            capabilityHistoryService: history,
+            bootstrapError: "derived_database_unavailable"
+        )
+
+        let page = try await model.capabilityHistoryPage(.init(limit: 20))
+        XCTAssertEqual(page.epoch, 73)
+        XCTAssertTrue(page.events.isEmpty)
+        XCTAssertEqual(model.capabilityHistoryStatusSignal.accessMode, .readWrite)
+    }
+
+    func testChangeUsageQueryUsesFullSameResourceNeighborInsteadOfFilteredPageHint() async throws {
+        let base = Date(timeIntervalSince1970: 1_800_100_000)
+        let historyStore = try CapabilityHistoryStore.memory(initialEpoch: 74)
+        let history = CapabilityHistoryCoordinator(store: historyStore)
+        func observation(_ id: String, signature: Character, at date: Date) -> CapabilityHistoryObservation {
+            CapabilityHistoryObservation(
+                resourceID: id,
+                sourceRootID: "global-skills",
+                name: id,
+                kind: .skill,
+                scope: .global,
+                projectID: nil,
+                documents: [.skillManifest],
+                signature: String(repeating: signature, count: 64),
+                documentSignatures: [
+                    .init(document: .skillManifest, sha256: String(repeating: signature, count: 64))
+                ],
+                observedAt: date
+            )
+        }
+        func submit(_ a: Character, _ b: Character, at date: Date) async throws {
+            _ = try await history.submit(.init(
+                observedAt: date,
+                scopes: [.init(rootID: "global-skills", scope: .global, rootKind: .skills, coverage: .complete)],
+                observations: [
+                    observation("skill:a", signature: a, at: date),
+                    observation("skill:b", signature: b, at: date),
+                ]
+            ))
+        }
+        try await submit("a", "a", at: base)
+        try await submit("b", "a", at: base.addingTimeInterval(10))
+        try await submit("b", "b", at: base.addingTimeInterval(20))
+        try await submit("c", "b", at: base.addingTimeInterval(30))
+        let page = try await history.page(.init(resourceID: "skill:a", limit: 20))
+        let selected = try XCTUnwrap(page.events.last)
+        let prefs = makePreferenceStores()
+        let model = DirectorAppModel(
+            capabilityHistoryService: history,
+            classificationOverrides: prefs.0,
+            evaluationStore: prefs.1,
+            previewMode: false
+        )
+
+        let query = await model.capabilityChangeUsageQuery(
+            for: selected,
+            nextObservedAt: base.addingTimeInterval(20), // filtered-page hint from another resource
+            period: .recent30
+        )
+
+        XCTAssertEqual(query?.nextObservedAt, base.addingTimeInterval(30))
+        XCTAssertEqual(query?.eventID, selected.id)
+    }
+
+    func testSharedEvaluationMutationInvalidatesHistorySummariesAcrossModels() async throws {
+        let stores = makePreferenceStores()
+        let first = DirectorAppModel(
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            previewMode: false
+        )
+        let second = DirectorAppModel(
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            previewMode: false
+        )
+        let beforeFirst = first.capabilityHistoryMutationRevision
+        let beforeSecond = second.capabilityHistoryMutationRevision
+
+        XCTAssertTrue(stores.1.set(InvocationEvaluation(
+            invocationID: "call:cross-window",
+            sessionID: "session:cross-window",
+            resourceID: "skill:cross-window",
+            label: .effective,
+            updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )))
+        for _ in 0..<100 where second.capabilityHistoryMutationRevision == beforeSecond {
+            await Task.yield()
+        }
+
+        XCTAssertGreaterThan(first.capabilityHistoryMutationRevision, beforeFirst)
+        XCTAssertGreaterThan(second.capabilityHistoryMutationRevision, beforeSecond)
+    }
+
+    func testHistoryPublishesBeforeSessionInventoryAndClearCannotBeResurrectedByCompletion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("history-live-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let skills = root.appendingPathComponent("skills", isDirectory: true)
+        let skill = skills.appendingPathComponent("history-live-skill", isDirectory: true)
+        let sessions = root.appendingPathComponent("sessions", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: sessions, withIntermediateDirectories: true)
+        try Data("---\nname: history-live-skill\n---\nSynthetic purpose.\n".utf8)
+            .write(to: skill.appendingPathComponent("SKILL.md"))
+        let database = try DatabaseStore(url: root.appendingPathComponent("index.sqlite"))
+        let history = CapabilityHistoryCoordinator(store: try .memory(initialEpoch: 91))
+        let gate = SessionInventoryGate()
+        defer { gate.release() }
+        let production = FileSystemClient()
+        let fileSystem = FileSystemClient(
+            directoryReader: { url in
+                if url.standardizedFileURL == sessions.standardizedFileURL { gate.pause() }
+                return production.enumerateDirectory(url)
+            },
+            dataReader: { production.readData($0) },
+            attributesReader: { production.fileAttributes($0) },
+            readableReader: { production.isReadable($0) },
+            symbolicLinkReader: { production.isSymbolicLink($0) },
+            verifiedDataReader: { production.readVerifiedData($0, within: $1, maximumByteCount: $2) },
+            identityValidator: { production.validateDocumentRead($2, at: $0, within: $1) },
+            directoryIdentityReader: { production.directoryIdentity($0) },
+            directoryStatusReader: { production.directoryStatus($0) }
+        )
+        let coordinator = IndexingCoordinator(store: database, fileSystem: fileSystem, capabilityHistoryService: history)
+        let preferences = makePreferenceStores()
+        let model = DirectorAppModel(
+            store: database,
+            coordinator: coordinator,
+            capabilityHistoryService: history,
+            configuration: .init(
+                scanRoots: [.init(id: "global-skills", url: skills, scope: .global, kind: .skills)],
+                activeSessionRoots: [sessions],
+                archivedSessionRoot: nil
+            ),
+            classificationOverrides: preferences.0,
+            evaluationStore: preferences.1,
+            previewMode: false,
+            capabilityFolderStore: .makeMemory()
+        )
+        let indexing = Task { await model.startIndexing() }
+        defer { indexing.cancel() }
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
+        while !gate.snapshot.entered, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertTrue(gate.snapshot.entered)
+        XCTAssertFalse(gate.snapshot.onMainThread)
+        XCTAssertTrue(model.isIndexing, "later session work must still be held")
+        XCTAssertEqual(model.capabilityHistoryStatusSignal.baselineCount, 1)
+        XCTAssertEqual(model.capabilityHistoryStatusSignal.isInitialized, true)
+        XCTAssertGreaterThan(model.capabilityHistoryMutationRevision, 0)
+        let indexedResources = try await database.fetchAllResources()
+        XCTAssertEqual(indexedResources.map(\.name), ["history-live-skill"])
+
+        try await model.clearCapabilityHistoryConfirmed()
+        let cleared = model.capabilityHistoryStatusSignal
+        XCTAssertEqual(cleared.baselineCount, 0)
+        XCTAssertEqual(cleared.isInitialized, false)
+        gate.release()
+        await indexing.value
+        XCTAssertFalse(gate.snapshot.timedOut)
+        XCTAssertEqual(model.capabilityHistoryStatusSignal, cleared,
+                       "late completion must not replay its pre-clear history snapshot")
+    }
+
+    func testDerivedIndexDeletionPreservesHistoryAndExplicitClearSignalsAllWindows() async throws {
+        let database = try DatabaseStore(
+            url: FileManager.default.temporaryDirectory.appendingPathComponent("director-history-preserve-\(UUID().uuidString).sqlite")
+        )
+        let historyStore = try CapabilityHistoryStore.memory(initialEpoch: 5)
+        let history = CapabilityHistoryCoordinator(store: historyStore)
+        func historyObservation(_ signature: Character, at date: Date) -> CapabilityHistoryObservation {
+            CapabilityHistoryObservation(
+                resourceID: "skill:global:history",
+                sourceRootID: "global-skills",
+                name: "History Skill",
+                kind: .skill,
+                scope: .global,
+                projectID: nil,
+                documents: [.skillManifest],
+                signature: String(repeating: signature, count: 64),
+                observedAt: date
+            )
+        }
+        func historyBatch(_ signature: Character, at date: Date) -> CapabilityHistoryScanBatch {
+            CapabilityHistoryScanBatch(
+                observedAt: date,
+                scopes: [.init(rootID: "global-skills", scope: .global, rootKind: .skills, coverage: .complete)],
+                observations: [historyObservation(signature, at: date)]
+            )
+        }
+        _ = try await history.submit(historyBatch("a", at: Date(timeIntervalSince1970: 1_800_000_000)))
+        _ = try await history.submit(historyBatch("b", at: Date(timeIntervalSince1970: 1_800_000_001)))
+
+        let prefs = makePreferenceStores()
+        let model = DirectorAppModel(
+            store: database,
+            capabilityHistoryService: history,
+            classificationOverrides: prefs.0,
+            evaluationStore: prefs.1,
+            previewMode: false
+        )
+        let beforeDeletion = try await model.capabilityHistoryPage(.init(limit: 20))
+        XCTAssertEqual(beforeDeletion.events.count, 1)
+
+        try await model.deleteDerivedData()
+        let afterDeletion = try await model.capabilityHistoryPage(.init(limit: 20))
+        XCTAssertEqual(afterDeletion.events.count, 1)
+
+        let signalBeforeClear = model.capabilityHistoryMutationRevision
+        try await model.clearCapabilityHistoryConfirmed()
+        XCTAssertGreaterThan(model.capabilityHistoryMutationRevision, signalBeforeClear)
+        XCTAssertEqual(model.capabilityHistoryStatusSignal.isInitialized, false)
+        XCTAssertEqual(model.capabilityHistoryStatusSignal.eventCount, 0)
+        let afterClear = try await model.capabilityHistoryPage(.init(limit: 20))
+        XCTAssertTrue(afterClear.events.isEmpty)
     }
 
     private func resource(_ id: String, _ name: String, project: String?) -> CapabilityResource {

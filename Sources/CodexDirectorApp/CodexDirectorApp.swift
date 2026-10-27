@@ -89,6 +89,7 @@ private final class AppLaunchState: ObservableObject {
                     coordinator: container.coordinator,
                     configuration: container.configuration,
                     snapshotStore: nil,
+                    capabilityHistoryService: container.capabilityHistoryService,
                     capabilityExportCoordinator: container.capabilityExportCoordinator,
                     capabilityRestoreCoordinator: container.capabilityRestoreCoordinator,
                     accountUsageReading: container.accountUsageReading,

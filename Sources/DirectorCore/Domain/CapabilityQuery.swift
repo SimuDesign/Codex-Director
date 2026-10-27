@@ -130,6 +130,355 @@ public struct CapabilityQueryWindow: Codable, Sendable, Equatable {
     }
 }
 
+/// The only bounded natural-day periods supported by an observed-change
+/// usage summary. Timeline retention never widens this query to all history.
+public enum CapabilityChangeUsagePeriod: String, Codable, Sendable, Equatable, Hashable, CaseIterable {
+    case recent7
+    case recent30
+
+    public func window(
+        referenceDate: Date,
+        calendar: Calendar = Calendar(identifier: .gregorian)
+    ) -> CapabilityQueryWindow {
+        switch self {
+        case .recent7:
+            return .recent7(now: referenceDate, calendar: calendar)
+        case .recent30:
+            return .recent30(now: referenceDate, calendar: calendar)
+        }
+    }
+}
+
+/// Why an observed-change summary does or does not contain computed counts.
+/// Non-available states deliberately keep counts nil instead of manufacturing
+/// a zero from missing or stale evidence.
+public enum CapabilityChangeUsageAvailability: String, Codable, Sendable, Equatable, Hashable {
+    case available
+    case outsideSelectedPeriod
+    case indexUnavailable
+    case indexOutdated
+    case invalidInterval
+}
+
+/// The actual intersection sent to SQLite. An adjacent event boundary is
+/// exclusive; a selected-period/statistics-through boundary is inclusive.
+public struct CapabilityChangeUsageInterval: Sendable, Equatable, Hashable {
+    public let start: Date
+    public let end: Date
+    public let endInclusive: Bool
+
+    public init(start: Date, end: Date, endInclusive: Bool) {
+        self.start = start
+        self.end = end
+        self.endInclusive = endInclusive
+    }
+}
+
+/// Stable invalidation identity for one selected event summary. It includes
+/// derived-index replacement/generation and manual-evaluation revision, so a
+/// result from either older source cannot overwrite a newer selection.
+public struct CapabilityChangeUsageCacheKey: Sendable, Equatable, Hashable {
+    public let eventID: String
+    public let resourceID: String
+    public let observedAt: Date
+    public let nextObservedAt: Date?
+    public let period: CapabilityChangeUsagePeriod
+    public let selectedStart: Date
+    public let selectedEnd: Date
+    public let statisticsThrough: Date?
+    public let databaseEpoch: String?
+    public let dataGeneration: Int64?
+    public let evaluationRevision: UInt64
+
+    public init(
+        eventID: String,
+        resourceID: String,
+        observedAt: Date,
+        nextObservedAt: Date?,
+        period: CapabilityChangeUsagePeriod,
+        selectedStart: Date,
+        selectedEnd: Date,
+        statisticsThrough: Date?,
+        databaseEpoch: String?,
+        dataGeneration: Int64?,
+        evaluationRevision: UInt64
+    ) {
+        self.eventID = eventID
+        self.resourceID = resourceID
+        self.observedAt = observedAt
+        self.nextObservedAt = nextObservedAt
+        self.period = period
+        self.selectedStart = selectedStart
+        self.selectedEnd = selectedEnd
+        self.statisticsThrough = statisticsThrough
+        self.databaseEpoch = databaseEpoch
+        self.dataGeneration = dataGeneration
+        self.evaluationRevision = evaluationRevision
+    }
+}
+
+public struct CapabilityChangeUsageResolution: Sendable, Equatable {
+    public let availability: CapabilityChangeUsageAvailability
+    public let interval: CapabilityChangeUsageInterval?
+
+    public init(
+        availability: CapabilityChangeUsageAvailability,
+        interval: CapabilityChangeUsageInterval? = nil
+    ) {
+        self.availability = availability
+        self.interval = interval
+    }
+}
+
+/// Primitive, history-domain-independent input for one selected change event.
+/// Callers create this only for added, modified, or reappeared events; a
+/// missing event intentionally has no usage/effect query.
+public struct CapabilityChangeUsageQuery: Sendable, Equatable {
+    public let eventID: String
+    public let resourceID: String
+    public let observedAt: Date
+    public let nextObservedAt: Date?
+    public let period: CapabilityChangeUsagePeriod
+    public let selectedWindow: CapabilityQueryWindow
+    public let statisticsThrough: Date?
+    public let databaseIdentity: PresentationIdentity?
+    public let evaluationRevision: UInt64
+
+    public init(
+        eventID: String,
+        resourceID: String,
+        observedAt: Date,
+        nextObservedAt: Date?,
+        period: CapabilityChangeUsagePeriod = .recent30,
+        referenceDate: Date,
+        calendar: Calendar = Calendar(identifier: .gregorian),
+        statisticsThrough: Date?,
+        databaseIdentity: PresentationIdentity?,
+        evaluationRevision: UInt64
+    ) {
+        self.init(
+            eventID: eventID,
+            resourceID: resourceID,
+            observedAt: observedAt,
+            nextObservedAt: nextObservedAt,
+            period: period,
+            selectedWindow: period.window(referenceDate: referenceDate, calendar: calendar),
+            statisticsThrough: statisticsThrough,
+            databaseIdentity: databaseIdentity,
+            evaluationRevision: evaluationRevision
+        )
+    }
+
+    private init(
+        eventID: String,
+        resourceID: String,
+        observedAt: Date,
+        nextObservedAt: Date?,
+        period: CapabilityChangeUsagePeriod,
+        selectedWindow: CapabilityQueryWindow,
+        statisticsThrough: Date?,
+        databaseIdentity: PresentationIdentity?,
+        evaluationRevision: UInt64
+    ) {
+        self.eventID = eventID
+        self.resourceID = resourceID
+        self.observedAt = observedAt
+        self.nextObservedAt = nextObservedAt
+        self.period = period
+        self.selectedWindow = selectedWindow
+        self.statisticsThrough = statisticsThrough
+        self.databaseIdentity = databaseIdentity
+        self.evaluationRevision = evaluationRevision
+    }
+
+    public var cacheKey: CapabilityChangeUsageCacheKey {
+        CapabilityChangeUsageCacheKey(
+            eventID: eventID,
+            resourceID: resourceID,
+            observedAt: observedAt,
+            nextObservedAt: nextObservedAt,
+            period: period,
+            selectedStart: selectedWindow.start,
+            selectedEnd: selectedWindow.end,
+            statisticsThrough: statisticsThrough,
+            databaseEpoch: databaseIdentity?.databaseEpoch,
+            dataGeneration: databaseIdentity?.dataGeneration,
+            evaluationRevision: evaluationRevision
+        )
+    }
+
+    public func updating(evaluationRevision: UInt64) -> Self {
+        Self(
+            eventID: eventID,
+            resourceID: resourceID,
+            observedAt: observedAt,
+            nextObservedAt: nextObservedAt,
+            period: period,
+            selectedWindow: selectedWindow,
+            statisticsThrough: statisticsThrough,
+            databaseIdentity: databaseIdentity,
+            evaluationRevision: evaluationRevision
+        )
+    }
+
+    public func resolve() -> CapabilityChangeUsageResolution {
+        if let nextObservedAt {
+            if nextObservedAt < observedAt {
+                return CapabilityChangeUsageResolution(availability: .invalidInterval)
+            }
+            if nextObservedAt == observedAt {
+                return CapabilityChangeUsageResolution(availability: .outsideSelectedPeriod)
+            }
+        }
+        guard databaseIdentity != nil, let statisticsThrough else {
+            return CapabilityChangeUsageResolution(availability: .indexUnavailable)
+        }
+        guard statisticsThrough >= observedAt else {
+            return CapabilityChangeUsageResolution(availability: .indexOutdated)
+        }
+
+        let start = max(observedAt, selectedWindow.start)
+        let knownEnd = min(selectedWindow.end, statisticsThrough)
+        let end: Date
+        let endInclusive: Bool
+        if let nextObservedAt, nextObservedAt <= knownEnd {
+            end = nextObservedAt
+            endInclusive = false
+        } else {
+            end = knownEnd
+            endInclusive = true
+        }
+
+        guard start < end || (start == end && endInclusive) else {
+            return CapabilityChangeUsageResolution(availability: .outsideSelectedPeriod)
+        }
+        return CapabilityChangeUsageResolution(
+            availability: .available,
+            interval: CapabilityChangeUsageInterval(start: start, end: end, endInclusive: endInclusive)
+        )
+    }
+}
+
+/// Only the stable identity required to prove that a current manual
+/// evaluation belongs to a reliable in-interval invocation is returned.
+public struct CapabilityChangeUsageCallIdentity: Sendable, Equatable, Hashable {
+    public let invocationID: String
+    public let sessionID: String
+
+    public init(invocationID: String, sessionID: String) {
+        self.invocationID = invocationID
+        self.sessionID = sessionID
+    }
+}
+
+public struct CapabilityChangeUsageEvaluationCandidate: Sendable, Equatable, Hashable {
+    public let invocationID: String
+    public let sessionID: String
+
+    public init(invocationID: String, sessionID: String) {
+        self.invocationID = invocationID
+        self.sessionID = sessionID
+    }
+}
+
+/// SQLite-side aggregate plus the small set of current evaluation candidates
+/// that were proven to match it. The full interval call list is never loaded.
+public struct CapabilityChangeUsageDatabaseResult: Sendable, Equatable {
+    public let cacheKey: CapabilityChangeUsageCacheKey
+    public let availability: CapabilityChangeUsageAvailability
+    public let interval: CapabilityChangeUsageInterval?
+    public let callCount: Int?
+    public let inferredCount: Int?
+    public let coverage: CoverageState
+    public let matchedEvaluationCalls: [CapabilityChangeUsageCallIdentity]
+    public let evaluationLookupComplete: Bool
+    public let evaluationLookupChunkCount: Int
+    public let sqlStatementCount: Int
+
+    public init(
+        cacheKey: CapabilityChangeUsageCacheKey,
+        availability: CapabilityChangeUsageAvailability,
+        interval: CapabilityChangeUsageInterval?,
+        callCount: Int?,
+        inferredCount: Int?,
+        coverage: CoverageState,
+        matchedEvaluationCalls: [CapabilityChangeUsageCallIdentity] = [],
+        evaluationLookupComplete: Bool = true,
+        evaluationLookupChunkCount: Int = 0,
+        sqlStatementCount: Int = 0
+    ) {
+        self.cacheKey = cacheKey
+        self.availability = availability
+        self.interval = interval
+        self.callCount = callCount
+        self.inferredCount = inferredCount
+        self.coverage = coverage
+        self.matchedEvaluationCalls = matchedEvaluationCalls
+        self.evaluationLookupComplete = evaluationLookupComplete
+        self.evaluationLookupChunkCount = evaluationLookupChunkCount
+        self.sqlStatementCount = sqlStatementCount
+    }
+}
+
+public struct CapabilityChangeUsageSummary: Sendable, Equatable {
+    public let cacheKey: CapabilityChangeUsageCacheKey
+    public let availability: CapabilityChangeUsageAvailability
+    public let interval: CapabilityChangeUsageInterval?
+    public let callCount: Int?
+    public let inferredCount: Int?
+    public let coverage: CoverageState
+    public let evaluatedCount: Int?
+    public let effectiveCount: Int?
+    public let ineffectiveCount: Int?
+    public let uncertainCount: Int?
+    public let unratedCount: Int?
+
+    public init(
+        cacheKey: CapabilityChangeUsageCacheKey,
+        availability: CapabilityChangeUsageAvailability,
+        interval: CapabilityChangeUsageInterval?,
+        callCount: Int?,
+        inferredCount: Int?,
+        coverage: CoverageState,
+        evaluatedCount: Int?,
+        effectiveCount: Int?,
+        ineffectiveCount: Int?,
+        uncertainCount: Int?,
+        unratedCount: Int?
+    ) {
+        self.cacheKey = cacheKey
+        self.availability = availability
+        self.interval = interval
+        self.callCount = callCount
+        self.inferredCount = inferredCount
+        self.coverage = coverage
+        self.evaluatedCount = evaluatedCount
+        self.effectiveCount = effectiveCount
+        self.ineffectiveCount = ineffectiveCount
+        self.uncertainCount = uncertainCount
+        self.unratedCount = unratedCount
+    }
+
+    public static func unavailable(
+        for query: CapabilityChangeUsageQuery,
+        availability: CapabilityChangeUsageAvailability
+    ) -> Self {
+        Self(
+            cacheKey: query.cacheKey,
+            availability: availability,
+            interval: nil,
+            callCount: nil,
+            inferredCount: nil,
+            coverage: .unknown,
+            evaluatedCount: nil,
+            effectiveCount: nil,
+            ineffectiveCount: nil,
+            uncertainCount: nil,
+            unratedCount: nil
+        )
+    }
+}
+
 public struct CapabilityUsageStats: Sendable, Equatable {
     public let resourceID: String
     public let callCount: Int

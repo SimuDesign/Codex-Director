@@ -12,10 +12,10 @@ final class CapabilityCompanionRelationsTests: XCTestCase {
         XCTAssertTrue(CapabilityCompanionIndexMigration.needsSourceRefresh(marker: nil, hasIndexedData: true))
     }
 
-    func testRelationshipIndexMigrationUpgradesLegacyV1MarkerToV2Once() {
+    func testRelationshipIndexMigrationUpgradesLegacyV2MarkerToV3Once() {
         XCTAssertTrue(
             CapabilityCompanionIndexMigration.needsSourceRefresh(
-                marker: "capability-companions.v1",
+                marker: "capability-companions.v2",
                 hasIndexedData: true
             )
         )
@@ -25,6 +25,432 @@ final class CapabilityCompanionRelationsTests: XCTestCase {
                 hasIndexedData: true
             )
         )
+    }
+
+    func testV5RegistryUsesNativeAgentTomlStemAndSkillIDWithoutDuplicateAgent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-v5-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/render", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectAgents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectSkill, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Display Name\"\n".write(to: projectAgents.appendingPathComponent("render-agent.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: skill-package\n---\n".write(to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"schemaVersion":5,"packages":{"agent-package":{"kind":"native-agent","id":"agent-package","nativeAgent":"render-agent","usesSkills":["skill-package"]},"skill-package":{"kind":"auxiliary-skill","id":"skill-package","nativeAgent":"render-agent","invokedBy":["render-agent"]}}}"#
+        try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "project", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let agent = try XCTUnwrap(output.resources.first { $0.kind == .agent })
+        let skill = try XCTUnwrap(output.resources.first { $0.kind == .skill })
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+
+        XCTAssertEqual(agent.relativeSourcePath, ".codex/agents/render-agent.toml")
+        XCTAssertEqual(report.issues, [])
+        XCTAssertEqual(report.relations.filter { $0.declarationSource == .projectRegistry }.count, 1)
+        XCTAssertEqual(report.relations.first?.agentID, agent.id)
+        XCTAssertEqual(report.relations.first?.skillID, skill.id)
+    }
+
+    func testV5RegistryDoesNotTreatNativeAgentDisplayNameAsTomlStem() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-v5-stem-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/render", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectAgents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectSkill, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Display Name\"\n".write(to: projectAgents.appendingPathComponent("render-agent.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: skill-package\n---\n".write(to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"schemaVersion":5,"packages":[{"kind":"auxiliary-skill","id":"skill-package","nativeAgent":"Display Name","invokedBy":["Display Name"]}]}"#
+        try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "project", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+
+        XCTAssertTrue(report.relations.filter { $0.declarationSource == .projectRegistry }.isEmpty)
+    }
+
+    func testV5ConflictingDuplicatePackageIDsRejectRegistryIndependentOfArrayOrder() throws {
+        let packageA = #"{"kind":"native-agent","id":"agent-package","nativeAgent":"build-agent","usesSkills":["skill-package"]}"#
+        let packageB = #"{"kind":"native-agent","id":"AGENT-PACKAGE","nativeAgent":"other-agent","usesSkills":["skill-package"]}"#
+        for (index, packages) in [[packageA, packageB], [packageB, packageA]].enumerated() {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("companion-v5-conflicting-id-\(index)-\(UUID().uuidString)", isDirectory: true)
+            let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+            let projectSkill = root.appendingPathComponent(".agents/skills/skill-package", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            try FileManager.default.createDirectory(at: projectAgents, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: projectSkill, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try "name = \"Build Agent\"\n".write(to: projectAgents.appendingPathComponent("build-agent.toml"), atomically: true, encoding: .utf8)
+            try "name = \"Other Agent\"\n".write(to: projectAgents.appendingPathComponent("other-agent.toml"), atomically: true, encoding: .utf8)
+            try "---\nname: skill-package\n---\n".write(to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            let registry = #"{"schemaVersion":5,"packages":["# + packages.joined(separator: ",") + #"]}"#
+            try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let rootDescriptor = ScanRoot(id: "project-\(index)", url: root, scope: .project, kind: .projects)
+            let output = ResourceScanner(roots: [rootDescriptor]).scan()
+            XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial], "array order \(index)")
+            XCTAssertTrue(output.issues.contains { $0.message.contains("registry is invalid") }, "array order \(index)")
+            let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+                .resolveWithIssues()
+            XCTAssertTrue(report.relations.filter { $0.declarationSource == .projectRegistry }.isEmpty, "array order \(index)")
+        }
+    }
+
+    func testLegacyRegistryReferencePrefersUniqueCanonicalTomlAgentWithoutDroppingLegacyIdentity() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-legacy-canonical-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        for directory in [projectAgents, projectSkill, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try #"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]}]}"#.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "legacy-canonical", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let agents = output.resources.filter { $0.kind == .agent && $0.projectID == rootDescriptor.id }
+        XCTAssertEqual(agents.count, 2)
+        let canonical = try XCTUnwrap(agents.first { $0.relativeSourcePath == ".codex/agents/build.toml" })
+        XCTAssertNotNil(agents.first { $0.relativeSourcePath == "agents/registry.json/Build Agent" })
+
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+        XCTAssertEqual(report.issues, [])
+        XCTAssertEqual(report.relations.filter { $0.declarationSource == .projectRegistry }.count, 1)
+        XCTAssertEqual(report.relations.first?.agentID, canonical.id)
+    }
+
+    func testLegacyRegistryReferenceRejectsMultipleCanonicalTomlAgents() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-legacy-ambiguous-toml-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        for directory in [projectAgents, projectSkill, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        for stem in ["build-one", "build-two"] {
+            try "name = \"Build Agent\"\n".write(
+                to: projectAgents.appendingPathComponent("\(stem).toml"), atomically: true, encoding: .utf8)
+        }
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try #"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]}]}"#.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "legacy-ambiguous", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+
+        XCTAssertTrue(report.relations.filter { $0.declarationSource == .projectRegistry }.isEmpty)
+        XCTAssertEqual(report.issues, [.init(kind: .ambiguousAgent, sourceRootID: rootDescriptor.id)])
+    }
+
+    func testLegacyRegistryMissingKindRemainsSupportedButExplicitUnknownAndWorkflowDoNotDeclareAgentRelations() throws {
+        let registries: [(String, Bool)] = [
+            (#"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]}]}"#, true),
+            (#"{"entries":[{"name":"Build Agent","type":"future-agent","usesSkills":["video-tool"]}]}"#, false),
+            (#"{"entries":[{"name":"Build Agent","type":"workflow","usesSkills":["video-tool"]}]}"#, false),
+        ]
+        for (index, fixture) in registries.enumerated() {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("companion-legacy-kind-\(index)-\(UUID().uuidString)", isDirectory: true)
+            let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+            let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            for directory in [projectAgents, projectSkill, registryDirectory] {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            defer { try? FileManager.default.removeItem(at: root) }
+            try "name = \"Build Agent\"\n".write(
+                to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+            try "---\nname: video-tool\n---\n".write(
+                to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            try fixture.0.write(
+                to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let rootDescriptor = ScanRoot(id: "legacy-kind-\(index)", url: root, scope: .project, kind: .projects)
+            let output = ResourceScanner(roots: [rootDescriptor]).scan()
+            let relations = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+                .resolve()
+                .filter { $0.declarationSource == .projectRegistry }
+            XCTAssertEqual(relations.count, fixture.1 ? 1 : 0, "fixture \(index)")
+            if index == 1 {
+                XCTAssertFalse(output.resources.contains {
+                    $0.relativeSourcePath == "agents/registry.json/Build Agent"
+                })
+            }
+        }
+    }
+
+    func testPackageIDReferencesResolveOnlyThroughUniqueDeclaredCanonicalAliases() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-package-alias-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        for directory in [projectAgents, projectSkill, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"schemaVersion":5,"packages":[{"kind":"agent","id":"agent-package","name":"Build Agent","usesSkills":["skill-package"]},{"kind":"skill","id":"skill-package","name":"video-tool","invokedBy":["agent-package"]},{"kind":"skill","id":"SKÍLL-PACKAGE","name":"VÍDEO-TOOL","invokedBy":["agent-package"]}]}"#
+        try registry.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "package-alias", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+        let agent = try XCTUnwrap(output.resources.first { $0.relativeSourcePath == ".codex/agents/build.toml" })
+        let skill = try XCTUnwrap(output.resources.first { $0.relativeSourcePath == ".agents/skills/video-tool/SKILL.md" })
+
+        XCTAssertEqual(report.issues, [])
+        XCTAssertEqual(report.relations.filter { $0.declarationSource == .projectRegistry }.count, 1)
+        XCTAssertEqual(report.relations.first?.agentID, agent.id)
+        XCTAssertEqual(report.relations.first?.skillID, skill.id)
+    }
+
+    func testConflictingPackageIDAliasMappingsRejectRegistryIndependentOfArrayOrder() throws {
+        let packageA = #"{"kind":"skill","id":"skill-package","name":"video-tool","invokedBy":["Build Agent"]}"#
+        let packageB = #"{"kind":"skill","id":"SKÍLL-PACKAGE","name":"other-tool","invokedBy":["Build Agent"]}"#
+        for (index, packages) in [[packageA, packageB], [packageB, packageA]].enumerated() {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("companion-package-alias-conflict-\(index)-\(UUID().uuidString)", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let registry = #"{"schemaVersion":5,"packages":["# + packages.joined(separator: ",") + #"]}"#
+            try registry.write(
+                to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let rootDescriptor = ScanRoot(id: "package-alias-conflict-\(index)", url: root, scope: .project, kind: .projects)
+            let output = ResourceScanner(roots: [rootDescriptor]).scan()
+            XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial], "array order \(index)")
+            XCTAssertTrue(output.issues.contains { $0.message.contains("registry is invalid") }, "array order \(index)")
+        }
+    }
+
+    func testEquivalentSynonymFieldsAreAcceptedIndependentOfFieldOrder() throws {
+        let registries = [
+            #"{"schemaVersion":5,"packages":[{"kind":"agent","type":"AGENT","id":"agent-package","packageID":"AGÉNT-PACKAGE","name":"Build Agent","usesSkills":[{"id":"skill-package","name":"SKÍLL-PACKAGE"}]},{"kind":"skill","type":"SKILL","id":"skill-package","packageID":"SKÍLL-PACKAGE","name":"video-tool","invokedBy":[{"nativeAgent":"agent-package","id":"AGÉNT-PACKAGE","name":"agent-package"}]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"usesSkills":[{"name":"SKÍLL-PACKAGE","id":"skill-package"}],"name":"Build Agent","packageID":"AGÉNT-PACKAGE","id":"agent-package","type":"AGENT","kind":"agent"},{"invokedBy":[{"name":"agent-package","id":"AGÉNT-PACKAGE","nativeAgent":"agent-package"}],"name":"video-tool","packageID":"SKÍLL-PACKAGE","id":"skill-package","type":"SKILL","kind":"skill"}]}"#,
+        ]
+
+        for (index, registry) in registries.enumerated() {
+            let result = try scanRegistryFixture(
+                registry,
+                rootID: "synonym-equivalent-\(index)"
+            )
+            XCTAssertEqual(result.output.historyScanBatch.scopes.map(\.coverage), [.complete])
+            XCTAssertFalse(result.output.issues.contains { $0.message.contains("registry is invalid") })
+            XCTAssertEqual(
+                result.report.relations.filter { $0.declarationSource == .projectRegistry }.count,
+                1
+            )
+        }
+    }
+
+    func testConflictingSynonymFieldsRejectRegistryIndependentOfFieldOrder() throws {
+        let registries = [
+            #"{"schemaVersion":5,"packages":[{"kind":"agent","id":"agent-one","packageID":"agent-two","name":"Build Agent","usesSkills":["skill-package"]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"agent","packageID":"agent-two","id":"agent-one","name":"Build Agent","usesSkills":["skill-package"]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"agent","type":"skill","id":"agent-package","name":"Build Agent","usesSkills":["skill-package"]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"type":"skill","kind":"agent","id":"agent-package","name":"Build Agent","usesSkills":["skill-package"]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"agent","id":"agent-package","name":"Build Agent","usesSkills":[{"id":"skill-package","name":"other-package"}]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"agent","id":"agent-package","name":"Build Agent","usesSkills":[{"name":"other-package","id":"skill-package"}]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"skill","id":"skill-package","name":"video-tool","invokedBy":[{"nativeAgent":"agent-package","id":"other-agent","name":"agent-package"}]}]}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"skill","id":"skill-package","name":"video-tool","invokedBy":[{"name":"agent-package","id":"other-agent","nativeAgent":"agent-package"}]}]}"#,
+        ]
+
+        for (index, registry) in registries.enumerated() {
+            let result = try scanRegistryFixture(
+                registry,
+                rootID: "synonym-conflict-\(index)"
+            )
+            XCTAssertEqual(
+                result.output.historyScanBatch.scopes.map(\.coverage),
+                [.partial],
+                "fixture \(index)"
+            )
+            XCTAssertTrue(
+                result.output.issues.contains { $0.message.contains("registry is invalid") },
+                "fixture \(index)"
+            )
+            XCTAssertTrue(
+                result.report.relations.filter { $0.declarationSource == .projectRegistry }.isEmpty,
+                "fixture \(index)"
+            )
+        }
+    }
+
+    func testMissingPrimaryRegistryUsesCompatibleRootRegistryAndRetainsLegacyIdentity() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-registry-fallback-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        for directory in [projectAgents, projectSkill] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try #"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]}]}"#.write(
+            to: root.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "registry-fallback", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let agents = output.resources.filter { $0.kind == .agent && $0.projectID == rootDescriptor.id }
+        let canonical = try XCTUnwrap(agents.first { $0.relativeSourcePath == ".codex/agents/build.toml" })
+        XCTAssertNotNil(agents.first { $0.relativeSourcePath == "registry.json/Build Agent" })
+
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+        XCTAssertEqual(report.issues, [])
+        XCTAssertEqual(report.relations.filter { $0.declarationSource == .projectRegistry }.count, 1)
+        XCTAssertEqual(report.relations.first?.agentID, canonical.id)
+    }
+
+    func testInvalidPrimaryRegistryDoesNotFallThroughToCompatibleRootRegistry() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-registry-shadow-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        for directory in [projectAgents, projectSkill, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try #"{"entries":"invalid"}"#.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+        try #"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]}]}"#.write(
+            to: root.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "registry-shadow", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial])
+        XCTAssertTrue(report.relations.filter { $0.declarationSource == .projectRegistry }.isEmpty)
+    }
+
+    func testUnsupportedOversizedUnreadableAndOutOfRootPrimaryRegistriesDoNotUseCompatibleRootRegistry() throws {
+        let fixtures: [(label: String, data: Data, readError: FileSystemReadError?)] = [
+            ("unsupported", Data(#"{"schemaVersion":999,"packages":[]}"#.utf8), nil),
+            ("oversized", Data(repeating: 0x20, count: CodexProjectRegistry.maximumByteCount + 1), nil),
+            ("unreadable", Data(#"{"packages":[]}"#.utf8), .permissionDenied),
+            ("outside-root", Data(#"{"packages":[]}"#.utf8), .outsideApprovedRoot),
+        ]
+        for fixture in fixtures {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("companion-registry-\(fixture.label)-\(UUID().uuidString)", isDirectory: true)
+            let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+            let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            for directory in [projectAgents, projectSkill, registryDirectory] {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            }
+            defer { try? FileManager.default.removeItem(at: root) }
+            try "name = \"Build Agent\"\n".write(
+                to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+            try "---\nname: video-tool\n---\n".write(
+                to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            let primaryURL = registryDirectory.appendingPathComponent("registry.json")
+            try fixture.data.write(to: primaryURL)
+            try #"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]}]}"#.write(
+                to: root.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let base = FileSystemClient()
+            let client = fixture.readError != nil ? FileSystemClient(
+                directoryReader: { base.enumerateDirectory($0) },
+                dataReader: { base.readData($0) },
+                attributesReader: { base.fileAttributes($0) },
+                readableReader: { base.isReadable($0) },
+                symbolicLinkReader: { base.isSymbolicLink($0) },
+                verifiedDataReader: { url, approvedRoot, maximumByteCount in
+                    if url.standardizedFileURL == primaryURL.standardizedFileURL,
+                       let readError = fixture.readError {
+                        return .failure(readError)
+                    }
+                    return base.readVerifiedData(
+                        url, within: approvedRoot, maximumByteCount: maximumByteCount)
+                },
+                identityValidator: { base.validateDocumentRead($2, at: $0, within: $1) },
+                directoryIdentityReader: { base.directoryIdentity($0) },
+                directoryStatusReader: { base.directoryStatus($0) }
+            ) : base
+            let rootDescriptor = ScanRoot(
+                id: "registry-\(fixture.label)", url: root, scope: .project, kind: .projects)
+            let output = ResourceScanner(roots: [rootDescriptor], fileSystem: client).scan()
+            let report = CapabilityCompanionResolver(
+                resources: output.resources,
+                roots: [rootDescriptor],
+                fileSystem: client
+            ).resolveWithIssues()
+
+            XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial], fixture.label)
+            XCTAssertTrue(
+                report.relations.filter { $0.declarationSource == .projectRegistry }.isEmpty,
+                fixture.label
+            )
+        }
+    }
+
+    func testUnknownPackageKindDoesNotDeclareAgentRelation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-package-unknown-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        for directory in [projectAgents, projectSkill, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"schemaVersion":5,"packages":[{"kind":"future-agent","id":"Build Agent","usesSkills":["video-tool"]}]}"#
+        try registry.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "package-unknown", url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let relations = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolve()
+
+        XCTAssertTrue(relations.filter { $0.declarationSource == .projectRegistry }.isEmpty)
     }
 
     func testRelationIDUsesStableEndpointsAndDeclarationMetadata() {
@@ -347,6 +773,40 @@ final class CapabilityCompanionRelationsTests: XCTestCase {
         XCTAssertFalse(relations.contains { $0.agentID == skill.id || $0.skillID == agent.id })
     }
 
+    func testLegacyRegistryEntriesPreserveUsesSkillsAndInvokedByDirections() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-legacy-entries-\(UUID().uuidString)")
+        let projectAgents = root.appendingPathComponent(".codex/agents")
+        let projectSkills = root.appendingPathComponent(".agents/skills/video-tool")
+        let registryDirectory = root.appendingPathComponent("agents")
+        for directory in [projectAgents, projectSkills, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkills.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"entries":[{"name":"Build Agent","usesSkills":["video-tool"]},{"name":"video-tool","type":"skill","invokedBy":["Build Agent"]}]}"#
+        try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: "legacy-project", url: root, scope: .project, kind: .projects)
+        let agent = makeResource(
+            id: "agent:legacy-project", name: "Build Agent", kind: .agent,
+            rootID: "legacy-project", relative: ".codex/agents/build.toml", projectID: "legacy-project")
+        let skill = makeResource(
+            id: "skill:legacy-project", name: "video-tool", kind: .skill,
+            rootID: "legacy-project", relative: ".agents/skills/video-tool/SKILL.md", projectID: "legacy-project")
+
+        let report = CapabilityCompanionResolver(
+            resources: [agent, skill], roots: [rootDescriptor]
+        ).resolveWithIssues()
+        XCTAssertEqual(report.issues, [])
+        XCTAssertEqual(report.relations.filter { $0.declarationSource == .projectRegistry }.count, 1)
+        XCTAssertEqual(report.relations.first?.agentID, agent.id)
+        XCTAssertEqual(report.relations.first?.skillID, skill.id)
+    }
+
     func testCoObservationIsSeparateDistinctSessionEvidence() {
         let now = Date(timeIntervalSince1970: 1_000_000)
         let event = InvocationEvent(
@@ -515,5 +975,32 @@ final class CapabilityCompanionRelationsTests: XCTestCase {
             ownership: .userOwned,
             origin: .local
         )
+    }
+
+    private func scanRegistryFixture(
+        _ registry: String,
+        rootID: String
+    ) throws -> (output: DiscoveryOutput, report: CapabilityCompanionResolutionReport) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("companion-registry-synonyms-\(UUID().uuidString)", isDirectory: true)
+        let projectAgents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectSkill = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        for directory in [projectAgents, projectSkill, registryDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Build Agent\"\n".write(
+            to: projectAgents.appendingPathComponent("build.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try registry.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let rootDescriptor = ScanRoot(id: rootID, url: root, scope: .project, kind: .projects)
+        let output = ResourceScanner(roots: [rootDescriptor]).scan()
+        let report = CapabilityCompanionResolver(resources: output.resources, roots: [rootDescriptor])
+            .resolveWithIssues()
+        return (output, report)
     }
 }

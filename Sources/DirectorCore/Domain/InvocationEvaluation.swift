@@ -56,6 +56,39 @@ public struct InvocationEvaluation: Codable, Sendable, Equatable, Identifiable {
     public var canonicalResourceID: String? { resourceID }
 }
 
+/// Privacy-safe storage read result. `unavailable` carries no underlying
+/// error text, path, defaults domain, or payload.
+public enum InvocationEvaluationReadResult: Sendable, Equatable {
+    case missing
+    case data(Data)
+    case unavailable
+}
+
+public enum InvocationEvaluationSnapshotAvailability: String, Sendable, Equatable {
+    case available
+    case invalid
+    case unavailable
+}
+
+/// Bounded metadata snapshot for aggregate evaluation joins. Existing detail
+/// consumers keep using `all()`; summary callers use this explicit coverage so
+/// corrupt or unreadable storage cannot be mistaken for an empty rating set.
+public struct InvocationEvaluationSnapshot: Sendable, Equatable {
+    public let availability: InvocationEvaluationSnapshotAvailability
+    public let evaluations: [String: InvocationEvaluation]
+    public let mutationRevision: UInt64
+
+    public init(
+        availability: InvocationEvaluationSnapshotAvailability,
+        evaluations: [String: InvocationEvaluation],
+        mutationRevision: UInt64 = 0
+    ) {
+        self.availability = availability
+        self.evaluations = evaluations
+        self.mutationRevision = mutationRevision
+    }
+}
+
 /// Durable local storage for explicit invocation evaluations.
 ///
 /// UserDefaults is intentionally used instead of the rebuildable SQLite
@@ -63,17 +96,26 @@ public struct InvocationEvaluation: Codable, Sendable, Equatable, Identifiable {
 /// The single versioned key stores a JSON dictionary keyed by invocation ID.
 public final class InvocationEvaluationStore: @unchecked Sendable {
     public static let defaultsKey = "codexDirector.invocationEvaluations.v1"
+    public static let didMutateNotification = Notification.Name("CodexDirector.InvocationEvaluationStore.didMutate")
     private static let maximumStableIDLength = 256
+    private static let maximumSnapshotBytes = 16 * 1_024 * 1_024
+    private static let maximumSnapshotEvaluations = 100_000
 
     private let readData: () -> Data?
+    private let readResult: () -> InvocationEvaluationReadResult
     private let writeData: (Data) -> Bool
     private let removeData: () -> Bool
     private let cacheLock = NSLock()
     private var cachedData: Data?
     private var cachedEvaluations: [String: InvocationEvaluation]?
+    private var mutationRevision: UInt64 = 0
 
     public init(defaults: UserDefaults = .standard) {
         self.readData = { defaults.data(forKey: Self.defaultsKey) }
+        self.readResult = {
+            if let data = defaults.data(forKey: Self.defaultsKey) { return .data(data) }
+            return .missing
+        }
         self.writeData = { data in
             defaults.set(data, forKey: Self.defaultsKey)
             return defaults.data(forKey: Self.defaultsKey) == data
@@ -92,7 +134,12 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
         writeData: @escaping (Data) -> Bool,
         removeData: @escaping () -> Bool
     ) {
-        self.readData = readData ?? { defaults.data(forKey: Self.defaultsKey) }
+        let reader = readData ?? { defaults.data(forKey: Self.defaultsKey) }
+        self.readData = reader
+        self.readResult = {
+            if let data = reader() { return .data(data) }
+            return .missing
+        }
         self.writeData = writeData
         self.removeData = removeData
     }
@@ -105,6 +152,27 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
         removeData: @escaping () -> Bool
     ) {
         self.readData = readData
+        self.readResult = {
+            if let data = readData() { return .data(data) }
+            return .missing
+        }
+        self.writeData = writeData
+        self.removeData = removeData
+    }
+
+    /// Injectable read-availability seam for corruption and unavailable-store
+    /// tests. `all()` retains its legacy empty-on-failure behavior, while
+    /// `readSnapshot()` preserves the explicit availability state.
+    public init(
+        readResult: @escaping () -> InvocationEvaluationReadResult,
+        writeData: @escaping (Data) -> Bool,
+        removeData: @escaping () -> Bool
+    ) {
+        self.readResult = readResult
+        self.readData = {
+            if case .data(let data) = readResult() { return data }
+            return nil
+        }
         self.writeData = writeData
         self.removeData = removeData
     }
@@ -137,18 +205,58 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
         return validated
     }
 
+    public func readSnapshot() -> InvocationEvaluationSnapshot {
+        let revision = currentMutationRevision()
+        let data: Data
+        switch readResult() {
+        case .missing:
+            return InvocationEvaluationSnapshot(availability: .available, evaluations: [:], mutationRevision: revision)
+        case .unavailable:
+            return InvocationEvaluationSnapshot(availability: .unavailable, evaluations: [:], mutationRevision: revision)
+        case .data(let value):
+            data = value
+        }
+        guard data.count <= Self.maximumSnapshotBytes,
+              let decoded = try? JSONDecoder().decode([String: InvocationEvaluation].self, from: data),
+              decoded.count <= Self.maximumSnapshotEvaluations else {
+            return InvocationEvaluationSnapshot(availability: .invalid, evaluations: [:], mutationRevision: revision)
+        }
+        let validated = decoded.filter { key, value in
+            key == value.invocationID && Self.isValid(value)
+        }
+        guard validated.count == decoded.count else {
+            return InvocationEvaluationSnapshot(availability: .invalid, evaluations: [:], mutationRevision: revision)
+        }
+        cacheLock.lock()
+        cachedData = data
+        cachedEvaluations = validated
+        cacheLock.unlock()
+        return InvocationEvaluationSnapshot(
+            availability: .available,
+            evaluations: validated,
+            mutationRevision: revision
+        )
+    }
+
     public func evaluation(for invocationID: String) -> InvocationEvaluation? {
         all()[invocationID]
+    }
+
+    public func mutationRevisionSnapshot() -> UInt64 {
+        currentMutationRevision()
     }
 
     @discardableResult
     public func set(_ evaluation: InvocationEvaluation) -> Bool {
         guard Self.isValid(evaluation) else { return false }
         var values = all()
+        if values[evaluation.invocationID] == evaluation { return true }
         values[evaluation.invocationID] = evaluation
         guard let data = try? JSONEncoder().encode(values) else { return false }
         guard writeData(data) else { return false }
-        return all()[evaluation.invocationID] == evaluation
+        guard all()[evaluation.invocationID] == evaluation else { return false }
+        recordMutation()
+        return true
     }
 
     /// Compatibility overload matching the other preference stores while
@@ -163,22 +271,51 @@ public final class InvocationEvaluationStore: @unchecked Sendable {
     public func remove(for invocationID: String) -> Bool {
         guard Self.isStableIdentifier(invocationID) else { return false }
         var values = all()
-        values.removeValue(forKey: invocationID)
+        guard values.removeValue(forKey: invocationID) != nil else { return true }
         if values.isEmpty {
-            return removeData()
+            guard removeData() else { return false }
+            recordMutation()
+            return true
         }
         guard let data = try? JSONEncoder().encode(values), writeData(data) else { return false }
-        return evaluation(for: invocationID) == nil
+        guard evaluation(for: invocationID) == nil else { return false }
+        recordMutation()
+        return true
     }
 
     @discardableResult
     public func removeAll() -> Bool {
+        let hadStoredPayload: Bool
+        switch readResult() {
+        case .missing:
+            hadStoredPayload = false
+        case .data, .unavailable:
+            // An explicit clear must still attempt to remove corrupt or
+            // temporarily unreadable bytes. A successful removal may change
+            // shared state even when no valid evaluations could be decoded.
+            hadStoredPayload = true
+        }
+        guard hadStoredPayload else { return true }
         guard removeData() else { return false }
         cacheLock.lock()
         cachedData = nil
         cachedEvaluations = nil
         cacheLock.unlock()
+        recordMutation()
         return true
+    }
+
+    private func currentMutationRevision() -> UInt64 {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return mutationRevision
+    }
+
+    private func recordMutation() {
+        cacheLock.lock()
+        mutationRevision &+= 1
+        cacheLock.unlock()
+        NotificationCenter.default.post(name: Self.didMutateNotification, object: self)
     }
 
     private static func isValid(_ evaluation: InvocationEvaluation) -> Bool {

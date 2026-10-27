@@ -172,4 +172,55 @@ final class DatabaseStorePrivacyBoundaryTests: XCTestCase {
         let snapshotCount = try await store.count("token_usage_snapshots")
         XCTAssertEqual(snapshotCount, 0)
     }
+
+    func testCapabilityChangeUsageReturnsOnlyStableJoinIdentityNotCallPayload() async throws {
+        let store = try makeStore()
+        let batch = PersistedSessionBatch(
+            session: TaskSummary(
+                id: "session:history-summary", projectID: "project:synthetic",
+                startedAt: epoch, endedAt: epoch, status: .completed,
+                coverage: .complete, parserVersion: "synthetic",
+                sourceFileID: "source:synthetic", title: nil
+            ),
+            calls: [InvocationEvent(
+                id: "call:history-summary", sessionID: "session:history-summary",
+                parentCallID: nil, ordinal: 0, timestamp: epoch,
+                actorName: "synthetic-actor-label", resourceID: "skill:history-summary",
+                kind: .skill, status: .completed, durationMs: 1,
+                confidence: .exact, errorCategory: "synthetic-error-detail"
+            )],
+            tokenSnapshots: [], quotaSnapshots: [], findings: []
+        )
+        try await store.replaceSession(batch)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let query = CapabilityChangeUsageQuery(
+            eventID: "event:history-summary",
+            resourceID: "skill:history-summary",
+            observedAt: epoch.addingTimeInterval(-1),
+            nextObservedAt: nil,
+            referenceDate: epoch,
+            calendar: calendar,
+            statisticsThrough: epoch,
+            databaseIdentity: PresentationIdentity(databaseEpoch: "epoch:synthetic", dataGeneration: 1),
+            evaluationRevision: 0
+        )
+
+        let result = try await store.fetchCapabilityChangeUsage(
+            query,
+            evaluationCandidates: [CapabilityChangeUsageEvaluationCandidate(
+                invocationID: "call:history-summary",
+                sessionID: "session:history-summary"
+            )]
+        )
+
+        XCTAssertEqual(result.callCount, 1)
+        XCTAssertEqual(result.matchedEvaluationCalls, [CapabilityChangeUsageCallIdentity(
+            invocationID: "call:history-summary",
+            sessionID: "session:history-summary"
+        )])
+        let projection = String(reflecting: result)
+        XCTAssertFalse(projection.contains("synthetic-actor-label"))
+        XCTAssertFalse(projection.contains("synthetic-error-detail"))
+    }
 }

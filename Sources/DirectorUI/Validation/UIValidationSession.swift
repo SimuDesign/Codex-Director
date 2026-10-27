@@ -46,6 +46,30 @@ public final class UIValidationSession: ObservableObject {
         }
     }
 
+    /// Presentation-only history states used by the disposable validation
+    /// host. They do not alter the persisted synthetic history projection.
+    public enum HistoryScenario: String, CaseIterable, Identifiable, Sendable {
+        case representative
+        case emptyMixedCoverage
+        case legacyUnavailable
+        case partialCoverage
+        case unreadable
+        case retainedRowsAfterFailure
+
+        public var id: String { rawValue }
+
+        public var title: String {
+            switch self {
+            case .representative: return "Representative history"
+            case .emptyMixedCoverage: return "Initialized empty · mixed coverage"
+            case .legacyUnavailable: return "Legacy unavailable scan"
+            case .partialCoverage: return "Partial coverage"
+            case .unreadable: return "Temporarily unreadable"
+            case .retainedRowsAfterFailure: return "Read failure · retain rows"
+            }
+        }
+    }
+
     @Published public private(set) var dataset: Dataset
     @Published public private(set) var model: DirectorAppModel
     @Published public private(set) var generation = 0
@@ -53,6 +77,10 @@ public final class UIValidationSession: ObservableObject {
     @Published public private(set) var hasError = false
 
     public private(set) var databaseURL: URL
+    /// Each validation session owns a real in-memory history coordinator so
+    /// history presentation exercises the same bounded page/status APIs as
+    /// production without opening the user's history file.
+    public private(set) var historyCoordinator: CapabilityHistoryCoordinator
 
     private var directoryURL: URL
     private var preferences: InMemoryPreferences
@@ -116,9 +144,13 @@ public final class UIValidationSession: ObservableObject {
             try? FileManager.default.removeItem(at: directoryURL)
             throw error
         }
+        let historyStore = try CapabilityHistoryStore.memory(initialEpoch: 7)
+        let historyCoordinator = CapabilityHistoryCoordinator(store: historyStore)
+        self.historyCoordinator = historyCoordinator
         self.model = DirectorAppModel(
             store: store,
             coordinator: nil,
+            capabilityHistoryService: historyCoordinator,
             configuration: nil,
             capabilityExportCoordinator: try Self.makeValidationExportCoordinator(in: directoryURL),
             classificationOverrides: classificationStore,
@@ -140,6 +172,7 @@ public final class UIValidationSession: ObservableObject {
         hasError = false
         do {
             try await seed(dataset: dataset, store: model.store!, evaluationStore: model.evaluationStore)
+            try await Self.seedHistory(coordinator: historyCoordinator, dataset: dataset)
             try await model.refresh()
             preparedDataset = dataset
             isReady = true
@@ -176,9 +209,12 @@ public final class UIValidationSession: ObservableObject {
             )
             let folderStore = CapabilityFolderStore.makeMemory()
             let newStore = try DatabaseStore(url: newURL, queryObserver: performanceQueryObserver)
+            let historyStore = try CapabilityHistoryStore.memory(initialEpoch: 7)
+            let newHistoryCoordinator = CapabilityHistoryCoordinator(store: historyStore)
             let newModel = DirectorAppModel(
                 store: newStore,
                 coordinator: nil,
+                capabilityHistoryService: newHistoryCoordinator,
                 configuration: nil,
                 capabilityExportCoordinator: try Self.makeValidationExportCoordinator(in: newDirectory),
                 classificationOverrides: classificationStore,
@@ -188,6 +224,7 @@ public final class UIValidationSession: ObservableObject {
                 capabilityFolderStore: folderStore
             )
             try await seed(dataset: dataset, store: newStore, evaluationStore: evaluationStore)
+            try await Self.seedHistory(coordinator: newHistoryCoordinator, dataset: dataset)
             try await newModel.refresh()
 
             // An async reset may finish after a newer selection. Dispose this
@@ -205,6 +242,7 @@ public final class UIValidationSession: ObservableObject {
             self.preferences = newPreferences
             self.dataset = dataset
             self.model = newModel
+            self.historyCoordinator = newHistoryCoordinator
             self.generation += 1
             self.preparedDataset = dataset
             self.isReady = true
@@ -228,6 +266,107 @@ public final class UIValidationSession: ObservableObject {
 
     public var fixtureCounts: FixtureCounts {
         Self.counts(for: dataset)
+    }
+
+    /// Injects only status/read behavior into presentation. The underlying
+    /// synthetic coordinator remains the source for all successful pages and
+    /// is never connected to production history storage.
+    public func historyPresentationSource(for scenario: HistoryScenario) -> CapabilityHistoryPresentationSource {
+        let normal = CapabilityHistoryPresentationSource.make(model: model, now: { Fixture.referenceNow })
+        func emptySource(coverage: CapabilityHistoryCoverage) -> CapabilityHistoryPresentationSource {
+            let page = CapabilityHistoryPage(
+                events: [],
+                nextBeforeSequence: nil,
+                revision: 1,
+                epoch: 1,
+                truncatedBefore: nil,
+                issueCodes: []
+            )
+            let status = CapabilityHistoryStatus(
+                accessMode: .readWrite,
+                epoch: 1,
+                revision: 1,
+                eventCount: 0,
+                baselineCount: 0,
+                isInitialized: true,
+                // Coverage is explicit; do not invent a source count in the
+                // disposable fixture.
+                initializedScopeCount: nil,
+                latestScanCoverage: coverage,
+                pendingMissingCount: 0
+            )
+            return CapabilityHistoryPresentationSource(
+                pageLoader: { _ in page },
+                statusLoader: { status },
+                clearLoader: normal.clearLoader,
+                usageLoader: normal.usageLoader,
+                now: normal.now,
+                statisticsThrough: normal.statisticsThrough,
+                identityLoader: normal.identityLoader,
+                usageQueryLoader: normal.usageQueryLoader
+            )
+        }
+        switch scenario {
+        case .representative:
+            return normal
+        case .emptyMixedCoverage:
+            return emptySource(coverage: .partial)
+        case .legacyUnavailable:
+            return emptySource(coverage: .unavailable)
+        case .partialCoverage:
+            return CapabilityHistoryPresentationSource(
+                pageLoader: normal.pageLoader,
+                statusLoader: {
+                    let status = await normal.statusLoader()
+                    return CapabilityHistoryStatus(
+                        accessMode: status.accessMode,
+                        epoch: status.epoch,
+                        revision: status.revision,
+                        eventCount: status.eventCount,
+                        baselineCount: status.baselineCount,
+                        isInitialized: status.isInitialized,
+                        initializedScopeCount: status.initializedScopeCount,
+                        latestScanCoverage: .partial,
+                        pendingMissingCount: status.pendingMissingCount,
+                        issueCodes: Array(Set(status.issueCodes + [.historyGap]))
+                    )
+                },
+                clearLoader: normal.clearLoader,
+                usageLoader: normal.usageLoader,
+                now: normal.now,
+                statisticsThrough: normal.statisticsThrough,
+                identityLoader: normal.identityLoader,
+                usageQueryLoader: normal.usageQueryLoader
+            )
+        case .unreadable:
+            return CapabilityHistoryPresentationSource(
+                pageLoader: { _ in throw CapabilityHistoryStore.StoreError.storageUnavailable },
+                statusLoader: { .unavailable },
+                clearLoader: normal.clearLoader,
+                usageLoader: normal.usageLoader,
+                now: normal.now,
+                statisticsThrough: normal.statisticsThrough,
+                identityLoader: normal.identityLoader,
+                usageQueryLoader: normal.usageQueryLoader
+            )
+        case .retainedRowsAfterFailure:
+            let gate = HistoryValidationReadGate()
+            return CapabilityHistoryPresentationSource(
+                pageLoader: { query in
+                    if await gate.claimFirstRead() {
+                        return try await normal.pageLoader(query)
+                    }
+                    throw CapabilityHistoryStore.StoreError.storageUnavailable
+                },
+                statusLoader: normal.statusLoader,
+                clearLoader: normal.clearLoader,
+                usageLoader: normal.usageLoader,
+                now: normal.now,
+                statisticsThrough: normal.statisticsThrough,
+                identityLoader: normal.identityLoader,
+                usageQueryLoader: normal.usageQueryLoader
+            )
+        }
     }
 
     private static func makeTemporaryDatabase() throws -> (URL, URL) {
@@ -336,6 +475,212 @@ public final class UIValidationSession: ObservableObject {
         } else {
             try await Self.seed(dataset: dataset, store: store, evaluationStore: evaluationStore)
         }
+    }
+
+    /// Creates a compact, deterministic history timeline for the validation
+    /// host. It intentionally uses only safe IDs/names and synthetic dates;
+    /// no source paths, file contents or production history are involved.
+    private static func seedHistory(
+        coordinator: CapabilityHistoryCoordinator,
+        dataset: Dataset
+    ) async throws {
+        let agentScope = CapabilityHistoryScanScope(
+            rootID: "validation-history-agents",
+            scope: .global,
+            rootKind: .agents,
+            coverage: .complete
+        )
+        let skillScope = CapabilityHistoryScanScope(
+            rootID: "validation-history-skills",
+            scope: .global,
+            rootKind: .skills,
+            coverage: .complete
+        )
+        let projectScope = CapabilityHistoryScanScope(
+            rootID: "validation-history-project-aurora",
+            scope: .project,
+            rootKind: .projects,
+            coverage: .complete
+        )
+        let emptyBatch = CapabilityHistoryScanBatch(
+            observedAt: Fixture.referenceNow.addingTimeInterval(-3_600),
+            scopes: [agentScope, skillScope, projectScope],
+            observations: []
+        )
+        if dataset == .empty {
+            _ = try await coordinator.submit(emptyBatch)
+            return
+        }
+
+        // The interaction stress fixture is deliberately a bounded history
+        // projection, not a second source of truth: 2,000 safe capabilities
+        // receive ten verified changes each (20,000 retained events). The UI
+        // still reads only bounded pages while the ordinary directory fixture
+        // remains the 1,000-capability interaction baseline.
+        if dataset == .interactionStress {
+            func stressObservation(_ index: Int, signature: Character, date: Date) -> CapabilityHistoryObservation {
+                CapabilityHistoryObservation(
+                    resourceID: "skill:history-stress-\(index)",
+                    sourceRootID: skillScope.rootID,
+                    name: "Synthetic history stress skill \(index)",
+                    kind: .skill,
+                    scope: .global,
+                    projectID: nil,
+                    documents: [.skillManifest],
+                    signature: String(repeating: String(signature), count: 64),
+                    observedAt: date
+                )
+            }
+            let first = Fixture.referenceNow.addingTimeInterval(-3 * 86_400)
+            _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+                observedAt: first,
+                scopes: [skillScope],
+                observations: (0..<2_000).map { stressObservation($0, signature: "a", date: first) }
+            ))
+            let hexDigits: [Character] = Array("bcdef01234")
+            for (offset, digit) in hexDigits.enumerated() {
+                let observedAt = first.addingTimeInterval(TimeInterval(offset + 1) * 7_200)
+                _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+                    observedAt: observedAt,
+                    scopes: [skillScope],
+                    observations: (0..<2_000).map { stressObservation($0, signature: digit, date: observedAt) }
+                ))
+            }
+            return
+        }
+
+        func observation(
+            resourceID: String,
+            sourceRootID: String,
+            name: String,
+            kind: ResourceKind,
+            scope: ResourceScope = .global,
+            projectID: String? = nil,
+            documents: Set<CapabilityTrackedDocument>,
+            signature: String,
+            observedAt: Date
+        ) -> CapabilityHistoryObservation {
+            CapabilityHistoryObservation(
+                resourceID: resourceID,
+                sourceRootID: sourceRootID,
+                name: name,
+                kind: kind,
+                scope: scope,
+                projectID: projectID,
+                documents: documents,
+                signature: signature,
+                observedAt: observedAt
+            )
+        }
+
+        let agentDocuments: Set<CapabilityTrackedDocument> = [.agentConfiguration, .agentBrief]
+        let skillDocuments: Set<CapabilityTrackedDocument> = [.skillManifest]
+        let first = Fixture.referenceNow.addingTimeInterval(-24 * 86_400)
+        let second = Fixture.referenceNow.addingTimeInterval(-20 * 86_400)
+        let third = Fixture.referenceNow.addingTimeInterval(-18 * 86_400)
+        let fourth = Fixture.referenceNow.addingTimeInterval(-10 * 86_400)
+        func signature(_ value: Character) -> String { String(repeating: String(value), count: 64) }
+
+        // The first complete observation establishes a baseline. Subsequent
+        // complete observations exercise changed documents, two-scan absence,
+        // rediscovery, A→B→A history, pending absence, project scope, safe
+        // bilingual long names, and equal wall-clock times with distinct
+        // commit sequences.
+        _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+            observedAt: first,
+            scopes: [agentScope, skillScope, projectScope],
+            observations: [
+                observation(resourceID: "agent:review-analyst", sourceRootID: agentScope.rootID, name: "Review Analyst", kind: .agent, documents: agentDocuments, signature: signature("a"), observedAt: first),
+                observation(resourceID: "agent:validation-global", sourceRootID: agentScope.rootID, name: "validation-global-agent", kind: .agent, documents: agentDocuments, signature: signature("a"), observedAt: first),
+                observation(resourceID: "agent:confirmed-missing", sourceRootID: agentScope.rootID, name: "Confirmed Missing Agent", kind: .agent, documents: agentDocuments, signature: signature("e"), observedAt: first),
+                observation(resourceID: "agent:pending-absence", sourceRootID: agentScope.rootID, name: "Pending Absence Agent", kind: .agent, documents: agentDocuments, signature: signature("f"), observedAt: first),
+                observation(resourceID: "skill:sample-report", sourceRootID: projectScope.rootID, name: "sample-report-skill", kind: .skill, scope: .project, projectID: "project:aurora", documents: skillDocuments, signature: signature("a"), observedAt: first),
+                observation(resourceID: "skill:sequence", sourceRootID: skillScope.rootID, name: "Sequence Skill", kind: .skill, documents: skillDocuments, signature: signature("a"), observedAt: first),
+                observation(resourceID: "skill:long-bilingual", sourceRootID: skillScope.rootID, name: "长名称验证 — Long bilingual safe capability name", kind: .skill, documents: skillDocuments, signature: signature("a"), observedAt: first)
+            ]
+        ))
+        _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+            observedAt: second,
+            scopes: [agentScope, skillScope, projectScope],
+            observations: [
+                observation(resourceID: "agent:review-analyst", sourceRootID: agentScope.rootID, name: "Review Analyst", kind: .agent, documents: agentDocuments, signature: signature("b"), observedAt: second),
+                observation(resourceID: "agent:validation-global", sourceRootID: agentScope.rootID, name: "validation-global-agent", kind: .agent, documents: agentDocuments, signature: signature("b"), observedAt: second),
+                observation(resourceID: "agent:pending-absence", sourceRootID: agentScope.rootID, name: "Pending Absence Agent", kind: .agent, documents: agentDocuments, signature: signature("f"), observedAt: second),
+                observation(resourceID: "skill:sample-report", sourceRootID: projectScope.rootID, name: "sample-report-skill", kind: .skill, scope: .project, projectID: "project:aurora", documents: skillDocuments, signature: signature("b"), observedAt: second),
+                observation(resourceID: "skill:sequence", sourceRootID: skillScope.rootID, name: "Sequence Skill", kind: .skill, documents: skillDocuments, signature: signature("b"), observedAt: second),
+                observation(resourceID: "skill:long-bilingual", sourceRootID: skillScope.rootID, name: "长名称验证 — Long bilingual safe capability name", kind: .skill, documents: skillDocuments, signature: signature("b"), observedAt: second),
+                observation(resourceID: "agent:new-discovery", sourceRootID: agentScope.rootID, name: "New Discovery Agent", kind: .agent, documents: agentDocuments, signature: signature("9"), observedAt: second),
+                observation(resourceID: "skill:new-discovery", sourceRootID: skillScope.rootID, name: "New Discovery Skill", kind: .skill, documents: skillDocuments, signature: signature("9"), observedAt: second)
+            ]
+        ))
+        _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+            observedAt: third,
+            scopes: [agentScope, skillScope, projectScope],
+            observations: [
+                observation(resourceID: "agent:review-analyst", sourceRootID: agentScope.rootID, name: "Review Analyst", kind: .agent, documents: agentDocuments, signature: signature("b"), observedAt: third),
+                observation(resourceID: "agent:validation-global", sourceRootID: agentScope.rootID, name: "validation-global-agent", kind: .agent, documents: agentDocuments, signature: signature("b"), observedAt: third),
+                observation(resourceID: "agent:pending-absence", sourceRootID: agentScope.rootID, name: "Pending Absence Agent", kind: .agent, documents: agentDocuments, signature: signature("f"), observedAt: third),
+                observation(resourceID: "skill:sample-report", sourceRootID: projectScope.rootID, name: "sample-report-skill", kind: .skill, scope: .project, projectID: "project:aurora", documents: skillDocuments, signature: signature("b"), observedAt: third),
+                observation(resourceID: "skill:sequence", sourceRootID: skillScope.rootID, name: "Sequence Skill", kind: .skill, documents: skillDocuments, signature: signature("a"), observedAt: third),
+                observation(resourceID: "skill:long-bilingual", sourceRootID: skillScope.rootID, name: "长名称验证 — Long bilingual safe capability name", kind: .skill, documents: skillDocuments, signature: signature("b"), observedAt: third),
+                observation(resourceID: "agent:new-discovery", sourceRootID: agentScope.rootID, name: "New Discovery Agent", kind: .agent, documents: agentDocuments, signature: signature("9"), observedAt: third),
+                observation(resourceID: "skill:new-discovery", sourceRootID: skillScope.rootID, name: "New Discovery Skill", kind: .skill, documents: skillDocuments, signature: signature("9"), observedAt: third)
+            ]
+        ))
+        _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+            observedAt: fourth,
+            scopes: [agentScope, skillScope, projectScope],
+            observations: [
+                observation(resourceID: "agent:review-analyst", sourceRootID: agentScope.rootID, name: "Review Analyst", kind: .agent, documents: agentDocuments, signature: signature("c"), observedAt: fourth),
+                observation(resourceID: "agent:validation-global", sourceRootID: agentScope.rootID, name: "validation-global-agent", kind: .agent, documents: agentDocuments, signature: signature("c"), observedAt: fourth),
+                observation(resourceID: "agent:confirmed-missing", sourceRootID: agentScope.rootID, name: "Confirmed Missing Agent", kind: .agent, documents: agentDocuments, signature: signature("8"), observedAt: fourth),
+                observation(resourceID: "agent:pending-absence", sourceRootID: agentScope.rootID, name: "Pending Absence Agent", kind: .agent, documents: agentDocuments, signature: signature("f"), observedAt: fourth),
+                observation(resourceID: "skill:sample-report", sourceRootID: projectScope.rootID, name: "sample-report-skill", kind: .skill, scope: .project, projectID: "project:aurora", documents: skillDocuments, signature: signature("c"), observedAt: fourth),
+                observation(resourceID: "skill:sequence", sourceRootID: skillScope.rootID, name: "Sequence Skill", kind: .skill, documents: skillDocuments, signature: signature("a"), observedAt: fourth),
+                observation(resourceID: "skill:long-bilingual", sourceRootID: skillScope.rootID, name: "长名称验证 — Long bilingual safe capability name", kind: .skill, documents: skillDocuments, signature: signature("b"), observedAt: fourth),
+                observation(resourceID: "agent:new-discovery", sourceRootID: agentScope.rootID, name: "New Discovery Agent", kind: .agent, documents: agentDocuments, signature: signature("9"), observedAt: fourth),
+                observation(resourceID: "skill:new-discovery", sourceRootID: skillScope.rootID, name: "New Discovery Skill", kind: .skill, documents: skillDocuments, signature: signature("9"), observedAt: fourth)
+            ]
+        ))
+        // A second batch at the same wall-clock time gives the renderer equal
+        // timestamps with distinct commit sequences, and exercises A→B→A
+        // without relying on mtime precision.
+        _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+            observedAt: fourth,
+            scopes: [agentScope, skillScope, projectScope],
+            observations: [
+                observation(resourceID: "agent:review-analyst", sourceRootID: agentScope.rootID, name: "Review Analyst", kind: .agent, documents: agentDocuments, signature: signature("c"), observedAt: fourth),
+                observation(resourceID: "agent:validation-global", sourceRootID: agentScope.rootID, name: "validation-global-agent", kind: .agent, documents: agentDocuments, signature: signature("c"), observedAt: fourth),
+                observation(resourceID: "agent:confirmed-missing", sourceRootID: agentScope.rootID, name: "Confirmed Missing Agent", kind: .agent, documents: agentDocuments, signature: signature("8"), observedAt: fourth),
+                observation(resourceID: "agent:pending-absence", sourceRootID: agentScope.rootID, name: "Pending Absence Agent", kind: .agent, documents: agentDocuments, signature: signature("f"), observedAt: fourth),
+                observation(resourceID: "skill:sample-report", sourceRootID: projectScope.rootID, name: "sample-report-skill", kind: .skill, scope: .project, projectID: "project:aurora", documents: skillDocuments, signature: signature("d"), observedAt: fourth),
+                observation(resourceID: "skill:sequence", sourceRootID: skillScope.rootID, name: "Sequence Skill", kind: .skill, documents: skillDocuments, signature: signature("b"), observedAt: fourth),
+                observation(resourceID: "skill:long-bilingual", sourceRootID: skillScope.rootID, name: "长名称验证 — Long bilingual safe capability name", kind: .skill, documents: skillDocuments, signature: signature("c"), observedAt: fourth),
+                observation(resourceID: "agent:new-discovery", sourceRootID: agentScope.rootID, name: "New Discovery Agent", kind: .agent, documents: agentDocuments, signature: signature("9"), observedAt: fourth),
+                observation(resourceID: "skill:new-discovery", sourceRootID: skillScope.rootID, name: "New Discovery Skill", kind: .skill, documents: skillDocuments, signature: signature("9"), observedAt: fourth)
+            ]
+        ))
+
+        if dataset == .stress {
+            let extra = (0..<18).map { index in
+                observation(resourceID: "skill:history-extra-\(index)", sourceRootID: skillScope.rootID, name: "History extra skill \(index)", kind: .skill, documents: skillDocuments, signature: signature("7"), observedAt: fourth)
+            }
+            _ = try await coordinator.submit(CapabilityHistoryScanBatch(
+                observedAt: fourth.addingTimeInterval(1),
+                scopes: [skillScope],
+                observations: extra
+            ))
+        }
+    }
+}
+
+private actor HistoryValidationReadGate {
+    private var didServeFirstRead = false
+
+    func claimFirstRead() -> Bool {
+        guard !didServeFirstRead else { return false }
+        didServeFirstRead = true
+        return true
     }
 }
 

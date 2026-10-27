@@ -1,7 +1,949 @@
+import CryptoKit
+import Darwin
 import XCTest
 @testable import DirectorCore
 
 final class ResourceScannerTests: XCTestCase {
+
+    private final class ProjectReadBlocker: @unchecked Sendable {
+        private let lock = NSLock()
+        private let releaseSemaphore = DispatchSemaphore(value: 0)
+        private var didBlock = false
+        private var starts = 0
+
+        func blockOnce() {
+            lock.lock()
+            guard !didBlock else {
+                lock.unlock()
+                return
+            }
+            didBlock = true
+            starts += 1
+            lock.unlock()
+            releaseSemaphore.wait()
+        }
+
+        func release() { releaseSemaphore.signal() }
+
+        var startCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return starts
+        }
+    }
+
+    private func waitUntil(
+        timeout: TimeInterval = 1,
+        _ condition: @escaping @Sendable () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        return condition()
+    }
+
+    func testProjectIsolationCoversEveryReadStageAndKeepsGlobalResults() async throws {
+        enum BlockedStage: CaseIterable, Sendable {
+            case probe
+            case identity
+            case document
+            case finalValidation
+            case registry
+            case physicalPath
+        }
+
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-project-isolation-\(UUID().uuidString)", isDirectory: true)
+        let globalRootURL = container.appendingPathComponent("global", isDirectory: true)
+        let globalSkill = globalRootURL.appendingPathComponent("global-safe", isDirectory: true)
+        let projectURL = container.appendingPathComponent("project", isDirectory: true)
+        let projectSkill = projectURL.appendingPathComponent(".agents/skills/project-tool", isDirectory: true)
+        let projectManifest = projectSkill.appendingPathComponent("SKILL.md")
+        let registryDirectory = projectURL.appendingPathComponent("agents", isDirectory: true)
+        let registryURL = registryDirectory.appendingPathComponent("registry.json")
+        try FileManager.default.createDirectory(at: globalSkill, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectSkill, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+        try "---\nname: global-safe\n---\n".write(
+            to: globalSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8
+        )
+        try "---\nname: project-tool\n---\n".write(
+            to: projectManifest, atomically: true, encoding: .utf8
+        )
+        try #"{"schemaVersion":5,"packages":[]}"#.write(
+            to: registryURL, atomically: true, encoding: .utf8
+        )
+
+        let globalRoot = ScanRoot(
+            id: "global-safe", url: globalRootURL, scope: .global, kind: .skills
+        )
+        let projectRoot = ScanRoot(
+            id: "isolated-project", url: projectURL, scope: .project, kind: .projects
+        )
+        let base = FileSystemClient()
+
+        for stage in BlockedStage.allCases {
+            let blocker = ProjectReadBlocker()
+            let gate = ProjectSourceReadGate(deadline: 0.03, capacity: 2)
+            let fileSystem = FileSystemClient(
+                directoryReader: { url in
+                    if stage == .probe,
+                       url.standardizedFileURL == projectURL.standardizedFileURL {
+                        blocker.blockOnce()
+                    }
+                    return base.enumerateDirectory(url)
+                },
+                dataReader: { base.readData($0) },
+                attributesReader: { base.fileAttributes($0) },
+                readableReader: { base.isReadable($0) },
+                symbolicLinkReader: { base.isSymbolicLink($0) },
+                verifiedDataReader: { url, root, maximumByteCount in
+                    if (stage == .document && url.standardizedFileURL == projectManifest.standardizedFileURL)
+                        || (stage == .registry && url.standardizedFileURL == registryURL.standardizedFileURL) {
+                        blocker.blockOnce()
+                    }
+                    return base.readVerifiedData(url, within: root, maximumByteCount: maximumByteCount)
+                },
+                identityValidator: { url, root, read in
+                    if stage == .finalValidation,
+                       url.standardizedFileURL == projectManifest.standardizedFileURL {
+                        blocker.blockOnce()
+                    }
+                    return base.validateDocumentRead(read, at: url, within: root)
+                },
+                directoryIdentityReader: { url in
+                    if stage == .identity,
+                       url.standardizedFileURL == projectURL.standardizedFileURL {
+                        blocker.blockOnce()
+                    }
+                    return base.directoryIdentity(url)
+                },
+                directoryStatusReader: { base.directoryStatus($0) }
+            )
+            let scanner = ResourceScanner(
+                roots: [globalRoot, projectRoot],
+                fileSystem: fileSystem,
+                projectReadGate: gate,
+                projectPhysicalPathResolver: { url in
+                    if stage == .physicalPath { blocker.blockOnce() }
+                    return url.resolvingSymlinksInPath().standardizedFileURL.path
+                }
+            )
+
+            let isolated = try await scanner.scanIsolatingProjectSources()
+            XCTAssertEqual(blocker.startCount, 1, "stage \(stage)")
+            XCTAssertTrue(isolated.output.resources.contains { $0.name == "global-safe" }, "stage \(stage)")
+            XCTAssertFalse(isolated.output.resources.contains { $0.sourceRootID == projectRoot.id }, "stage \(stage)")
+            XCTAssertEqual(isolated.unavailableProjectRootIDs, [projectRoot.id], "stage \(stage)")
+            XCTAssertTrue(isolated.output.projects.contains {
+                $0.id == projectRoot.id && !$0.available
+            }, "stage \(stage)")
+            XCTAssertTrue(isolated.output.issues.contains {
+                $0.rootID == projectRoot.id
+                    && $0.message == "Project source read is temporarily unavailable"
+            }, "stage \(stage)")
+            let projectScope = isolated.output.historyScanBatch.scopes.first {
+                $0.rootID == projectRoot.id
+            }
+            XCTAssertEqual(projectScope?.coverage, .unavailable, "stage \(stage)")
+
+            blocker.release()
+            let released = await waitUntil { gate.activeWorkerCountForTesting == 0 }
+            XCTAssertTrue(released, "stage \(stage)")
+        }
+    }
+
+    func testMissingProjectPhysicalIdentityPublishesUnavailableInsteadOfLexicalFallback() async throws {
+        let projectURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-project-physical-failure-\(UUID().uuidString)", isDirectory: true)
+        let projectSkill = projectURL.appendingPathComponent(".agents/skills/project-tool", isDirectory: true)
+        try FileManager.default.createDirectory(at: projectSkill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: projectURL) }
+        try "---\nname: project-tool\n---\n".write(
+            to: projectSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8
+        )
+        let projectRoot = ScanRoot(
+            id: "physical-failure", url: projectURL, scope: .project, kind: .projects
+        )
+        let scanner = ResourceScanner(
+            roots: [projectRoot],
+            fileSystem: FileSystemClient(),
+            projectReadGate: ProjectSourceReadGate(deadline: 1, capacity: 1),
+            projectPhysicalPathResolver: { _ in nil }
+        )
+
+        let isolated = try await scanner.scanIsolatingProjectSources()
+
+        XCTAssertTrue(isolated.output.resources.isEmpty)
+        XCTAssertTrue(isolated.projectSkillPhysicalPaths.isEmpty)
+        XCTAssertEqual(isolated.unavailableProjectRootIDs, [projectRoot.id])
+        XCTAssertEqual(isolated.output.historyScanBatch.scopes.first?.coverage, .unavailable)
+        XCTAssertEqual(isolated.output.projects.first?.available, false)
+    }
+
+    func testTwoBlockedProjectsSaturateGateWhileThirdFailsBusyAndGlobalStillPublishes() async throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-project-capacity-\(UUID().uuidString)", isDirectory: true)
+        let globalURL = container.appendingPathComponent("global", isDirectory: true)
+        let globalSkill = globalURL.appendingPathComponent("global-safe", isDirectory: true)
+        let projectURLs = (1...3).map {
+            container.appendingPathComponent("project-\($0)", isDirectory: true)
+        }
+        try FileManager.default.createDirectory(at: globalSkill, withIntermediateDirectories: true)
+        for url in projectURLs {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: container) }
+        try "---\nname: global-safe\n---\n".write(
+            to: globalSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8
+        )
+        let firstBlocker = ProjectReadBlocker()
+        let secondBlocker = ProjectReadBlocker()
+        let base = FileSystemClient()
+        let fileSystem = FileSystemClient(
+            directoryReader: { url in
+                if url.standardizedFileURL == projectURLs[0].standardizedFileURL {
+                    firstBlocker.blockOnce()
+                } else if url.standardizedFileURL == projectURLs[1].standardizedFileURL {
+                    secondBlocker.blockOnce()
+                }
+                return base.enumerateDirectory(url)
+            },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) }
+        )
+        let gate = ProjectSourceReadGate(deadline: 0.03, capacity: 2)
+        let roots = [
+            ScanRoot(id: "global", url: globalURL, scope: .global, kind: .skills),
+        ] + projectURLs.enumerated().map {
+            ScanRoot(id: "project-\($0.offset + 1)", url: $0.element, scope: .project, kind: .projects)
+        }
+
+        let isolated = try await ResourceScanner(
+            roots: roots, fileSystem: fileSystem, projectReadGate: gate
+        ).scanIsolatingProjectSources()
+
+        XCTAssertEqual(firstBlocker.startCount, 1)
+        XCTAssertEqual(secondBlocker.startCount, 1)
+        XCTAssertEqual(gate.activeWorkerCountForTesting, 2)
+        XCTAssertTrue(isolated.output.resources.contains { $0.name == "global-safe" })
+        XCTAssertEqual(isolated.unavailableProjectRootIDs, Set(["project-1", "project-2", "project-3"]))
+        XCTAssertEqual(isolated.output.projects.filter { !$0.available }.count, 3)
+
+        firstBlocker.release()
+        secondBlocker.release()
+        let released = await waitUntil { gate.activeWorkerCountForTesting == 0 }
+        XCTAssertTrue(released)
+    }
+
+    func testRootStageLoggingUsesOnlyFixedPrivacySafeFields() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DirectorCore/Discovery/ResourceScanner.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let helperStart = try XCTUnwrap(source.range(of: "private static func logRootScan"))
+        let scanStart = try XCTUnwrap(source.range(of: "public func scan()"))
+        let helper = source[helperStart.lowerBound..<scanStart.lowerBound]
+
+        XCTAssertTrue(source.contains("import OSLog"))
+        XCTAssertTrue(source.contains("subsystem: \"com.peiweitang.CodexDirector\""))
+        XCTAssertTrue(source.contains("category: \"SourceDiscovery\""))
+        XCTAssertTrue(source.contains(".begin,"))
+        XCTAssertTrue(source.contains(".probeEnd,"))
+        XCTAssertTrue(source.contains(".rootEnd,"))
+        XCTAssertTrue(helper.contains("rootKind"))
+        XCTAssertTrue(helper.contains("rootOrdinal"))
+        XCTAssertTrue(helper.contains("rootTotal"))
+        XCTAssertFalse(helper.contains("root.id"))
+        XCTAssertFalse(helper.contains("root.url"))
+        XCTAssertFalse(helper.contains("root.name"))
+        XCTAssertFalse(helper.contains("\\(error"))
+    }
+
+    private final class ScanClockProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private let epoch = Date(timeIntervalSince1970: 1_800_000_000)
+        private var clockCallCount = 0
+        private var directoryReadClockCounts: [Int] = []
+
+        func now() -> Date {
+            lock.lock()
+            defer { lock.unlock() }
+            clockCallCount += 1
+            return epoch.addingTimeInterval(TimeInterval(clockCallCount))
+        }
+
+        func recordDirectoryRead() {
+            lock.lock()
+            directoryReadClockCounts.append(clockCallCount)
+            lock.unlock()
+        }
+
+        var snapshot: (callCount: Int, directoryReadClockCounts: [Int]) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (clockCallCount, directoryReadClockCounts)
+        }
+
+        var firstObservationTime: Date { epoch.addingTimeInterval(1) }
+        var batchTime: Date { epoch.addingTimeInterval(2) }
+    }
+
+    func testEnumerationFailurePreservesUnavailableClassificationAndErrorCode() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-enumeration-error-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let base = FileSystemClient()
+        let denied = FileSystemClient(
+            directoryReader: { url in
+                url.standardizedFileURL == root.standardizedFileURL
+                    ? .failure(.permissionDenied)
+                    : base.enumerateDirectory(url)
+            },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) }
+        )
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "denied-root", url: root, scope: .global, kind: .skills)
+        ], fileSystem: denied).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.unavailable])
+        XCTAssertTrue(output.resources.isEmpty)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertTrue(output.issues.contains { $0.message.contains("permissionDenied") })
+    }
+
+    func testDirectoryMetadataFailureMakesCapabilityScopePartialInsteadOfAbsent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-directory-status-\(UUID().uuidString)", isDirectory: true)
+        let skill = root.appendingPathComponent("hidden-skill", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "---\nname: hidden-skill\n---\n".write(
+            to: skill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let base = FileSystemClient()
+        let denied = FileSystemClient(
+            directoryReader: { base.enumerateDirectory($0) },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) },
+            directoryStatusReader: { url in
+                url.standardizedFileURL == skill.standardizedFileURL
+                    ? .failure(.permissionDenied)
+                    : base.directoryStatus(url)
+            }
+        )
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "metadata-root", url: root, scope: .global, kind: .skills)
+        ], fileSystem: denied).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial])
+        XCTAssertTrue(output.resources.isEmpty)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertTrue(output.issues.contains {
+            $0.relativePath == "hidden-skill"
+                && $0.message == "Item metadata read failed: permissionDenied"
+        })
+    }
+
+    func testMissingProjectRootDiffersFromKnownEmptyOptionalChildren() throws {
+        let container = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-scope-absence-\(UUID().uuidString)", isDirectory: true)
+        let emptyProject = container.appendingPathComponent("empty-project", isDirectory: true)
+        let missingProject = container.appendingPathComponent("missing-project", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptyProject, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: container) }
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "empty-project", url: emptyProject, scope: .project, kind: .projects),
+            ScanRoot(id: "missing-project", url: missingProject, scope: .project, kind: .projects),
+        ]).scan()
+        let coverage = Dictionary(uniqueKeysWithValues: output.historyScanBatch.scopes.map { ($0.rootID, $0.coverage) })
+        let projects = Dictionary(uniqueKeysWithValues: output.projects.map { ($0.id, $0.available) })
+
+        XCTAssertEqual(coverage["empty-project"], .complete)
+        XCTAssertEqual(coverage["missing-project"], .unavailable)
+        XCTAssertEqual(projects["empty-project"], true)
+        XCTAssertEqual(projects["missing-project"], false)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+    }
+
+    func testUnknownProjectRegistryStructureMakesScopePartial() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-invalid-registry-\(UUID().uuidString)", isDirectory: true)
+        let agents = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data(#"{"schema":1,"entries":{"unexpected":true}}"#.utf8)
+            .write(to: agents.appendingPathComponent("registry.json"))
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "registry-project", url: root, scope: .project, kind: .projects)
+        ]).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial])
+        XCTAssertFalse(output.resources.contains { $0.kind == .agent || $0.kind == .workflow })
+        XCTAssertTrue(output.issues.contains { $0.message.contains("registry is invalid") })
+    }
+
+    func testV5PackagesRegistryIsCompleteWithoutEntriesAndDoesNotDuplicateTomlAgent() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-v5-registry-\(UUID().uuidString)", isDirectory: true)
+        let agents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let skills = root.appendingPathComponent(".agents/skills/video-tool", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: skills, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try "name = \"Display Agent\"\n".write(
+            to: agents.appendingPathComponent("build-agent.toml"), atomically: true, encoding: .utf8)
+        try "---\nname: video-tool\ndescription: Synthetic video utility\n---\n".write(
+            to: skills.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let registry = #"{"schemaVersion":5,"packages":[{"kind":"native-agent","id":"agent-package","nativeAgent":"build-agent","usesSkills":["video-tool"]},{"kind":"auxiliary-skill","id":"video-tool","nativeAgent":"build-agent","invokedBy":["build-agent"]}]}"#
+        try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "v5-project", url: root, scope: .project, kind: .projects)
+        ]).scan()
+        let agentsFound = output.resources.filter { $0.kind == .agent && $0.projectID == "v5-project" }
+        let skillsFound = output.resources.filter { $0.kind == .skill && $0.projectID == "v5-project" }
+        XCTAssertEqual(agentsFound.count, 1)
+        XCTAssertEqual(agentsFound.first?.relativeSourcePath, ".codex/agents/build-agent.toml")
+        XCTAssertEqual(skillsFound.count, 1)
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.complete])
+        XCTAssertFalse(output.issues.contains { $0.message.contains("registry is invalid") })
+
+        let relations = CapabilityCompanionResolver(
+            resources: output.resources,
+            roots: [ScanRoot(id: "v5-project", url: root, scope: .project, kind: .projects)]
+        ).resolve()
+        XCTAssertEqual(relations.filter { $0.declarationSource == .projectRegistry }.count, 1)
+        XCTAssertEqual(relations.first?.agentID, agentsFound.first?.id)
+        XCTAssertEqual(relations.first?.skillID, skillsFound.first?.id)
+    }
+
+    func testRegistryVersionMetadataAcceptsExplicitV3AndV5AndLegacyWithoutVersion() throws {
+        let registries = [
+            #"{"packages":{"agent-package":{"type":"agent","usesSkills":["skill-package"]},"skill-package":{"type":"skill","invokedBy":["agent-package"]}}}"#,
+            #"{"schemaVersion":3,"packages":{"agent-package":{"type":"agent","usesSkills":["skill-package"]},"skill-package":{"type":"skill","invokedBy":["agent-package"]}}}"#,
+            #"{"schemaVersion":5,"packages":[{"kind":"native-agent","id":"agent-package","nativeAgent":"agent-package","usesSkills":["skill-package"]},{"kind":"auxiliary-skill","id":"skill-package","nativeAgent":"agent-package","invokedBy":["agent-package"]}]}"#
+        ]
+
+        for (index, registry) in registries.enumerated() {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("director-registry-supported-version-\(index)-\(UUID().uuidString)", isDirectory: true)
+            let agents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+            let skills = root.appendingPathComponent(".agents/skills/skill-package", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: skills, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try "name = \"agent-package\"\n".write(to: agents.appendingPathComponent("agent-package.toml"), atomically: true, encoding: .utf8)
+            try "---\nname: skill-package\n---\n".write(to: skills.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let output = ResourceScanner(roots: [
+                ScanRoot(id: "supported-version-\(index)", url: root, scope: .project, kind: .projects)
+            ]).scan()
+            XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.complete], "registry index \(index)")
+            XCTAssertFalse(output.issues.contains { $0.message.contains("registry") && $0.message.contains("version") })
+        }
+    }
+
+    func testUnsupportedRegistryVersionsArePartialAndDoNotCreateRelations() throws {
+        let registries = [
+            #"{"schemaVersion":999,"packages":{"agent-package":{"type":"agent","usesSkills":["skill-package"]}}}"#,
+            #"{"schemaVersion":"5","packages":{"agent-package":{"type":"agent","usesSkills":["skill-package"]}}}"#,
+            #"{"schema":{"major":5},"schemaVersion":5,"packages":{"agent-package":{"type":"agent","usesSkills":["skill-package"]}}}"#,
+            #"{"schema":3,"schemaVersion":5,"packages":{"agent-package":{"type":"agent","usesSkills":["skill-package"]}}}"#,
+            #"{"schema":999,"entries":[{"name":"Legacy Agent","type":"agent"}]}"#
+        ]
+
+        for (index, registry) in registries.enumerated() {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("director-registry-unsupported-version-\(index)-\(UUID().uuidString)", isDirectory: true)
+            let agents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+            let skills = root.appendingPathComponent(".agents/skills/skill-package", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: skills, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try "name = \"agent-package\"\n".write(to: agents.appendingPathComponent("agent-package.toml"), atomically: true, encoding: .utf8)
+            try "---\nname: skill-package\n---\n".write(to: skills.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            try registry.write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let scanRoot = ScanRoot(id: "unsupported-version-\(index)", url: root, scope: .project, kind: .projects)
+            let output = ResourceScanner(roots: [scanRoot]).scan()
+            XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial], "registry index \(index)")
+            XCTAssertTrue(output.issues.contains { $0.message.contains("unsupported") || $0.message.contains("invalid") })
+            let relations = CapabilityCompanionResolver(resources: output.resources, roots: [scanRoot]).resolve()
+            XCTAssertTrue(relations.filter { $0.declarationSource == .projectRegistry }.isEmpty, "registry index \(index)")
+        }
+    }
+
+    func testLegacyPackagesObjectAndArrayAreValidRegistryShapes() throws {
+        for (index, packagesJSON) in [
+            #"{"agent-package":{"type":"agent","usesSkills":["skill-package"]},"skill-package":{"type":"skill","invokedBy":["agent-package"]}}"#,
+            #"[{"type":"agent","id":"agent-package","usesSkills":["skill-package"]},{"type":"skill","id":"skill-package","invokedBy":["agent-package"]}]"#
+        ].enumerated() {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("director-legacy-packages-\(index)-\(UUID().uuidString)", isDirectory: true)
+            let agents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+            let skills = root.appendingPathComponent(".agents/skills/skill-package", isDirectory: true)
+            let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+            try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: skills, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try "name = \"agent-package\"\n".write(to: agents.appendingPathComponent("agent-package.toml"), atomically: true, encoding: .utf8)
+            try "---\nname: skill-package\n---\n".write(to: skills.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            try "{\"packages\":\(packagesJSON)}".write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+            let output = ResourceScanner(roots: [
+                ScanRoot(id: "legacy-\(index)", url: root, scope: .project, kind: .projects)
+            ]).scan()
+            XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.complete])
+            XCTAssertFalse(output.issues.contains { $0.message.contains("registry is invalid") })
+            XCTAssertEqual(output.resources.filter { $0.kind == .agent }.count, 1)
+            XCTAssertEqual(output.resources.filter { $0.kind == .skill }.count, 1)
+        }
+    }
+
+    func testMalformedPackageFieldMakesProjectRegistryPartial() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-malformed-packages-\(UUID().uuidString)", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try #"{"schemaVersion":5,"packages":{"broken":{"kind":5}}}"#
+            .write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "malformed-packages", url: root, scope: .project, kind: .projects)
+        ]).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial])
+        XCTAssertTrue(output.issues.contains { $0.message.contains("registry is invalid") })
+    }
+
+    func testRegistryPermissionFailureIsNotReportedAsComplete() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-registry-permission-\(UUID().uuidString)", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "{}".write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let base = FileSystemClient()
+        let denied = FileSystemClient(
+            directoryReader: { base.enumerateDirectory($0) },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) },
+            verifiedDataReader: { url, approvedRoot, maximumByteCount in
+                if url.lastPathComponent == "registry.json" {
+                    return .failure(.permissionDenied)
+                }
+                return base.readVerifiedData(url, within: approvedRoot, maximumByteCount: maximumByteCount)
+            },
+            identityValidator: { base.validateDocumentRead($2, at: $0, within: $1) },
+            directoryIdentityReader: { base.directoryIdentity($0) },
+            directoryStatusReader: { base.directoryStatus($0) }
+        )
+
+        let output = ResourceScanner(
+            roots: [ScanRoot(id: "permission-project", url: root, scope: .project, kind: .projects)],
+            fileSystem: denied
+        ).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial])
+        XCTAssertTrue(output.issues.contains { $0.message.contains("permissionDenied") })
+    }
+
+    func testRegistryIdentityRaceDoesNotPublishCompleteScope() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-registry-race-\(UUID().uuidString)", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try #"{"packages":[]}"#.write(
+            to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let base = FileSystemClient()
+        let raced = FileSystemClient(
+            directoryReader: { base.enumerateDirectory($0) },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) },
+            verifiedDataReader: { base.readVerifiedData($0, within: $1, maximumByteCount: $2) },
+            identityValidator: { url, approvedRoot, read in
+                if url.lastPathComponent == "registry.json" { return false }
+                return base.validateDocumentRead(read, at: url, within: approvedRoot)
+            },
+            directoryIdentityReader: { base.directoryIdentity($0) },
+            directoryStatusReader: { base.directoryStatus($0) }
+        )
+
+        let output = ResourceScanner(
+            roots: [ScanRoot(id: "race-project", url: root, scope: .project, kind: .projects)],
+            fileSystem: raced
+        ).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.unstable])
+        XCTAssertTrue(output.issues.contains { $0.message.contains("registry") })
+    }
+
+    func testDuplicateRootProducesOneObservationScopeAndProvenanceWithCorrectRootID() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-history-dedup-\(UUID().uuidString)", isDirectory: true)
+        let skill = root.appendingPathComponent("sample", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "---\nname: sample\n---\n".write(
+            to: skill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let scanRoot = ScanRoot(id: "dedup-root", url: root, scope: .global, kind: .skills)
+
+        let output = ResourceScanner(roots: [scanRoot, scanRoot]).scan()
+
+        XCTAssertEqual(output.resources.count, 1)
+        XCTAssertEqual(output.provenance.count, 1)
+        XCTAssertEqual(output.historyScanBatch.scopes.count, 1)
+        XCTAssertEqual(output.historyScanBatch.observations.count, 1)
+        XCTAssertEqual(output.historyScanBatch.observations.first?.sourceRootID, "dedup-root")
+        XCTAssertEqual(output.historyScanBatch.observations.first?.resourceID, output.resources.first?.id)
+    }
+
+    func testObservationAndBatchTimesAreCapturedOnlyAfterFinalValidation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-history-clock-\(UUID().uuidString)", isDirectory: true)
+        let skill = root.appendingPathComponent("sample", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "---\nname: sample\n---\n".write(
+            to: skill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        let base = FileSystemClient()
+        let probe = ScanClockProbe()
+        let observedFileSystem = FileSystemClient(
+            directoryReader: { url in
+                probe.recordDirectoryRead()
+                return base.enumerateDirectory(url)
+            },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) },
+            verifiedDataReader: { base.readVerifiedData($0, within: $1, maximumByteCount: $2) },
+            identityValidator: { base.validateDocumentRead($2, at: $0, within: $1) },
+            directoryIdentityReader: { base.directoryIdentity($0) },
+            directoryStatusReader: { base.directoryStatus($0) }
+        )
+
+        let output = ResourceScanner(
+            roots: [ScanRoot(id: "clock-root", url: root, scope: .global, kind: .skills)],
+            fileSystem: observedFileSystem,
+            now: { probe.now() }
+        ).scan()
+        let snapshot = probe.snapshot
+
+        XCTAssertEqual(snapshot.callCount, 2)
+        XCTAssertFalse(snapshot.directoryReadClockCounts.isEmpty)
+        XCTAssertTrue(snapshot.directoryReadClockCounts.allSatisfy { $0 == 0 })
+        XCTAssertEqual(output.historyScanBatch.observations.first?.observedAt, probe.firstObservationTime)
+        XCTAssertEqual(output.historyScanBatch.observedAt, probe.batchTime)
+    }
+
+    func testFakeHomeWithTwoProjectsAndIndependentSkillIsReadOnlyAndFullyAttributed() throws {
+        let fakeHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-fake-home-\(UUID().uuidString)", isDirectory: true)
+        let globalSkills = fakeHome.appendingPathComponent(".agents/skills", isDirectory: true)
+        let independentSkill = globalSkills.appendingPathComponent("independent", isDirectory: true)
+        let projectA = fakeHome.appendingPathComponent("Projects/alpha", isDirectory: true)
+        let projectAAgents = projectA.appendingPathComponent(".codex/agents", isDirectory: true)
+        let projectABrief = projectAAgents.appendingPathComponent("alpha-agent", isDirectory: true)
+        let projectB = fakeHome.appendingPathComponent("Projects/beta", isDirectory: true)
+        let projectBSkill = projectB.appendingPathComponent(".agents/skills/beta-skill", isDirectory: true)
+        for directory in [independentSkill, projectABrief, projectBSkill] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: fakeHome) }
+        let files: [URL: Data] = [
+            independentSkill.appendingPathComponent("SKILL.md"): Data("---\nname: independent\n---\n".utf8),
+            projectAAgents.appendingPathComponent("alpha-agent.toml"): Data("name = \"Alpha Agent\"\n".utf8),
+            projectABrief.appendingPathComponent("agent.md"): Data("# Alpha Agent\n\nSynthetic brief.\n".utf8),
+            projectBSkill.appendingPathComponent("SKILL.md"): Data("---\nname: beta-skill\n---\n".utf8),
+        ]
+        for (url, data) in files { try data.write(to: url) }
+        let beforeHashes = try files.keys.reduce(into: [URL: String]()) { result, url in
+            result[url] = try Self.sha256(of: url)
+        }
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "global-skills", url: globalSkills, scope: .global, kind: .skills),
+            ScanRoot(id: "project-alpha", url: projectA, scope: .project, kind: .projects),
+            ScanRoot(id: "project-beta", url: projectB, scope: .project, kind: .projects),
+        ]).scan()
+        let afterHashes = try files.keys.reduce(into: [URL: String]()) { result, url in
+            result[url] = try Self.sha256(of: url)
+        }
+
+        XCTAssertEqual(beforeHashes, afterHashes)
+        XCTAssertEqual(output.projects.map(\.id), ["project-alpha", "project-beta"])
+        XCTAssertEqual(output.resources.filter { $0.kind == .agent || $0.kind == .skill }.count, 3)
+        XCTAssertEqual(output.historyScanBatch.observations.count, 3)
+        XCTAssertEqual(Set(output.historyScanBatch.observations.map(\.sourceRootID)), [
+            "global-skills", "project-alpha", "project-beta",
+        ])
+        XCTAssertEqual(output.historyScanBatch.coverage, .complete)
+    }
+
+    func testProjectPairingIsWithheldWhenBriefFailsFinalIdentityValidation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-pair-race-\(UUID().uuidString)", isDirectory: true)
+        let agents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let briefDirectory = agents.appendingPathComponent("sample-agent", isDirectory: true)
+        try FileManager.default.createDirectory(at: briefDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let configuration = agents.appendingPathComponent("sample-agent.toml")
+        let brief = briefDirectory.appendingPathComponent("agent.md")
+        try "name = \"Sample Agent\"\n".write(to: configuration, atomically: true, encoding: .utf8)
+        try "# Sample Agent\n\nSynthetic brief.\n".write(to: brief, atomically: true, encoding: .utf8)
+        let base = FileSystemClient()
+        let racing = FileSystemClient(
+            directoryReader: { base.enumerateDirectory($0) },
+            dataReader: { base.readData($0) },
+            attributesReader: { base.fileAttributes($0) },
+            readableReader: { base.isReadable($0) },
+            symbolicLinkReader: { base.isSymbolicLink($0) },
+            verifiedDataReader: { base.readVerifiedData($0, within: $1, maximumByteCount: $2) },
+            identityValidator: { url, approvedRoot, read in
+                url.standardizedFileURL == brief.standardizedFileURL
+                    ? false
+                    : base.validateDocumentRead(read, at: url, within: approvedRoot)
+            }
+        )
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "pair-project", url: root, scope: .project, kind: .projects)
+        ], fileSystem: racing).scan()
+
+        XCTAssertEqual(output.resources.filter { $0.kind == .agent }.count, 1)
+        XCTAssertTrue(output.agentPairings.isEmpty)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertEqual(output.historyScanBatch.coverage, .unstable)
+    }
+
+    func testFIFONamedSkillManifestIsRejectedAsNonRegularWithoutReading() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-fifo-manifest-\(UUID().uuidString)", isDirectory: true)
+        let skill = root.appendingPathComponent("fifo", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fifo = skill.appendingPathComponent("SKILL.md")
+        let result = fifo.path.withCString { Darwin.mkfifo($0, S_IRUSR | S_IWUSR) }
+        XCTAssertEqual(result, 0)
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "fifo-root", url: root, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertTrue(output.resources.isEmpty)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertEqual(output.historyScanBatch.coverage, .partial)
+        XCTAssertTrue(output.issues.contains { $0.message.contains("notRegularFile") })
+    }
+
+    func testManifestSymlinkEscapingApprovedRootCannotProduceObservation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-manifest-escape-\(UUID().uuidString)", isDirectory: true)
+        let root = directory.appendingPathComponent("root", isDirectory: true)
+        let skill = root.appendingPathComponent("escaped", isDirectory: true)
+        let outside = directory.appendingPathComponent("outside.md")
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "---\nname: escaped\n---\n".write(to: outside, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: skill.appendingPathComponent("SKILL.md"),
+            withDestinationURL: outside
+        )
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "escape", url: root, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertTrue(output.resources.isEmpty)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertEqual(output.historyScanBatch.coverage, .partial)
+    }
+
+    func testManifestSymlinkWithinApprovedRootCanProduceObservation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-manifest-inside-\(UUID().uuidString)", isDirectory: true)
+        let skill = root.appendingPathComponent("linked", isDirectory: true)
+        let target = root.appendingPathComponent("manifest-source.md")
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "---\nname: linked\n---\n".write(to: target, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: skill.appendingPathComponent("SKILL.md"),
+            withDestinationURL: target
+        )
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "inside", url: root, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertEqual(output.resources.map(\.name), ["linked"])
+        XCTAssertEqual(output.historyScanBatch.observations.count, 1)
+        XCTAssertEqual(output.historyScanBatch.coverage, .complete)
+    }
+
+    func testOversizedTrackedDocumentDoesNotProduceResourceOrObservation() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-document-limit-\(UUID().uuidString)", isDirectory: true)
+        let skill = root.appendingPathComponent("large", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let data = Data(repeating: 0x61, count: 2 * 1_024 * 1_024 + 1)
+        try data.write(to: skill.appendingPathComponent("SKILL.md"))
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "large", url: root, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertTrue(output.resources.isEmpty)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertEqual(output.historyScanBatch.coverage, .partial)
+        XCTAssertTrue(output.issues.contains { $0.message.contains("tooLarge") })
+    }
+
+    func testBuiltInSystemSkillNestedInGlobalRootIsNotHistoryTracked() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-system-exclusion-\(UUID().uuidString)", isDirectory: true)
+        let systemSkill = root.appendingPathComponent(".system", isDirectory: true)
+        try FileManager.default.createDirectory(at: systemSkill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "---\nname: system-skill\n---\n".write(
+            to: systemSkill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "global", url: root, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertEqual(output.resources.first?.ownership, .builtIn)
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+    }
+
+    func testEmptyDirectoryIsCompleteHistoryScope() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-empty-history-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "empty-skills", url: directory, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.complete])
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+    }
+
+    func testInvalidUTF8DoesNotBecomeEmptyHistorySignatureOrCompleteSnapshot() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-invalid-history-\(UUID().uuidString)", isDirectory: true)
+        let skill = directory.appendingPathComponent("broken", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data([0xFF, 0xFE, 0xFD]).write(to: skill.appendingPathComponent("SKILL.md"))
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "invalid-skills", url: directory, scope: .global, kind: .skills)
+        ]).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.partial])
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertTrue(output.resources.isEmpty)
+        XCTAssertTrue(output.issues.contains { $0.message.contains("UTF-8") })
+    }
+
+    func testProjectBriefOnlyChangeUpdatesHistorySignatureWithoutChangingLegacyFingerprint() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-brief-history-\(UUID().uuidString)", isDirectory: true)
+        let agents = directory.appendingPathComponent(".codex/agents", isDirectory: true)
+        let briefDirectory = agents.appendingPathComponent("sample-agent", isDirectory: true)
+        try FileManager.default.createDirectory(at: briefDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "name = \"Sample Agent\"\ndescription = \"Callable\"\n".write(
+            to: agents.appendingPathComponent("sample-agent.toml"), atomically: true, encoding: .utf8)
+        let brief = briefDirectory.appendingPathComponent("agent.md")
+        try "# Sample Agent\n\nFirst brief.\n".write(to: brief, atomically: true, encoding: .utf8)
+        let root = ScanRoot(id: "brief-project", url: directory, scope: .project, kind: .projects)
+
+        let first = ResourceScanner(roots: [root]).scan()
+        let firstResource = try XCTUnwrap(first.resources.first { $0.kind == .agent })
+        let firstObservation = try XCTUnwrap(first.historyScanBatch.observations.first { $0.resourceID == firstResource.id })
+        try "# Sample Agent\n\nSecond brief.\n".write(to: brief, atomically: true, encoding: .utf8)
+
+        let second = ResourceScanner(roots: [root]).scan()
+        let secondResource = try XCTUnwrap(second.resources.first { $0.id == firstResource.id })
+        let secondObservation = try XCTUnwrap(second.historyScanBatch.observations.first { $0.resourceID == firstResource.id })
+
+        XCTAssertEqual(secondResource.id, firstResource.id)
+        XCTAssertEqual(secondResource.sourcePathHash, firstResource.sourcePathHash)
+        XCTAssertEqual(secondResource.contentFingerprint, firstResource.contentFingerprint)
+        XCTAssertNotEqual(secondObservation.signature, firstObservation.signature)
+        XCTAssertEqual(secondObservation.documents, [.agentConfiguration, .agentBrief])
+    }
+
+    func testScanRaceDoesNotPublishHistoryObservation() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-race-history-\(UUID().uuidString)", isDirectory: true)
+        let skill = directory.appendingPathComponent("race", isDirectory: true)
+        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "---\nname: race\n---\n".write(to: skill.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+
+        let base = FileSystemClient()
+        let racing = FileSystemClient(
+            directoryReader: { url in base.enumerateDirectory(url) },
+            dataReader: { url in
+                if url.lastPathComponent == "SKILL.md" {
+                    return .failure(.changedDuringRead)
+                }
+                return base.readData(url)
+            },
+            attributesReader: { url in base.fileAttributes(url) },
+            readableReader: { url in base.isReadable(url) },
+            symbolicLinkReader: { url in base.isSymbolicLink(url) }
+        )
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "race-skills", url: directory, scope: .global, kind: .skills)
+        ], fileSystem: racing).scan()
+
+        XCTAssertEqual(output.historyScanBatch.scopes.map(\.coverage), [.unstable])
+        XCTAssertTrue(output.historyScanBatch.observations.isEmpty)
+        XCTAssertTrue(output.issues.contains { $0.message.contains("changed") })
+    }
 
     func testProjectBriefPairingKeepsTomlIdentityAndRejectsEscapedSymlink() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("director-pairing-\(UUID().uuidString)")
@@ -419,6 +1361,29 @@ final class ResourceScannerTests: XCTestCase {
         XCTAssertEqual(output.projects.count, 1)
     }
 
+    func testLegacyRegistryAgentPreservesCanonicalProjectTomlAgentAndRegistryIdentity() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-registry-agent-dedup-\(UUID().uuidString)", isDirectory: true)
+        let agents = root.appendingPathComponent(".codex/agents", isDirectory: true)
+        let registryDirectory = root.appendingPathComponent("agents", isDirectory: true)
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: registryDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "name = \"Display Agent\"\n".write(
+            to: agents.appendingPathComponent("display-agent.toml"), atomically: true, encoding: .utf8)
+        try #"{"entries":[{"name":"Display Agent","type":"agent"}]}"#
+            .write(to: registryDirectory.appendingPathComponent("registry.json"), atomically: true, encoding: .utf8)
+
+        let output = ResourceScanner(roots: [
+            ScanRoot(id: "legacy-agent-dedup", url: root, scope: .project, kind: .projects)
+        ]).scan()
+
+        let agentsFound = output.resources.filter { $0.kind == .agent && $0.projectID == "legacy-agent-dedup" }
+        XCTAssertEqual(agentsFound.count, 2)
+        XCTAssertTrue(agentsFound.contains { $0.relativeSourcePath == ".codex/agents/display-agent.toml" })
+        XCTAssertTrue(agentsFound.contains { $0.relativeSourcePath == "agents/registry.json/Display Agent" })
+    }
+
     func testProjectAgentTomlAndSkillCarryBoundedMetadataAndAgentChangeState() throws {
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("director-project-agent-(UUID().uuidString)", isDirectory: true)
         let agentDirectory = temp.appendingPathComponent(".codex/agents", isDirectory: true)
@@ -566,5 +1531,11 @@ final class ResourceScannerTests: XCTestCase {
         XCTAssertEqual(resource.ownership, .installed)
         XCTAssertEqual(resource.origin, .registry)
         XCTAssertEqual(resource.classificationConfidence, .exact)
+    }
+
+    private static func sha256(of url: URL) throws -> String {
+        SHA256.hash(data: try Data(contentsOf: url))
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }

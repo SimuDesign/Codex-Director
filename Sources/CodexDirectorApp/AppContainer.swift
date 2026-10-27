@@ -13,6 +13,7 @@ struct AppContainer: Sendable {
     let readStore: DatabaseStore?
     let coordinator: IndexingCoordinator?
     let configuration: IndexingCoordinator.Configuration?
+    let capabilityHistoryService: CapabilityHistoryCoordinator?
     let snapshotStore: PresentationSnapshotStore?
     let capabilityExportCoordinator: CapabilityExportCoordinator
     let capabilityRestoreCoordinator: CapabilityRestoreCoordinator
@@ -25,6 +26,7 @@ struct AppContainer: Sendable {
         readStore: DatabaseStore? = nil,
         coordinator: IndexingCoordinator?,
         configuration: IndexingCoordinator.Configuration?,
+        capabilityHistoryService: CapabilityHistoryCoordinator? = nil,
         snapshotStore: PresentationSnapshotStore? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator,
         capabilityRestoreCoordinator: CapabilityRestoreCoordinator,
@@ -36,6 +38,7 @@ struct AppContainer: Sendable {
         self.readStore = readStore
         self.coordinator = coordinator
         self.configuration = configuration
+        self.capabilityHistoryService = capabilityHistoryService ?? coordinator?.capabilityHistoryService
         self.snapshotStore = snapshotStore
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
@@ -50,6 +53,15 @@ struct AppContainer: Sendable {
         let selectedRuntime = CodexRuntimePreferenceStore().selectedURL()
         async let runtimeStatusTask = CodexRuntimeLocator().locate(userSelectedURL: selectedRuntime)
         let migrationGate = CapabilityMigrationGate()
+        // History is an independent private document. Keep it available when
+        // the derived SQLite index cannot be opened or has been cleared.
+        // Creating the service does not read the history JSON.
+        let capabilityHistoryService: CapabilityHistoryCoordinator?
+        if let historyStore = try? CapabilityHistoryStore.production() {
+            capabilityHistoryService = CapabilityHistoryCoordinator(store: historyStore)
+        } else {
+            capabilityHistoryService = nil
+        }
 
         guard let databaseURL = try? DatabaseStore.defaultDatabaseURL(),
               let writer = try? DatabaseStore(url: databaseURL),
@@ -60,6 +72,7 @@ struct AppContainer: Sendable {
                 readStore: nil,
                 coordinator: nil,
                 configuration: nil,
+                capabilityHistoryService: capabilityHistoryService,
                 capabilityExportCoordinator: makeCapabilityExportCoordinator(
                     home: home,
                     executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil,
@@ -88,7 +101,13 @@ struct AppContainer: Sendable {
             )
         } : nil
         let overrideStore = ResourceClassificationOverrideStore()
-        let coordinator = IndexingCoordinator(store: store, runtimeDiscovery: runtimeDiscovery)
+        // The same application-scoped service joins the sole source refresh
+        // chain once the derived database is available.
+        let coordinator = IndexingCoordinator(
+            store: store,
+            runtimeDiscovery: runtimeDiscovery,
+            capabilityHistoryService: capabilityHistoryService
+        )
         let configuration = defaultConfiguration(home: home, fileManager: fileManager, overrides: overrideStore.all())
         // The startup controller owns the single cache actor created before
         // bootstrap. Do not create a second actor for the same file here.
@@ -97,6 +116,7 @@ struct AppContainer: Sendable {
             readStore: reader,
             coordinator: coordinator,
             configuration: configuration,
+            capabilityHistoryService: capabilityHistoryService,
             capabilityExportCoordinator: makeCapabilityExportCoordinator(
                 home: home,
                 executable: runtimeStatus.isUsable ? runtimeStatus.executableURL : nil,

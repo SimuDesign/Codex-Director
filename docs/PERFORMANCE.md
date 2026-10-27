@@ -688,3 +688,27 @@ capability data. No preference reset, source-data cleanup or GitHub operation
 was performed. This is a user-requested local trial, **not** performance or
 independent release acceptance; the timing and accessibility gates above remain
 open. Native UI automation duration is not reported as navigation latency.
+
+## 1.6.0 capability-history gate
+
+The [1.6 validation record](validation/2026-10-23-capability-change-history-1.6.0.md)
+keeps current evidence, failures and pending gates separate from the historical
+experiments above. History must run off the MainActor, reuse the one source
+refresh, and perform no file or SQL reads during ordinary tab navigation.
+Opening a timeline reads bounded metadata only; a selected eligible event may
+start one cancellable 7/30-day aggregate and bounded evaluation-ID lookups.
+
+The synthetic history benchmark must cover 2,000 capabilities, 20,000 retained
+events, cold/warm metadata reads, atomic writes, retention and the 16 MiB budget.
+Its measured storage/detector time is not a painted-frame or click-latency result.
+The separate existing `interactionStress` UI fixture contains 1,000 capabilities;
+baseline and candidate Release runs must keep that scale, samples and viewport
+identical. Both use isolated data and must not overlap compilation or testing.
+
+Baseline source `9b42f02` has completed 20 samples at 1280×800 and 720×480.
+Main-run-loop sample p95 is 539.27 ms and 353.06 ms respectively; existing long
+stress turns therefore predate history. These application/layout markers are
+exploratory, not input-to-paint or a clean-release acceptance claim. Candidate
+comparison, history-specific I/O counters, actual UI/accessibility verification
+and independent acceptance remain pending. A new history-attributable ≥100 ms
+MainActor block or obvious ordinary-tab regression prevents delivery.

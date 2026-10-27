@@ -1,9 +1,9 @@
 # Codex Director Design System v1
 
-Version: `1.5.1` (visible marketing version; internal build `35`)
+Version: `1.6.1` (visible marketing version; internal build `43`)
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-10-07
+Last updated: 2026-10-27
 
 ## 1. Purpose
 
@@ -873,3 +873,45 @@ Measure actual inner content width once; search moves to its own row before
 selectors wrap into two columns or a stack. Keep one native search editor and
 all current values visible. Rows label the selected count period, preserve
 pending/zero/unavailable distinctions and never add new indexing/query work.
+
+### Capability change history — 1.6.0 local contract
+
+The approved [1.6.0 plan](../../docs/plans/2026-10-22-capability-change-history-1.6.0.md)
+and [local UI contract](../../docs/design/2026-10-23-capability-history-ui-contract.md)
+add presentation within existing surfaces. Capability Folders entry has a
+native secondary Change history action opening one native Sheet. Existing
+Agent/Skill details add a default-closed history disclosure after identity,
+purpose, ownership and companion context, before usage/call evidence. No new
+primary destination, Home/menu-bar surface, asset, token or visual family.
+
+Reuse Scheme A opaque continuous rows, native selection/disclosure/Sheet,
+secondary actions, 36pt outlined current-value menus and the native 7/30-day
+summary control. Global timeline defaults to 30 days with 7/30/all-retained,
+type and event filters; the selected-event summary independently defaults to
+30 days and remains bounded to 7/30. Detail shows ten recent events with
+twenty-event earlier pages. Row padding is space.4 horizontal/space.3 vertical;
+metadata stacks at compact widths. Selected summary is inline, not a nested
+glass card. Only safe name, type, scope, event, observed time and fixed document
+labels appear; no paths, bodies, diffs or hashes, including AX/help.
+
+Observed time is not source modification time. Changes between scans may be
+missed; Skills track only SKILL.md. History does not imply package versions or
+causal effectiveness. Missing events have no post-change metrics. Pending,
+known zero, partial, outside-window, index-unavailable and prior-cutoff states
+stay distinct. Baseline pending, initialized empty, filtered empty, failures,
+corruption, unsupported schema, retention and clock anomalies have explicit
+labels; prior valid rows remain visible. Removed resources have read-only
+history with no restore/export/membership actions. Privacy Settings owns the
+confirmed irreversible history clear; deleting derived index retains history.
+
+Readable empty history is not a storage failure. Source-scan coverage and
+recording access are separate notices: mixed available/unavailable sources
+are partial; legacy unavailable scan coverage does not mean retained history
+cannot be read. Read-only writer-conflict and failed-save notices retain
+readable rows. Only real read errors offer read Retry and suppress empty-state
+claims. Source/recording notices explain the existing Refresh data recovery,
+without triggering a scan from history presentation.
+
+Light/Dark, contrast/transparency/motion variants, native keyboard/AX, Escape
+hierarchy and return-to-source focus follow the local contract. Runtime visual
+and actual VoiceOver evidence remain required; this addition is not acceptance.

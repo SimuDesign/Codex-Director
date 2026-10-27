@@ -2,6 +2,38 @@ import XCTest
 @testable import DirectorCore
 
 final class PersistenceAllowlistTests: XCTestCase {
+    func testCapabilityHistoryAllowlistContainsOnlySafeMetadataFields() {
+        XCTAssertTrue(PersistenceAllowlist.capabilityHistoryStateKeys.contains("baselines"))
+        XCTAssertTrue(PersistenceAllowlist.capabilityHistoryEventKeys.contains("changedDocuments"))
+        XCTAssertTrue(PersistenceAllowlist.capabilityHistoryEventKeys.contains("changedDocumentsAreExact"))
+        XCTAssertTrue(PersistenceAllowlist.capabilityHistoryBaselineKeys.contains("signature"))
+        XCTAssertTrue(PersistenceAllowlist.capabilityHistoryBaselineKeys.contains("documentSignatures"))
+        XCTAssertTrue(PersistenceAllowlist.capabilityHistoryStateKeys.contains("latestScanCoverage"))
+
+        let allKeys = PersistenceAllowlist.capabilityHistoryStateKeys
+            .union(PersistenceAllowlist.capabilityHistoryScopeKeys)
+            .union(PersistenceAllowlist.capabilityHistoryBaselineKeys)
+            .union(PersistenceAllowlist.capabilityHistoryPendingKeys)
+            .union(PersistenceAllowlist.capabilityHistoryEventKeys)
+        for forbidden in ["path", "relativePath", "sourceBody", "prompt", "command", "account", "credential", "diff"] {
+            XCTAssertFalse(allKeys.contains(forbidden), forbidden)
+        }
+    }
+
+    func testCapabilityHistoryStateAllowlistMatchesEncodedSchemaKeys() throws {
+        let state = CapabilityHistoryStateV1(
+            epoch: 1,
+            revision: 1,
+            nextSequence: 2,
+            retentionAnchorAt: Date(timeIntervalSince1970: 1),
+            truncatedBefore: Date(timeIntervalSince1970: 0),
+            latestScanCoverage: .partial
+        )
+        let data = try JSONEncoder().encode(state)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(Set(object.keys), PersistenceAllowlist.capabilityHistoryStateKeys)
+    }
+
 
     func testNormalizedResourceDictionaryPasses() {
         let dict: [String: Any] = [

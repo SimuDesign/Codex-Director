@@ -34,6 +34,10 @@ logs/
 exports/
 *.log
 *.codexpack.zip
+# Irreplaceable local observations and any interrupted atomic-write artifacts
+capability-history-v*.json
+.capability-history-v*.json.*
+.capability-history.lock
 
 # Local inspection uploads
 .dsh-vision/

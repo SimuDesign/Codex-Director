@@ -4,6 +4,35 @@ All notable public changes will be documented here. The project follows semantic
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.6.1
+
+Codex compatibility and refresh reliability. Internal build: `43`.
+
+- Includes the local capability change history introduced in 1.6.0, together with its empty/unavailable-state repair and current Codex registry/completion compatibility fixes.
+- Keeps available projects, account usage, plugins and sessions refreshable when individual project storage is slow or unavailable; retains verified cached capabilities and relations instead of treating a failed scan as deletion.
+- Fixes repeated scanning of long JSONL lines and runtime-command exit waiting. Preserves existing folder members, evaluations, stable IDs and capability-package manifest v1.
+- Live validation recovered 42 readable project sources; three configured paths were absent. Storage wait causes remain unestablished, and older unchanged archives outside the eligible replay window remain deferred.
+- This source update does not create a Git tag, downloadable GitHub Release, Developer ID signature or Apple notarization.
+
+## 1.6.0
+
+Local capability change history and compatibility repairs. Internal build: `42`. Local iteration only;
+no Tag or GitHub Release is implied. See the validation record for acceptance
+evidence; a changelog entry is not a test or deployment result.
+
+- Tracks verified Agent configuration/method documents and custom or independently installed `SKILL.md` files. The first reliable per-scope scan is a silent baseline; later reliable observations record additions, document changes, two-scan absence and rediscovery.
+- Adds a lazy, filtered history Sheet from Capability Folders and an initially closed history section in details. Removed capabilities retain a safe read-only summary; no source content, paths or diffs are displayed or stored by history.
+- Provides one selected-event, bounded 7/30-day call and manual-evaluation summary with explicit interval, cutoff and evidence coverage. Current ratings join actual calls, not rating-edit times, and counts do not claim causal effectiveness.
+- Keeps history in a separate bounded local store with atomic commits, cross-process writer exclusion and confirmed clearing in Privacy. Derived-index deletion retains history; source files, evaluations, folder members, schema v6, cache v1 and package manifest v1 remain unchanged. The history feature itself does not require rollout replay; the separate compatibility repair below advances the parser.
+- Repairs history availability notices: an unavailable project does not make readable retained history unavailable; empty records, partial source scans, read-only recording and real read failures remain distinct. Existing baselines and records are preserved without a history-format migration.
+- Repairs supported structured tool completion states without counting the completion event as another call. Parser v1.4.2 corrects eligible recent evidence through the existing transactional replay policy; unchanged older archives remain deferred. Unsupported role-less child sessions are not guessed into specialist Agent totals.
+- Recognizes supported project registry packages, including v5 explicit native-Agent and Skill declarations, using canonical capability identities. A valid packages layout is not treated as an invalid legacy entries list. Relationship projection v3 refreshes source declarations without changing folder membership or capability files.
+- Avoids unrelated extended-attribute queries when checking directory type during source discovery; retains permission, symlink and unavailable-source handling. This does not promise a timeout for every filesystem/provider operation and does not change checkpoint timestamp calculation.
+- Avoids repeatedly searching the same unfinished JSONL line as more chunks arrive. Long records retain their complete content and offsets; this reader optimization does not change parser v1.4.2, source files or previously committed checkpoints.
+- Uses descriptor-backed directory enumeration with fail-closed permission, symlink and read-error handling. Local source-discovery diagnostics contain only fixed phase/kind labels and root ordinal/total, without paths, names or contents. Nonblocking open flags are not a general filesystem timeout guarantee.
+- Registers runtime-command exit notification before launch, avoiding a separate blocking `waitUntilExit` result path for fast child exits. Output caps, stderr-presence reporting and timeout causes remain distinct; a termination request is not a hard guarantee for an uncooperative child.
+- Bounds the caller's wait for individual project-source reads and the number of outstanding workers. Unavailable projects keep their verified cached capabilities and relations while available global/runtime/session data can refresh; late project results cannot become new observations or deletion evidence.
+
 ## 1.5.1
 
 Bounded wrapper-attribution repair. Internal build: `35`. Local iteration only; no Tag or GitHub Release is implied.
