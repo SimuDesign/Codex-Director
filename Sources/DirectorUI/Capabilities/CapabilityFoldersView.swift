@@ -27,6 +27,7 @@ public struct CapabilityFoldersView: View {
 #endif
 
     @EnvironmentObject private var languageStore: AppLanguageStore
+    @StateObject private var historyPresentationModel: CapabilityHistoryPresentationModel
     @State private var selectedFolderID: String?
     @State private var entrySearch = ""
     // Keep the entry page's scroll target independent from each folder page.
@@ -50,17 +51,23 @@ public struct CapabilityFoldersView: View {
     @State private var importTargetFolder: CapabilityFolderDefinition?
     @State private var folderToDelete: CapabilityFolderDefinition?
     @State private var showsDeleteConfirmation = false
+    @State private var showsCapabilityHistory = false
+    @State private var historyScrollPosition: String?
+    @State private var restoreHistoryEntryFocusOnDismiss = false
+    @FocusState private var historyEntryActionFocused: Bool
 
 #if DIRECTOR_INTERACTION_PERFORMANCE
-    public init(model: DirectorAppModel, detailContext: ((CapabilityResource) -> CapabilityDetailViewModel)? = nil, performanceDriver: InteractionPerformanceDriver = .noop) {
+    public init(model: DirectorAppModel, detailContext: ((CapabilityResource) -> CapabilityDetailViewModel)? = nil, performanceDriver: InteractionPerformanceDriver = .noop, historySource: CapabilityHistoryPresentationSource? = nil) {
         self.model = model
         self.detailContext = detailContext
         self.performanceDriver = performanceDriver
+        _historyPresentationModel = StateObject(wrappedValue: CapabilityHistoryPresentationModel(source: historySource ?? CapabilityHistoryPresentationSource.make(model: model)))
     }
 #else
-    public init(model: DirectorAppModel, detailContext: ((CapabilityResource) -> CapabilityDetailViewModel)? = nil) {
+    public init(model: DirectorAppModel, detailContext: ((CapabilityResource) -> CapabilityDetailViewModel)? = nil, historySource: CapabilityHistoryPresentationSource? = nil) {
         self.model = model
         self.detailContext = detailContext
+        _historyPresentationModel = StateObject(wrappedValue: CapabilityHistoryPresentationModel(source: historySource ?? CapabilityHistoryPresentationSource.make(model: model)))
     }
 #endif
 
@@ -124,6 +131,27 @@ public struct CapabilityFoldersView: View {
         .sheet(item: $importTargetFolder) { folder in
             CapabilityFolderImportSheet(model: model, folder: folder)
                 .environmentObject(languageStore)
+        }
+        .sheet(isPresented: $showsCapabilityHistory, onDismiss: historySheetDidDismiss) {
+            CapabilityHistorySheet(
+                model: historyPresentationModel,
+                scrollPosition: $historyScrollPosition,
+                onOpenResource: { resourceID in
+                    // This dismissal is a transition into the existing detail
+                    // route, not a return to the entry action. Preserve the
+                    // entry focus contract for an actual Sheet close/Escape.
+                    restoreHistoryEntryFocusOnDismiss = false
+                    showsCapabilityHistory = false
+                    // The entry action is the only route into the global
+                    // Sheet, so keep the folder context untouched while the
+                    // existing side-detail route opens the selected resource.
+                    entrySelectedResourceID = resourceID
+                },
+                isResourceAvailable: { resourceID in
+                    model.capabilityFolders.resources.contains { $0.id == resourceID }
+                }
+            )
+            .environmentObject(languageStore)
         }
         .confirmationDialog(
             t("capabilityFolders.delete.confirmTitle", "Delete folder?"),
@@ -440,7 +468,55 @@ public struct CapabilityFoldersView: View {
             Text(t("capabilityFolders.subtitle", "From global to project, understand and organize your capabilities."))
                 .font(DirectorTypography.supporting)
                 .foregroundStyle(DirectorColor.textSecondary)
+            Button(action: openCapabilityHistory) {
+                Label(t("history.open", "Change history"), systemImage: "clock.arrow.circlepath")
+            }
+            .buttonStyle(DirectorSecondaryActionButtonStyle(size: .toolbar))
+            .focused($historyEntryActionFocused)
+            // Make the launch action an explicit focus target for the native
+            // sheet's post-dismiss focus system while retaining Button's
+            // normal keyboard/activation behavior.
+            .focusable()
+            // In a Debug host without global Full Keyboard Access, AppKit can
+            // otherwise route Space to the first native control in the host.
+            // These handlers stay on the focused launch action and do not add
+            // a global shortcut or affect Open Detail transitions.
+            .onKeyPress(.space) { activateHistoryEntryFromKey() }
+            .onKeyPress(.return) { activateHistoryEntryFromKey() }
+            .accessibilityHint(t("history.openHint", "Review verified capability-document changes retained on this Mac."))
         }
+    }
+
+    private func restoreHistoryEntryFocus() {
+        Task { @MainActor in
+            // onDismiss runs after the native Sheet completes. Yield once so
+            // the parent scroll view has reattached its focus target before
+            // returning keyboard/AX focus to the exact launch action.
+            await Task.yield()
+            historyEntryActionFocused = true
+        }
+    }
+
+    private func openCapabilityHistory() {
+        restoreHistoryEntryFocusOnDismiss = true
+        historyEntryActionFocused = false
+        showsCapabilityHistory = true
+    }
+
+    private func activateHistoryEntryFromKey() -> KeyPress.Result {
+        guard historyEntryActionFocused else { return .ignored }
+        openCapabilityHistory()
+        return .handled
+    }
+
+    private func historySheetDidDismiss() {
+        guard restoreHistoryEntryFocusOnDismiss else { return }
+        restoreHistoryEntryFocusOnDismiss = false
+        restoreHistoryEntryFocus()
+    }
+
+    private var historySource: CapabilityHistoryPresentationSource {
+        historyPresentationModel.source
     }
 
     private var entrySearchField: some View {

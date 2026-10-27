@@ -73,6 +73,17 @@ print "artifact=${private_temp_prefix}/tmp/private-build/result.app" > "$temp_fi
 commit_fixture "$temp_fixture"
 expect_failure "private temporary path" "$temp_fixture" "private-temporary-path: build.txt" --tracked
 
+system_temp_fixture="$(new_fixture system-temp-roots)"
+print "let root = \"${private_temp_prefix}/tmp\"" > "$system_temp_fixture/constants.swift"
+print "let slashRoot = \"${private_temp_prefix}/tmp/\"" >> "$system_temp_fixture/constants.swift"
+commit_fixture "$system_temp_fixture"
+expect_pass "exact quoted system temporary roots" "$system_temp_fixture" --all
+
+quoted_temp_fixture="$(new_fixture quoted-private-temp)"
+print "let artifact = \"${private_temp_prefix}/tmp/private-build/result.app\"" > "$quoted_temp_fixture/private.swift"
+commit_fixture "$quoted_temp_fixture"
+expect_failure "quoted private temporary path remains rejected" "$quoted_temp_fixture" "private-temporary-path: private.swift" --tracked
+
 credential_fixture="$(new_fixture credentials)"
 bearer_prefix="Bearer"
 print "authorization: ${bearer_prefix} abcdefghijklmnopqrstuvwxyz123456" > "$credential_fixture/config.txt"
@@ -105,5 +116,19 @@ rm "$history_fixture/old.txt"
 commit_fixture "$history_fixture"
 expect_pass "deleted secret absent from tree" "$history_fixture" --tracked
 expect_failure "deleted secret present in history" "$history_fixture" "personal-home-path: git-history" --history
+
+capability_history_fixture="$(new_fixture capability-history)"
+mkdir -p "$capability_history_fixture/local"
+print '{}' > "$capability_history_fixture/local/capability-history-v1.json"
+commit_fixture "$capability_history_fixture"
+expect_failure "local capability history" "$capability_history_fixture" "local-capability-history: local/capability-history-v1.json" --tracked
+rm "$capability_history_fixture/local/capability-history-v1.json"
+commit_fixture "$capability_history_fixture"
+expect_failure "deleted capability history" "$capability_history_fixture" "local-capability-history-in-git: local/capability-history-v1.json" --history
+
+capability_temp_fixture="$(new_fixture capability-history-temporary)"
+print '{}' > "$capability_temp_fixture/.capability-history-v1.json.example.tmp"
+commit_fixture "$capability_temp_fixture"
+expect_failure "capability history temporary" "$capability_temp_fixture" "local-capability-history: .capability-history-v1.json.example.tmp" --tracked
 
 print "Public release audit tests passed: $pass_count"

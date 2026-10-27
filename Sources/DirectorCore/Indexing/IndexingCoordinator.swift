@@ -10,10 +10,17 @@ public struct IndexingResult: Sendable, Equatable {
     public let runtimeCoverage: CoverageState
     public let runtimeIssueCount: Int
     public let discoveryIssueCount: Int
+    /// Completeness of the user-owned capability source scopes. This is
+    /// intentionally separate from session/runtime coverage.
+    public let resourceCoverage: CapabilityHistoryCoverage
     /// Nil means no runtime query was attempted. False is not an observed
     /// empty plugin list and must never be presented as one.
     public let runtimePluginInventoryAvailable: Bool?
     public let runtimePluginPackagesAvailable: Bool?
+    /// Independent history-domain result. Nil means no history service was
+    /// configured; a failed history write is represented by its status and
+    /// never turns a successful inventory commit into an indexing failure.
+    public let capabilityHistoryStatus: CapabilityHistoryStatus?
 
     public init(
         processedFiles: Int,
@@ -24,8 +31,10 @@ public struct IndexingResult: Sendable, Equatable {
         runtimeCoverage: CoverageState = .unknown,
         runtimeIssueCount: Int = 0,
         discoveryIssueCount: Int = 0,
+        resourceCoverage: CapabilityHistoryCoverage = .complete,
         runtimePluginInventoryAvailable: Bool? = nil,
-        runtimePluginPackagesAvailable: Bool? = nil
+        runtimePluginPackagesAvailable: Bool? = nil,
+        capabilityHistoryStatus: CapabilityHistoryStatus? = nil
     ) {
         self.processedFiles = processedFiles
         self.skippedFiles = skippedFiles
@@ -35,8 +44,10 @@ public struct IndexingResult: Sendable, Equatable {
         self.runtimeCoverage = runtimeCoverage
         self.runtimeIssueCount = runtimeIssueCount
         self.discoveryIssueCount = discoveryIssueCount
+        self.resourceCoverage = resourceCoverage
         self.runtimePluginInventoryAvailable = runtimePluginInventoryAvailable
         self.runtimePluginPackagesAvailable = runtimePluginPackagesAvailable
+        self.capabilityHistoryStatus = capabilityHistoryStatus
     }
 }
 
@@ -83,17 +94,23 @@ public actor IndexingCoordinator {
     /// Injectable clock so Review Lite stale-quota tests are deterministic.
     private let nowProvider: @Sendable () -> Date
     private let sourceObserver: (@Sendable (SourceIndexPhase) -> Void)?
+    private let projectReadGate: ProjectSourceReadGate
+    public nonisolated let capabilityHistoryService: CapabilityHistoryCoordinator?
 
     public init(
         store: DatabaseStore,
         fileSystem: FileSystemClient = FileSystemClient(),
         runtimeDiscovery: CodexRuntimeDiscovery? = nil,
+        capabilityHistoryService: CapabilityHistoryCoordinator? = nil,
+        projectReadGate: ProjectSourceReadGate = ProjectSourceReadGate(),
         now: @escaping @Sendable () -> Date = { Date() },
         sourceObserver: (@Sendable (SourceIndexPhase) -> Void)? = nil
     ) {
         self.store = store
         self.fileSystem = fileSystem
         self.runtimeDiscovery = runtimeDiscovery
+        self.capabilityHistoryService = capabilityHistoryService
+        self.projectReadGate = projectReadGate
         self.nowProvider = now
         self.sourceObserver = sourceObserver
     }
@@ -102,9 +119,27 @@ public actor IndexingCoordinator {
         configuration: Configuration,
         progress: @escaping @Sendable (IndexingProgress) -> Void = { _ in }
     ) async throws -> IndexingResult {
+        try await run(
+            configuration: configuration,
+            onCapabilityHistoryStatus: nil,
+            progress: progress
+        )
+    }
+
+    /// Both callbacks are explicit so an existing single trailing progress
+    /// closure cannot be rebound to the history callback by Swift matching.
+    public func run(
+        configuration: Configuration,
+        onCapabilityHistoryStatus: (@Sendable (CapabilityHistoryStatus) async -> Void)?,
+        progress: @escaping @Sendable (IndexingProgress) -> Void
+    ) async throws -> IndexingResult {
         sourceObserver?(.started)
         do {
-            let result = try await runImplementation(configuration: configuration, progress: progress)
+            let result = try await runImplementation(
+                configuration: configuration,
+                onCapabilityHistoryStatus: onCapabilityHistoryStatus,
+                progress: progress
+            )
             sourceObserver?(result.cancelled ? .cancelled : .completed)
             return result
         } catch is CancellationError {
@@ -118,6 +153,7 @@ public actor IndexingCoordinator {
 
     private func runImplementation(
         configuration: Configuration,
+        onCapabilityHistoryStatus: (@Sendable (CapabilityHistoryStatus) async -> Void)?,
         progress: @escaping @Sendable (IndexingProgress) -> Void
     ) async throws -> IndexingResult {
         progress(.init(phase: .scanning, processedFiles: 0, totalFiles: 0, indexedSessions: 0, lastError: nil))
@@ -125,6 +161,9 @@ public actor IndexingCoordinator {
 
         // 1. Resource discovery: filesystem + current System/Runtime sources.
         let previousResources = try await store.fetchAllResources()
+        let previousProjects = try await store.fetchAllProjects()
+        let previousProvenance = try await store.fetchAllProvenance()
+        let previousRelations = try await store.fetchAllRelations()
         let previousFingerprints = Dictionary(
             uniqueKeysWithValues: previousResources.compactMap { resource in
                 resource.contentFingerprint.map { (resource.id, $0) }
@@ -135,17 +174,20 @@ public actor IndexingCoordinator {
             from: configuration.skillOwnershipRegistryURL,
             globalSkillRoots: configuration.scanRoots
         )
-        let discovery = ResourceScanner(
+        let isolatedDiscovery = try await ResourceScanner(
             roots: configuration.scanRoots,
             fileSystem: fileSystem,
             overrides: configuration.classificationOverrides,
             userOwnedSkillRegistrations: registry.registrations,
             previousFingerprints: previousFingerprints,
-            previousModified: previousModified
-        ).scan()
+            previousModified: previousModified,
+            projectReadGate: projectReadGate
+        ).scanIsolatingProjectSources()
+        try Task.checkCancellation()
+        let discovery = isolatedDiscovery.output
         var combinedResources = discovery.resources
         var combinedProvenance = discovery.provenance
-        let combinedProjects = discovery.projects
+        var combinedProjects = discovery.projects
         var combinedRelations = discovery.relations
         var companionIssueCount = 0
         var transientRoots: [String: URL] = [:]
@@ -153,8 +195,10 @@ public actor IndexingCoordinator {
         var runtimeCoverage: CoverageState = .unknown
         var runtimePluginInventoryAvailable: Bool?
         var runtimePluginPackagesAvailable: Bool?
+        var runtimeAliasCanonicalizationDeferred = false
         if let runtimeDiscovery {
             let runtime = await runtimeDiscovery.discover()
+            try Task.checkCancellation()
             runtimePluginInventoryAvailable = !runtime.unsupportedCategories.contains("plugin")
             runtimePluginPackagesAvailable = runtime.pluginPackagesAvailable
             let runtimeSkillIDs = Dictionary(grouping: runtime.resources.filter { $0.kind == .skill }.compactMap { resource -> (String, String)? in
@@ -164,19 +208,55 @@ public actor IndexingCoordinator {
                 let child = relative.hasPrefix(prefix) ? String(relative.dropFirst(prefix.count)) : relative
                 return (root.appendingPathComponent(child).resolvingSymlinksInPath().standardizedFileURL.path, resource.id)
             }, by: { $0.0 })
-            let canonicalByPhysical = Dictionary(grouping: combinedResources.filter { $0.kind == .skill }.compactMap { resource -> (String, String)? in
-                guard let root = configuration.scanRoots.first(where: { $0.id == resource.sourceRootID }), let relative = resource.relativeSourcePath else { return nil }
-                return (root.url.appendingPathComponent(relative).resolvingSymlinksInPath().standardizedFileURL.path, resource.id)
-            }, by: { $0.0 }).compactMapValues { values -> String? in
-                let ids = Set(values.map(\.1))
-                return ids.count == 1 ? ids.first : nil
-            }
-            var runtimeCanonicalMap: [String: String] = [:]
-            for (physical, values) in runtimeSkillIDs {
-                let ids = Set(values.map(\.1))
-                if ids.count == 1, let runtimeID = ids.first, let canonicalID = canonicalByPhysical[physical] {
-                    runtimeCanonicalMap[runtimeID] = canonicalID
+            let projectScopesByRootID = Dictionary(
+                uniqueKeysWithValues: discovery.historyScanBatch.scopes
+                    .filter { $0.rootKind == .projects }
+                    .map { ($0.rootID, $0.coverage) }
+            )
+            let canCanonicalizeRuntimeAliases = configuration.scanRoots
+                .filter { $0.kind == .projects }
+                .allSatisfy {
+                    projectScopesByRootID[$0.id] == .complete
+                        && !isolatedDiscovery.unavailableProjectRootIDs.contains($0.id)
                 }
+            var runtimeCanonicalMap: [String: String] = [:]
+            if canCanonicalizeRuntimeAliases {
+                let nonProjectPhysicalPaths = combinedResources.filter { $0.kind == .skill }.compactMap { resource -> ProjectSkillPhysicalPath? in
+                    guard let root = configuration.scanRoots.first(where: {
+                        $0.id == resource.sourceRootID && $0.kind != .projects
+                    }), let relative = resource.relativeSourcePath else { return nil }
+                    return ProjectSkillPhysicalPath(
+                        physicalPath: root.url.appendingPathComponent(relative)
+                            .resolvingSymlinksInPath().standardizedFileURL.path,
+                        resourceID: resource.id
+                    )
+                }
+                let canonicalByPhysical = Dictionary(
+                    grouping: nonProjectPhysicalPaths + isolatedDiscovery.projectSkillPhysicalPaths,
+                    by: \ProjectSkillPhysicalPath.physicalPath
+                ).compactMapValues { values -> String? in
+                    let ids = Set(values.map(\.resourceID))
+                    return ids.count == 1 ? ids.first : nil
+                }
+                for (physical, values) in runtimeSkillIDs {
+                    let ids = Set(values.map(\.1))
+                    if ids.count == 1, let runtimeID = ids.first, let canonicalID = canonicalByPhysical[physical] {
+                        runtimeCanonicalMap[runtimeID] = canonicalID
+                    }
+                }
+            } else {
+                // Project/global physical uniqueness is open while any
+                // configured project is incomplete. A current plugin package
+                // can still prove its own native/runtime alias through exact
+                // contains relations and one validated package directory.
+                runtimeCanonicalMap = Self.pluginPackageRuntimeAliasMap(
+                    runtime: runtime,
+                    discovery: discovery,
+                    scanRoots: configuration.scanRoots,
+                    pluginInventoryAvailable: runtimePluginInventoryAvailable == true,
+                    pluginPackagesAvailable: runtimePluginPackagesAvailable == true
+                )
+                runtimeAliasCanonicalizationDeferred = true
             }
             let duplicateRuntimeIDs = Set(runtimeCanonicalMap.keys)
             combinedResources.append(contentsOf: runtime.resources.filter { !duplicateRuntimeIDs.contains($0.id) })
@@ -187,6 +267,13 @@ public actor IndexingCoordinator {
             combinedRelations.append(contentsOf: remappedRelations)
             transientRoots = runtime.transientRoots
             runtimeIssues = runtime.issues
+            if runtimeAliasCanonicalizationDeferred {
+                runtimeIssues.append(DiscoveryIssue(
+                    rootID: "runtime",
+                    relativePath: "skill-alias",
+                    message: "Runtime Skill alias de-duplication deferred because project source identity is unavailable"
+                ))
+            }
             runtimeCoverage = runtime.coverage
             if runtime.coverage == .unavailable || runtimePluginInventoryAvailable == false {
                 // A successful version/MCP read must not prune the last-known
@@ -278,17 +365,162 @@ public actor IndexingCoordinator {
             }
         }
         // Companion declarations are a derived, privacy-safe projection of
-        // local Agent/Skill documents. Resolve them after runtime canonical
-        // mapping so project-local Skills win and global/plugin matches can be
-        // represented as previews by the folder UI. No source is modified.
-        let companionReport = CapabilityCompanionResolver(
+        // local Agent/Skill documents. Global/runtime sources are read once
+        // without project roots; each complete project is then reopened only
+        // through the same persistent project gate used by discovery.
+        let globalCompanionReport = CapabilityCompanionResolver(
             resources: combinedResources,
-            roots: configuration.scanRoots,
+            roots: configuration.scanRoots.filter { $0.kind != .projects },
             transientRoots: transientRoots,
-            agentPairings: discovery.agentPairings
+            agentPairings: discovery.agentPairings,
+            fileSystem: fileSystem
         ).resolveWithIssues()
-        combinedRelations.append(contentsOf: companionReport.relations.map(\.resourceRelation))
-        companionIssueCount = companionReport.issues.count
+        combinedRelations.append(contentsOf: globalCompanionReport.relations.map(\.resourceRelation))
+        companionIssueCount = globalCompanionReport.issues.count
+
+        let scopeByRootID = Dictionary(
+            uniqueKeysWithValues: discovery.historyScanBatch.scopes.map { ($0.rootID, $0) }
+        )
+        let companionCandidates = combinedResources
+        let companionPairings = discovery.agentPairings
+        let companionFileSystem = fileSystem
+        var failedCompanionRootIDs = Set<String>()
+        for root in configuration.scanRoots where root.kind == .projects {
+            guard scopeByRootID[root.id]?.coverage == .complete,
+                  !isolatedDiscovery.unavailableProjectRootIDs.contains(root.id) else {
+                continue
+            }
+            let projectCompanion = await projectReadGate.perform(root: root) {
+                CapabilityCompanionResolver(
+                    resources: companionCandidates,
+                    roots: [root],
+                    transientRoots: [:],
+                    agentPairings: companionPairings,
+                    fileSystem: companionFileSystem
+                ).resolveWithIssues()
+            }
+            switch projectCompanion {
+            case .success(let report):
+                combinedRelations.append(contentsOf: report.relations.map(\.resourceRelation))
+                companionIssueCount += report.issues.count
+            case .failure(.cancelled):
+                throw CancellationError()
+            case .failure:
+                failedCompanionRootIDs.insert(root.id)
+                companionIssueCount += 1
+            }
+        }
+        try Task.checkCancellation()
+        var resultResourceCoverage = discovery.historyScanBatch.coverage
+        if runtimeAliasCanonicalizationDeferred,
+           resultResourceCoverage != .unstable {
+            // Runtime remains useful, but its physical Skill alias projection
+            // is intentionally unqualified for this pass.
+            resultResourceCoverage = .partial
+        }
+        if !failedCompanionRootIDs.isEmpty {
+            resultResourceCoverage = resultResourceCoverage.dominating(with: .partial)
+            combinedProjects = combinedProjects.map { project in
+                guard failedCompanionRootIDs.contains(project.id) else { return project }
+                return CapabilityProject(
+                    id: project.id,
+                    name: project.name,
+                    available: false,
+                    lastSeenAt: project.lastSeenAt
+                )
+            }
+        }
+        // A discovery output may contain a useful positive subset while one
+        // approved scope could not be enumerated or read. Keep the last
+        // verified rows for that scope instead of treating the partial subset
+        // as a complete deletion snapshot. A genuinely empty, complete scope
+        // has no IDs here and therefore replaces normally.
+        let incompleteRootIDs = Set(discovery.historyScanBatch.scopes.compactMap { scope in
+            scope.coverage == .complete ? nil : scope.rootID
+        })
+        if !incompleteRootIDs.isEmpty {
+            let currentIDs = Set(combinedResources.map(\.id))
+            let retained = previousResources.filter {
+                incompleteRootIDs.contains($0.sourceRootID) && !currentIDs.contains($0.id)
+            }
+            combinedResources.append(contentsOf: retained)
+            let retainedIDs = Set(retained.map(\.id))
+            let currentProvenanceIDs = Set(combinedProvenance.map(\.id))
+            combinedProvenance.append(contentsOf: previousProvenance.filter {
+                retainedIDs.contains($0.resourceID) && !currentProvenanceIDs.contains($0.id)
+            })
+            let allIDs = Set(combinedResources.map(\.id))
+            // Runtime discovery can yield repeated IDs (for example duplicate
+            // MCP names). Keep every observed root association here instead
+            // of trapping on a duplicate dictionary key or inventing a source
+            // priority. SQLite's existing INSERT OR REPLACE boundary retains
+            // its established projection behavior.
+            let resourceRootsByID = Dictionary(grouping: combinedResources, by: \.id)
+                .mapValues { Set($0.map(\.sourceRootID)) }
+            let currentRelationIDs = Set(combinedRelations.map(\.id))
+            combinedRelations.append(contentsOf: previousRelations.filter { relation in
+                guard allIDs.contains(relation.sourceResourceID), allIDs.contains(relation.targetResourceID) else { return false }
+                guard !currentRelationIDs.contains(relation.id) else { return false }
+                let sourceRoots = resourceRootsByID[relation.sourceResourceID] ?? []
+                let targetRoots = resourceRootsByID[relation.targetResourceID] ?? []
+                return !sourceRoots.isDisjoint(with: incompleteRootIDs)
+                    || !targetRoots.isDisjoint(with: incompleteRootIDs)
+            })
+            let incompleteProjectRootIDs = Set(discovery.historyScanBatch.scopes.compactMap { scope in
+                scope.coverage == .complete || scope.rootKind != .projects ? nil : scope.rootID
+            })
+            let previousProjectsByID = Dictionary(
+                uniqueKeysWithValues: previousProjects.map { ($0.id, $0) }
+            )
+            combinedProjects = combinedProjects.map { project in
+                guard incompleteProjectRootIDs.contains(project.id),
+                      !project.available,
+                      let previous = previousProjectsByID[project.id] else {
+                    return project
+                }
+                return CapabilityProject(
+                    id: project.id,
+                    name: previous.name,
+                    available: false,
+                    lastSeenAt: previous.lastSeenAt
+                )
+            }
+            let currentProjectIDs = Set(combinedProjects.map(\.id))
+            combinedProjects.append(contentsOf: previousProjects.filter {
+                incompleteProjectRootIDs.contains($0.id) && !currentProjectIDs.contains($0.id)
+            }.map {
+                CapabilityProject(
+                    id: $0.id,
+                    name: $0.name,
+                    available: false,
+                    lastSeenAt: $0.lastSeenAt
+                )
+            })
+        }
+        if !failedCompanionRootIDs.isEmpty {
+            let allIDs = Set(combinedResources.map(\.id))
+            let resourceRootsByID = Dictionary(grouping: combinedResources, by: \.id)
+                .mapValues { Set($0.map(\.sourceRootID)) }
+            let currentRelationIDs = Set(combinedRelations.map(\.id))
+            combinedRelations.append(contentsOf: previousRelations.filter { relation in
+                guard CapabilityCompanionRelationKind(rawValue: relation.relationKind) != nil,
+                      allIDs.contains(relation.sourceResourceID),
+                      allIDs.contains(relation.targetResourceID),
+                      !currentRelationIDs.contains(relation.id) else { return false }
+                let sourceRoots = resourceRootsByID[relation.sourceResourceID] ?? []
+                let targetRoots = resourceRootsByID[relation.targetResourceID] ?? []
+                return !sourceRoots.isDisjoint(with: failedCompanionRootIDs)
+                    || !targetRoots.isDisjoint(with: failedCompanionRootIDs)
+            })
+        }
+        let unavailableProjectRootIDsForReview = Set(
+            discovery.historyScanBatch.scopes.compactMap { scope in
+                scope.rootKind == .projects && scope.coverage != .complete
+                    ? scope.rootID
+                    : nil
+            }
+        ).union(failedCompanionRootIDs)
+        try Task.checkCancellation()
         // Resource inventory is a replaceable snapshot. A completed scan
         // prunes deleted/moved records; runtime failures are represented by
         // the last successful snapshot already present in the store because
@@ -299,6 +531,28 @@ public actor IndexingCoordinator {
             provenance: combinedProvenance,
             relations: combinedRelations
         )
+        try Task.checkCancellation()
+
+        // The raw verified batch is submitted immediately after the reliable
+        // inventory transaction. Later session parsing, quota work or review
+        // failures cannot erase an already observed capability-document
+        // change. History failures remain isolated to this optional domain.
+        var capabilityHistoryStatus: CapabilityHistoryStatus?
+        if let capabilityHistoryService {
+            do {
+                _ = try await capabilityHistoryService.submit(discovery.historyScanBatch)
+            } catch {
+                // Retain the successful resource inventory. The independent
+                // status exposes a safe fixed error category for retry/UI.
+            }
+            capabilityHistoryStatus = await capabilityHistoryService.status(refresh: false)
+            if let capabilityHistoryStatus {
+                // Notify the shared presentation before unrelated session
+                // inventory/parsing can delay completion. This carries only
+                // safe history metadata and does not initiate another scan.
+                await onCapabilityHistoryStatus?(capabilityHistoryStatus)
+            }
+        }
 
         // Skill evidence resolution uses only currently discovered resources.
         extractor = InvocationExtractor(
@@ -309,7 +563,10 @@ public actor IndexingCoordinator {
         // 2. Session file inventory.
         let files = collectSessionFiles(configuration: configuration)
         let recentStart = CapabilityQueryWindow.recent30(now: nowProvider(), calendar: .current).start.timeIntervalSince1970
-        let sessionEnds = Dictionary(grouping: try await store.fetchAllSessions(), by: \.sourceFileID)
+        let persistedSessions = try await store.fetchAllSessions()
+        let sessionsBySourceFileID = Dictionary(grouping: persistedSessions, by: \.sourceFileID)
+            .compactMapValues(\.first)
+        let sessionEnds = Dictionary(grouping: persistedSessions, by: \.sourceFileID)
             .mapValues { rows in rows.compactMap { $0.endedAt ?? $0.startedAt }.max()?.timeIntervalSince1970 ?? 0 }
         progress(.init(phase: .parsing, processedFiles: 0, totalFiles: files.count, indexedSessions: 0, lastError: nil))
 
@@ -335,7 +592,7 @@ public actor IndexingCoordinator {
             // fully reparsed below.
             let unchanged = checkpoint?.sourceSize == attributes.size &&
                 checkpoint?.sourceMtime == attributes.modificationDate && checkpoint?.byteOffset == attributes.size
-            let priorParserOutsideRankingWindow = ["1.2.0", "1.3.0", "1.4.0"].contains(checkpoint?.parserVersion ?? "") &&
+            let priorParserOutsideRankingWindow = ["1.2.0", "1.3.0", "1.4.0", "1.4.1"].contains(checkpoint?.parserVersion ?? "") &&
                 attributes.modificationDate < recentStart && (sessionEnds[sourceFileID] ?? 0) < recentStart
             if let checkpoint, unchanged,
                (checkpoint.parserVersion == RolloutEventDecoder.parserVersion || priorParserOutsideRankingWindow) {
@@ -348,11 +605,14 @@ public actor IndexingCoordinator {
             let startOffset: UInt64
             if let checkpoint,
                checkpoint.parserVersion == RolloutEventDecoder.parserVersion,
-               attributes.size >= checkpoint.sourceSize,
+               attributes.size > checkpoint.sourceSize,
                checkpoint.byteOffset <= attributes.size {
                 startOffset = checkpoint.byteOffset // appended
             } else {
-                startOffset = 0 // fresh or truncated/replaced
+                // Equal-size content with a changed mtime is a replacement,
+                // not an append from an already-complete checkpoint. Strict
+                // growth retains the cheap append path for large rollouts.
+                startOffset = 0 // fresh, same-size replacement or truncated
             }
 
             let outcome = try await parseSessionFile(
@@ -360,6 +620,7 @@ public actor IndexingCoordinator {
                 sourceFileID: sourceFileID,
                 startOffset: startOffset,
                 resumeCheckpoint: checkpoint,
+                priorSession: startOffset > 0 ? sessionsBySourceFileID[sourceFileID] : nil,
                 scanRoots: configuration.scanRoots,
                 fileProgress: { [processedFiles, indexedSessions] bytesRead, fileTotal in
                     progress(.init(
@@ -386,7 +647,10 @@ public actor IndexingCoordinator {
         }
 
         if !cancelled {
-            try await runReviewPass(configuration: configuration)
+            try await runReviewPass(
+                configuration: configuration,
+                unavailableProjectRootIDs: unavailableProjectRootIDsForReview
+            )
         }
 
         progress(.init(
@@ -405,32 +669,231 @@ public actor IndexingCoordinator {
             runtimeCoverage: runtimeCoverage,
             runtimeIssueCount: runtimeIssues.count,
             discoveryIssueCount: registry.issues.count + discovery.issues.count + companionIssueCount,
+            resourceCoverage: resultResourceCoverage,
             runtimePluginInventoryAvailable: runtimePluginInventoryAvailable,
-            runtimePluginPackagesAvailable: runtimePluginPackagesAvailable
+            runtimePluginPackagesAvailable: runtimePluginPackagesAvailable,
+            capabilityHistoryStatus: capabilityHistoryStatus
         )
+    }
+
+    public func capabilityHistoryPage(
+        _ query: CapabilityHistoryQuery
+    ) async throws -> CapabilityHistoryPage {
+        guard let capabilityHistoryService else {
+            throw CapabilityHistoryStore.StoreError.storageUnavailable
+        }
+        return try await capabilityHistoryService.page(query)
+    }
+
+    public func capabilityHistoryStatus(
+        refresh: Bool = true
+    ) async -> CapabilityHistoryStatus {
+        guard let capabilityHistoryService else { return .unavailable }
+        return await capabilityHistoryService.status(refresh: refresh)
+    }
+
+    public func clearCapabilityHistoryConfirmed() async throws -> CapabilityHistoryStatus {
+        guard let capabilityHistoryService else {
+            throw CapabilityHistoryStore.StoreError.storageUnavailable
+        }
+        return try await capabilityHistoryService.clearConfirmed()
+    }
+
+    public func cancelPendingCapabilityHistoryWrites() async {
+        await capabilityHistoryService?.cancelPendingWrites()
+    }
+
+    private struct PluginManifestKey: Hashable {
+        let packagePath: String
+        let manifestPath: String
+    }
+
+    /// Preserves the established native plugin Skill ID only when a complete
+    /// current plugin-cache scan and the current runtime inventory prove the
+    /// same package directory, manifest and exact parent/child containment.
+    /// Names and runtime markers are never treated as identity evidence.
+    static func pluginPackageRuntimeAliasMap(
+        runtime: CodexRuntimeDiscovery.Result,
+        discovery: DiscoveryOutput,
+        scanRoots: [ScanRoot],
+        pluginInventoryAvailable: Bool,
+        pluginPackagesAvailable: Bool
+    ) -> [String: String] {
+        guard pluginInventoryAvailable, pluginPackagesAvailable else { return [:] }
+        let nativeRoots = scanRoots.filter { $0.kind == .plugins && $0.scope == .plugin }
+        guard nativeRoots.count == 1, let nativeRoot = nativeRoots.first,
+              !discovery.issues.contains(where: { $0.rootID == nativeRoot.id }) else {
+            return [:]
+        }
+
+        let nativeResourcesByID = Dictionary(grouping: discovery.resources, by: \.id)
+        let runtimeResourcesByID = Dictionary(grouping: runtime.resources, by: \.id)
+        let nativeContainsByChild = exactContainsParents(discovery.relations)
+        let runtimeContainsByChild = exactContainsParents(runtime.relations)
+        let nativeRootPath = nativeRoot.url.resolvingSymlinksInPath().standardizedFileURL.path
+
+        var nativeIDsByKey: [PluginManifestKey: Set<String>] = [:]
+        for rows in nativeResourcesByID.values {
+            guard let child = oneConsistentResource(rows),
+                  child.kind == .skill,
+                  child.scope == .plugin,
+                  child.projectID == nil,
+                  child.sourceRootID == nativeRoot.id,
+                  child.ownership == .pluginProvided,
+                  child.origin == .plugin,
+                  let childRelative = child.relativeSourcePath,
+                  let parentIDs = nativeContainsByChild[child.id],
+                  parentIDs.count == 1,
+                  let parentID = parentIDs.first,
+                  let parentRows = nativeResourcesByID[parentID],
+                  let parent = oneConsistentResource(parentRows),
+                  parent.kind == .plugin,
+                  parent.scope == .plugin,
+                  parent.projectID == nil,
+                  parent.sourceRootID == nativeRoot.id,
+                  let parentRelative = parent.relativeSourcePath,
+                  childRelative.hasPrefix(parentRelative + "/") else { continue }
+            let packagePath = nativeRoot.url.appendingPathComponent(parentRelative)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            let manifestPath = nativeRoot.url.appendingPathComponent(childRelative)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            guard isStrictlyInside(packagePath, root: nativeRootPath),
+                  isStrictlyInside(manifestPath, root: packagePath) else { continue }
+            nativeIDsByKey[
+                PluginManifestKey(packagePath: packagePath, manifestPath: manifestPath),
+                default: []
+            ].insert(child.id)
+        }
+
+        struct RuntimeProof {
+            let childID: String
+            let parentID: String
+        }
+        var runtimeProofsByKey: [PluginManifestKey: [RuntimeProof]] = [:]
+        for rows in runtimeResourcesByID.values {
+            guard let child = oneConsistentResource(rows),
+                  child.kind == .skill,
+                  child.scope == .runtime,
+                  child.projectID == nil,
+                  child.ownership == .pluginProvided,
+                  child.origin == .plugin,
+                  let childRelative = child.relativeSourcePath,
+                  let parentIDs = runtimeContainsByChild[child.id],
+                  parentIDs.count == 1,
+                  let parentID = parentIDs.first,
+                  let parentRows = runtimeResourcesByID[parentID],
+                  let parent = oneConsistentResource(parentRows),
+                  parent.kind == .plugin,
+                  parent.scope == .runtime,
+                  parent.projectID == nil,
+                  let parentRelative = parent.relativeSourcePath,
+                  let marker = runtimePluginMarker(from: parentRelative),
+                  child.sourceRootID == "runtime-plugins:\(marker)",
+                  childRelative.hasPrefix(parentRelative + "/"),
+                  let packageURL = runtime.transientRoots["runtime-plugins:\(marker)"] else {
+                continue
+            }
+            let packagePath = packageURL.resolvingSymlinksInPath().standardizedFileURL.path
+            let childWithinPackage = String(childRelative.dropFirst(parentRelative.count + 1))
+            let manifestPath = packageURL.appendingPathComponent(childWithinPackage)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            guard isStrictlyInside(manifestPath, root: packagePath) else { continue }
+            runtimeProofsByKey[
+                PluginManifestKey(packagePath: packagePath, manifestPath: manifestPath),
+                default: []
+            ].append(RuntimeProof(childID: child.id, parentID: parent.id))
+        }
+
+        var proposedTargets: [String: Set<String>] = [:]
+        for (key, proofs) in runtimeProofsByKey {
+            let runtimeChildIDs = Set(proofs.map(\.childID))
+            let runtimeParentIDs = Set(proofs.map(\.parentID))
+            guard runtimeChildIDs.count == 1,
+                  runtimeParentIDs.count == 1,
+                  let runtimeChildID = runtimeChildIDs.first,
+                  let nativeIDs = nativeIDsByKey[key],
+                  nativeIDs.count == 1,
+                  let nativeID = nativeIDs.first else { continue }
+            proposedTargets[runtimeChildID, default: []].insert(nativeID)
+        }
+        return proposedTargets.compactMapValues { targets in
+            targets.count == 1 ? targets.first : nil
+        }
+    }
+
+    private static func exactContainsParents(
+        _ relations: [ResourceRelation]
+    ) -> [String: Set<String>] {
+        var seenRelationIDs = Set<String>()
+        var result: [String: Set<String>] = [:]
+        for relation in relations where relation.relationKind == "contains" && relation.confidence == .exact {
+            guard seenRelationIDs.insert(relation.id).inserted else { continue }
+            result[relation.targetResourceID, default: []].insert(relation.sourceResourceID)
+        }
+        return result
+    }
+
+    private static func oneConsistentResource(
+        _ rows: [CapabilityResource]
+    ) -> CapabilityResource? {
+        guard let first = rows.first, rows.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    private static func runtimePluginMarker(from parentRelative: String) -> String? {
+        let components = parentRelative.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              components[0] == "plugins",
+              !components[1].isEmpty else { return nil }
+        return String(components[1])
+    }
+
+    private static func isStrictlyInside(_ path: String, root: String) -> Bool {
+        path.hasPrefix(root + "/")
     }
 
     // MARK: - Review pass (production caller for IntegrityRules)
 
-    private func runReviewPass(configuration: Configuration) async throws {
+    private func runReviewPass(
+        configuration: Configuration,
+        unavailableProjectRootIDs: Set<String>
+    ) async throws {
         let resources = try await store.fetchAllResources()
         let sessions = try await store.fetchAllSessions()
+        let previousFindings = try await store.fetchAllFindings()
         var invocationsBySession: [String: [InvocationEvent]] = [:]
         for session in sessions {
             invocationsBySession[session.id] = try await store.fetchCalls(sessionID: session.id)
         }
         let quotas = try await store.fetchAllQuotaSnapshots()
+        // MissingSourceRule treats a root absent from the context as unknown.
+        // Do not reopen a project that this pass could not verify. All other
+        // rule inputs remain complete and use the established replace model.
+        let reviewRoots = configuration.scanRoots.filter {
+            !($0.kind == .projects && unavailableProjectRootIDs.contains($0.id))
+        }
         let context = ReviewContext(
             resources: resources,
             sessions: sessions,
             invocationsBySession: invocationsBySession,
             quotaSnapshots: quotas,
-            scanRoots: configuration.scanRoots,
+            scanRoots: reviewRoots,
             fileSystem: fileSystem,
             now: nowProvider()
         )
         // Deterministic rules only; disabled Rule 5 is never evaluated.
-        let findings = IntegrityRules.evaluate(context: context)
+        var findings = IntegrityRules.evaluate(context: context)
+        let resourcesByID = Dictionary(uniqueKeysWithValues: resources.map { ($0.id, $0) })
+        let findingIDs = Set(findings.map(\.id))
+        findings.append(contentsOf: previousFindings.filter { finding in
+            guard finding.ruleID == "rule.missing-source",
+                  !findingIDs.contains(finding.id),
+                  let resourceID = finding.resourceID,
+                  let resource = resourcesByID[resourceID] else {
+                return false
+            }
+            return unavailableProjectRootIDs.contains(resource.sourceRootID)
+        })
         try await store.replaceFindings(findings)
     }
 
@@ -462,6 +925,7 @@ public actor IndexingCoordinator {
         sourceFileID: String,
         startOffset: UInt64,
         resumeCheckpoint: IndexCheckpoint?,
+        priorSession: TaskSummary?,
         scanRoots: [ScanRoot],
         fileProgress: @Sendable (UInt64, UInt64) -> Void = { _, _ in }
     ) async throws -> ParseOutcome {
@@ -473,12 +937,8 @@ public actor IndexingCoordinator {
         // On an append, the session id is already persisted. On a fresh parse,
         // read leading envelopes until a session_meta envelope yields the id.
         // Rollout files begin with session_meta, so the leading buffer is tiny.
-        var resolvedSessionID: String? = startOffset > 0
-            ? (try await store.fetchSessionID(sourceFileID: sourceFileID))
-            : nil
-        var resolvedProjectID: String? = startOffset > 0
-            ? (try await store.fetchSessionProjectID(sourceFileID: sourceFileID))
-            : nil
+        var resolvedSessionID: String? = startOffset > 0 ? priorSession?.id : nil
+        var resolvedProjectID: String? = startOffset > 0 ? priorSession?.projectID : nil
 
         var leading: [RolloutEnvelope] = []
         var leadingDecoderIssues = 0
@@ -514,6 +974,9 @@ public actor IndexingCoordinator {
         }
 
         let sessionID = resolvedSessionID ?? sourceFileID
+        let existingCalls = startOffset > 0
+            ? (try await store.fetchCalls(sessionID: sessionID))
+            : []
         let resumeTokenSnapshot: TokenUsageSnapshot?
         if startOffset > 0 {
             resumeTokenSnapshot = TokenUsageParser.newestCumulative(
@@ -534,26 +997,32 @@ public actor IndexingCoordinator {
             }
         }
         let directory = metadata?.payload?.json["cwd"] as? String
-        var invocation = extractor.makeAccumulator(sessionID: sessionID, projectID: resolvedProjectID, workingDirectory: directory)
+        var invocation = extractor.makeAccumulator(
+            sessionID: sessionID,
+            projectID: resolvedProjectID,
+            workingDirectory: directory,
+            existingCalls: existingCalls
+        )
         if startOffset > 0, let metadata { invocation.process(metadata) }
         var tokens = tokenParser.makeAccumulator(sessionID: sessionID, resumeFrom: resumeTokenSnapshot)
 
-        var startedAt: Date?
-        var endedAt: Date?
-        var started = false
-        var completed = false
+        var segmentStartedAt: Date?
+        var segmentEndedAt: Date?
+        var segmentLifecycleStatus: TaskStatus?
         var sawAnyEnvelope = false
         var decoderIssueCount = leadingDecoderIssues
         var unknownEvents = leadingUnknownEvents
 
         func process(_ envelope: RolloutEnvelope) {
             sawAnyEnvelope = true
-            if startedAt == nil { startedAt = envelope.timestamp }
-            endedAt = envelope.timestamp
+            if let timestamp = envelope.timestamp {
+                segmentStartedAt = min(segmentStartedAt ?? timestamp, timestamp)
+                segmentEndedAt = max(segmentEndedAt ?? timestamp, timestamp)
+            }
             if envelope.type == .eventMessage, let payload = envelope.payload {
                 switch payload.json["type"] as? String {
-                case "task_started": started = true
-                case "task_complete": completed = true
+                case "task_started": segmentLifecycleStatus = .running
+                case "task_complete": segmentLifecycleStatus = .completed
                 default: break
                 }
             }
@@ -593,27 +1062,35 @@ public actor IndexingCoordinator {
             return ParseOutcome(indexed: false, cancelled: true)
         }
 
-        let priorCoverage: CoverageState?
-        if startOffset > 0 {
-            priorCoverage = try await store.fetchSessionCoverage(sourceFileID: sourceFileID)
-        } else {
-            priorCoverage = nil
+        if startOffset > 0, !invocation.unresolvedResultIdentifiers.isEmpty {
+            let aliases = try recoverCallIdentifierAliases(
+                url: url,
+                before: startOffset,
+                matching: invocation.unresolvedResultIdentifiers
+            )
+            invocation.resolvePendingResults(aliases: aliases)
         }
+
+        let matchingPriorSession = startOffset > 0 && priorSession?.id == sessionID ? priorSession : nil
+        let startedAt = Self.earlier(matchingPriorSession?.startedAt, segmentStartedAt)
+        let endedAt = Self.later(matchingPriorSession?.endedAt, segmentEndedAt)
+        let status = segmentLifecycleStatus ?? matchingPriorSession?.status ?? .unknown
+        let projectID = resolvedProjectID ?? matchingPriorSession?.projectID
 
         let accumulation = SessionAccumulation(
             sessionID: sessionID,
             sourceFileID: sourceFileID,
             startedAt: startedAt,
             endedAt: endedAt,
-            status: completed ? .completed : (started ? .running : .unknown),
+            status: status,
             sawAnyEnvelope: sawAnyEnvelope,
             decoderIssueCount: decoderIssueCount,
             unknownEvents: unknownEvents,
             invocation: invocation.finish(),
             tokens: tokens.finish(),
-            projectID: resolvedProjectID
+            projectID: projectID
         )
-        let batch = try makeBatch(accumulation: accumulation, priorCoverage: priorCoverage)
+        let batch = try makeBatch(accumulation: accumulation, priorCoverage: matchingPriorSession?.coverage)
         try await store.replaceSession(batch, resetExisting: startOffset == 0)
         if let attributes = fileSystem.fileAttributes(url),
            sourceBeforeRead?.size == attributes.size, sourceBeforeRead?.modificationDate == attributes.modificationDate {
@@ -627,6 +1104,96 @@ public actor IndexingCoordinator {
             ))
         }
         return ParseOutcome(indexed: true, cancelled: false)
+    }
+
+    /// Completion events can arrive just after a committed append checkpoint,
+    /// while the persisted call intentionally retains its response-item ID.
+    /// Recover only the small, recent identifier seam needed to join those two
+    /// stable IDs; never replay the file or manufacture a standalone call.
+    private func recoverCallIdentifierAliases(
+        url: URL,
+        before checkpointOffset: UInt64,
+        matching identifiers: Set<String>
+    ) throws -> [String: String] {
+        let maximumLookback: UInt64 = 16 * 1_024 * 1_024
+        let startOffset = checkpointOffset > maximumLookback ? checkpointOffset - maximumLookback : 0
+        let startsAtLineBoundary = try isJSONLLineBoundary(url: url, offset: startOffset)
+        guard let reader = JSONLIncrementalReader(
+            url: url,
+            startOffset: startOffset,
+            endOffsetExclusive: checkpointOffset
+        ) else { return [:] }
+        var candidateItemIDs: [String: Set<String>] = [:]
+        var isFirstWindowLine = true
+
+        while true {
+            // Check before I/O as well as after each complete line. In
+            // particular, cancellation must still be observed when a bounded
+            // window contains only one unterminated oversized record.
+            try Task.checkCancellation()
+            guard let line = try reader.nextLine() else { break }
+            try Task.checkCancellation()
+            // Reject a partial leading record instead of trying to decode or
+            // correlate it. Offset zero and a preceding newline prove that
+            // the first bounded byte starts a complete JSONL record.
+            if isFirstWindowLine {
+                isFirstWindowLine = false
+                if !startsAtLineBoundary { continue }
+            }
+            guard case .envelope(let envelope)? = decoder.decode(line).line,
+                  envelope.type == .responseItem,
+                  let payload = envelope.payload?.json,
+                  let type = payload["type"] as? String,
+                  type == "custom_tool_call" || type == "function_call",
+                  let callID = InvocationIdentifier.validated(payload["call_id"] as? String),
+                  identifiers.contains(callID),
+                  let itemID = InvocationIdentifier.validated(payload["id"] as? String)
+            else { continue }
+            candidateItemIDs[callID, default: []].insert(itemID)
+        }
+        return candidateItemIDs.compactMapValues { itemIDs in
+            // A terminal identifier cannot safely select between retries that
+            // used the same call ID but persisted distinct response-item IDs.
+            itemIDs.count == 1 ? itemIDs.first : nil
+        }
+    }
+
+    /// The alias window reads at most 16 MiB of records plus this one-byte
+    /// boundary witness. It distinguishes an exact line start from a partial
+    /// leading record without following an unbounded predecessor line.
+    private func isJSONLLineBoundary(url: URL, offset: UInt64) throws -> Bool {
+        guard offset > 0 else { return true }
+        try Task.checkCancellation()
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        do {
+            try handle.seek(toOffset: offset - 1)
+            let byte = try handle.read(upToCount: 1)
+            try Task.checkCancellation()
+            return byte?.first == 0x0A
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            return false
+        }
+    }
+
+    private static func earlier(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case (.some(let lhs), .some(let rhs)): return min(lhs, rhs)
+        case (.some(let lhs), .none): return lhs
+        case (.none, .some(let rhs)): return rhs
+        case (.none, .none): return nil
+        }
+    }
+
+    private static func later(_ lhs: Date?, _ rhs: Date?) -> Date? {
+        switch (lhs, rhs) {
+        case (.some(let lhs), .some(let rhs)): return max(lhs, rhs)
+        case (.some(let lhs), .none): return lhs
+        case (.none, .some(let rhs)): return rhs
+        case (.none, .none): return nil
+        }
     }
 
     private static func sessionID(from envelope: RolloutEnvelope) -> String? {

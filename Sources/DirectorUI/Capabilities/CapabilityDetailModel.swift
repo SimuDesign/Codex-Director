@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 import DirectorCore
 
 /// A presentation-safe projection of one invocation. `event` is retained so
@@ -40,6 +41,7 @@ public enum CapabilityDetailLoadState: Equatable, Sendable {
 public final class CapabilityDetailViewModel: ObservableObject {
     public typealias FindingsLoader = @Sendable (String) async throws -> [ReviewFinding]
     public typealias InvocationLoader = @Sendable (String, String?, CapabilityQueryWindow, Int, String?) async throws -> CapabilityDetailInvocationPage
+    public typealias ChangeUsageLoader = @Sendable (CapabilityChangeUsageQuery) async throws -> CapabilityChangeUsageSummary
 
     public private(set) var row: CapabilityLibraryRow
     public private(set) var projectID: String?
@@ -52,6 +54,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
     public let evaluationStore: InvocationEvaluationStore?
     private let findingsLoader: FindingsLoader?
     private let invocationLoader: InvocationLoader?
+    private let changeUsageLoader: ChangeUsageLoader?
     @Published public private(set) var findings: [ReviewFinding]
 
     public var onEvaluationChange: ((InvocationEvaluation?) -> Void)?
@@ -68,12 +71,20 @@ public final class CapabilityDetailViewModel: ObservableObject {
     /// True after the user has explicitly requested usage evidence. Selection
     /// and metadata refreshes never set this flag.
     @Published public private(set) var evidenceRequested = false
+    @Published public private(set) var changeUsageState: CapabilityDetailLoadState = .idle
+    @Published public private(set) var changeUsageSummary: CapabilityChangeUsageSummary?
+    @Published public private(set) var changeUsageCacheKey: CapabilityChangeUsageCacheKey?
 
     private var loadTask: Task<Void, Never>?
     private var findingsTask: Task<Void, Never>?
+    private var changeUsageTask: Task<Void, Never>?
+    private var evaluationMutationCancellable: AnyCancellable?
     private var findingsGeneration: Int = 0
+    private var changeUsageGeneration: Int = 0
     private var evaluationRevision = 0
+    private var observedEvaluationStoreRevision: UInt64 = 0
     private var observedProjectIDs = Set<String>()
+    private var selectedChangeUsageQuery: CapabilityChangeUsageQuery?
 
     public init(
         row: CapabilityLibraryRow,
@@ -88,6 +99,7 @@ public final class CapabilityDetailViewModel: ObservableObject {
         pageSize: Int = 20,
         findingsLoader: FindingsLoader? = nil,
         invocationLoader: InvocationLoader? = nil,
+        changeUsageLoader: ChangeUsageLoader? = nil,
         onEvaluationChange: ((InvocationEvaluation?) -> Void)? = nil,
         onClassify: ((String, ResourceOwnership) -> Void)? = nil,
         onResetClassification: ((String) -> Void)? = nil
@@ -96,10 +108,22 @@ public final class CapabilityDetailViewModel: ObservableObject {
         self.projects = projects; self.sessions = sessions; self.usageProjectIDs = usageProjectIDs; self.evaluationStore = evaluationStore
         self.findingsLoader = findingsLoader
         self.invocationLoader = invocationLoader
+        self.changeUsageLoader = changeUsageLoader
         self.findings = findings.filter { $0.resourceID == row.id }; self.now = now; self.pageSize = max(1, min(pageSize, 20))
         self.findingsState = self.findings.isEmpty ? .idle : .loaded
         self.onEvaluationChange = onEvaluationChange; self.onClassify = onClassify
         self.onResetClassification = onResetClassification
+        self.observedEvaluationStoreRevision = evaluationStore?.mutationRevisionSnapshot() ?? 0
+        if let evaluationStore {
+            self.evaluationMutationCancellable = NotificationCenter.default.publisher(
+                for: InvocationEvaluationStore.didMutateNotification,
+                object: evaluationStore
+            )
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.handleEvaluationStoreMutation()
+            }
+        }
         // Evidence is an explicit disclosure. Do not decode every saved
         // evaluation synchronously merely to open the metadata sheet.
     }
@@ -194,6 +218,103 @@ public final class CapabilityDetailViewModel: ObservableObject {
         generation += 1
         loadTask?.cancel(); loadTask = nil
         if state == .loading { state = invocations.isEmpty ? .idle : .loaded }
+    }
+
+    /// Starts at most one summary operation for the selected history event.
+    /// Re-selecting an already loaded/loading cache identity reuses it. A new
+    /// event, period, index generation, statistics cutoff, or evaluation
+    /// revision cancels and invalidates the older operation.
+    public func requestChangeUsage(_ query: CapabilityChangeUsageQuery) {
+        beginChangeUsage(query, force: false)
+    }
+
+    public func loadChangeUsageNow(_ query: CapabilityChangeUsageQuery) async {
+        let normalized = normalizedChangeUsageQuery(query)
+        selectedChangeUsageQuery = query
+        changeUsageGeneration += 1
+        let token = changeUsageGeneration
+        changeUsageTask?.cancel()
+        changeUsageTask = nil
+        changeUsageCacheKey = normalized.cacheKey
+        changeUsageSummary = nil
+        changeUsageState = .loading
+        await loadChangeUsage(normalized, token: token)
+    }
+
+    public func cancelChangeUsage() {
+        changeUsageGeneration += 1
+        changeUsageTask?.cancel()
+        changeUsageTask = nil
+        selectedChangeUsageQuery = nil
+        changeUsageCacheKey = nil
+        changeUsageSummary = nil
+        changeUsageState = .idle
+    }
+
+    private func beginChangeUsage(_ query: CapabilityChangeUsageQuery, force: Bool) {
+        let normalized = normalizedChangeUsageQuery(query)
+        if !force, changeUsageCacheKey == normalized.cacheKey,
+           changeUsageState == .loading || changeUsageSummary != nil {
+            return
+        }
+        selectedChangeUsageQuery = query
+        changeUsageGeneration += 1
+        let token = changeUsageGeneration
+        changeUsageTask?.cancel()
+        changeUsageCacheKey = normalized.cacheKey
+        changeUsageSummary = nil
+        changeUsageState = .loading
+        changeUsageTask = Task { [weak self] in
+            await self?.loadChangeUsage(normalized, token: token)
+        }
+    }
+
+    private func normalizedChangeUsageQuery(_ query: CapabilityChangeUsageQuery) -> CapabilityChangeUsageQuery {
+        query.updating(evaluationRevision: query.evaluationRevision &+ UInt64(evaluationRevision))
+    }
+
+    private func loadChangeUsage(_ query: CapabilityChangeUsageQuery, token: Int) async {
+        let storeRevisionBefore = evaluationStore?.mutationRevisionSnapshot()
+        do {
+            let summary: CapabilityChangeUsageSummary
+            if let changeUsageLoader {
+                summary = try await changeUsageLoader(query)
+            } else if let store {
+                let evaluations = evaluationStore ?? InvocationEvaluationStore(
+                    readData: { nil },
+                    writeData: { _ in false },
+                    removeData: { true }
+                )
+                summary = try await CapabilityChangeUsageRepository(
+                    database: store,
+                    evaluations: evaluations
+                ).summary(for: query)
+            } else {
+                let resolution = query.resolve()
+                summary = .unavailable(
+                    for: query,
+                    availability: resolution.availability == .available ? .indexUnavailable : resolution.availability
+                )
+            }
+            guard !Task.isCancelled, token == changeUsageGeneration else { return }
+            if let evaluationStore,
+               storeRevisionBefore != evaluationStore.mutationRevisionSnapshot() {
+                handleEvaluationStoreMutation()
+                return
+            }
+            guard summary.cacheKey == changeUsageCacheKey else {
+                changeUsageState = .failed("detail.changeUsageStale")
+                return
+            }
+            changeUsageSummary = summary
+            changeUsageState = .loaded
+        } catch {
+            guard !Task.isCancelled, token == changeUsageGeneration else { return }
+            // SQLite/storage failures can carry local paths or SQL details.
+            // UI receives only a fixed localization key.
+            changeUsageState = .failed("detail.changeUsageLoadFailed")
+        }
+        if token == changeUsageGeneration { changeUsageTask = nil }
     }
 
     private func loadPage(cursor: String?, token: Int, append: Bool) async {
@@ -350,8 +471,9 @@ public final class CapabilityDetailViewModel: ObservableObject {
         guard let evaluationStore else { persistenceError = "detail.evaluationUnavailable"; return false }
         let value = InvocationEvaluation(invocationID: invocation.event.id, sessionID: invocation.event.sessionID, resourceID: invocation.event.resourceID, label: label, updatedAt: date)
         guard evaluationStore.set(value) else { persistenceError = "detail.evaluationSaveFailed"; return false }
-        evaluationRevision &+= 1
-        evaluations[value.invocationID] = value; persistenceError = nil; onEvaluationChange?(value); return true
+        handleEvaluationStoreMutation()
+        evaluations[value.invocationID] = value; persistenceError = nil; onEvaluationChange?(value)
+        return true
     }
 
     @discardableResult
@@ -359,7 +481,23 @@ public final class CapabilityDetailViewModel: ObservableObject {
         guard evaluations[invocation.id] != nil else { return true }
         guard let evaluationStore else { persistenceError = "detail.evaluationUnavailable"; return false }
         guard evaluationStore.remove(for: invocation.id) else { persistenceError = "detail.evaluationClearFailed"; return false }
+        handleEvaluationStoreMutation()
+        evaluations.removeValue(forKey: invocation.id); persistenceError = nil; onEvaluationChange?(nil)
+        return true
+    }
+
+    private func handleEvaluationStoreMutation() {
+        guard let evaluationStore else { return }
+        let revision = evaluationStore.mutationRevisionSnapshot()
+        guard revision != observedEvaluationStoreRevision else { return }
+        observedEvaluationStoreRevision = revision
         evaluationRevision &+= 1
-        evaluations.removeValue(forKey: invocation.id); persistenceError = nil; onEvaluationChange?(nil); return true
+        if evidenceRequested { evaluations = evaluationStore.all() }
+        reloadSelectedChangeUsageAfterEvaluationChange()
+    }
+
+    private func reloadSelectedChangeUsageAfterEvaluationChange() {
+        guard let selectedChangeUsageQuery else { return }
+        beginChangeUsage(selectedChangeUsageQuery, force: true)
     }
 }

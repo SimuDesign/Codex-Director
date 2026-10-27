@@ -844,14 +844,16 @@ public struct DirectorOutlinedIconMenu<Content: View>: View {
 public struct DirectorOutlinedMenuField<Content: View>: View {
     private let title: String
     private let height: CGFloat
+    private let titleLineLimit: Int?
     private let content: Content
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    public init(_ title: String, height: CGFloat = DirectorCapabilityFolderLayout.controlHeight, @ViewBuilder content: () -> Content) {
+    public init(_ title: String, height: CGFloat = DirectorCapabilityFolderLayout.controlHeight, titleLineLimit: Int? = 1, @ViewBuilder content: () -> Content) {
         self.title = title
         self.height = height
+        self.titleLineLimit = titleLineLimit
         self.content = content()
     }
 
@@ -861,7 +863,8 @@ public struct DirectorOutlinedMenuField<Content: View>: View {
         } label: {
             HStack(spacing: DirectorSpacing.space2) {
                 Text(title)
-                    .lineLimit(1)
+                    .lineLimit(titleLineLimit)
+                    .fixedSize(horizontal: false, vertical: titleLineLimit != 1)
                 Spacer(minLength: DirectorSpacing.space1)
                 Image(systemName: "chevron.down")
                     .accessibilityHidden(true)

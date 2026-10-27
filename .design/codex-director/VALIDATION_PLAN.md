@@ -1,8 +1,8 @@
 # Codex Director Visual System Validation Plan
 
-Version: `1.5.1`
+Version: `1.6.1`
 Applies to: `DESIGN_SYSTEM_V1.md`, `director-visual-system`, and future native UI implementation  
-Last updated: 2026-10-07
+Last updated: 2026-10-27
 
 The approved [0.2 redesign](../../docs/plans/2026-08-28-capability-centered-redesign.md) replaces the earlier product journeys. Existing component, accessibility and privacy rules remain. Menu-bar quota validation is active for 1.1.1; the feature is enabled by default for new installs and can be explicitly disabled in Settings. Pet, topology and workflow examples remain dormant guidance. No prior build/test result counts as proof of the new source snapshot.
 
@@ -284,7 +284,7 @@ Expected: wrapper/child event not double-counted, inferred attribution labeled, 
 5. Export selected synthetic global capabilities and one opted-in project. Exercise preflight blocking, exclusion, cancellation, save and success states.
 6. Reopen the ZIP, verify its fixed roots, every SHA-256, executable bits, path placeholders, incomplete-plugin semantics and bilingual `RESTORE.md`.
 
-Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.5.1 with internal build 35, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The three Settings actions share one 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
+Expected: Chinese default, shared multiwindow language, default Dark theme, immediate shared multiwindow theme changes, visible version 1.6.1 with internal build 43, no production preference/data access by validation host, and no writes to Apple's global appearance preference. Source fixtures receive zero writes; failed or cancelled export leaves no partial package. The existing Settings action geometry remains 176pt content width and 48pt outer height in zh/en, idle/loading and enabled/disabled states; local history clearing uses that same secondary-action geometry. Trusted restore verifies an isolated manifest v1 package, requires explicit project mappings, creates missing files only, and leaves existing source and target files untouched.
 
 ### Journey F — Geometry, refresh and accessibility
 
@@ -678,3 +678,49 @@ must not index, query SQLite or read accounts. Confirm closed control values
 and AX labels in the installed build without changing real memberships.
 This behavioral check does not claim a new full visual/VoiceOver matrix;
 appearance and accessibility control geometry are unchanged.
+
+### Capability change history matrix — 1.6.0
+
+Use the approved [local UI contract](../../docs/design/2026-10-23-capability-history-ui-contract.md)
+as the visual target and the [1.6.0 plan](../../docs/plans/2026-10-22-capability-change-history-1.6.0.md)
+as behavior/architecture authority. Requirements below are pending evidence,
+not a claim of implementation or release acceptance.
+
+- Capture global history Sheet, closed/expanded Agent/Skill detail history,
+  selected summary and removed-resource read-only summary in zh/en × Light/Dark
+  at actual 720×480, 1280×800 and wide product viewports. Record Sheet bounds,
+  one scroll region, 36pt filter geometry, readable current values/dates/counts,
+  no clipping/overflow, no nested glass and no additional search editor.
+- Use synthetic memory fixtures for all four event kinds; 10/11/30 events and
+  twenty-event paging; long safe names; same-time different sequences; A→B→A;
+  initial baseline, initialized empty, filter empty, partial/unstable/pending
+  absence, unavailable, write failure, corruption, unsupported schema,
+  truncation and clock rollback. Failures preserve prior valid rows.
+- Verify initialized-empty plus mixed source coverage, readable legacy
+  unavailable scan coverage, read-only writer conflict, failed-save with
+  readable rows, and actual read failure separately in both Sheet and detail.
+  A missing unrelated project must not make readable history unavailable.
+  Read Retry is not shown as a scan repair; actual read errors suppress empty
+  and baseline claims while retaining any prior valid rows.
+- Verify 30-day initial global scope with 7/30/all-retained and type/event
+  filters, sequence-descending order and independent 7/30 summary period.
+  Missing events have no summary metrics. Actual interval/cutoff, known zero,
+  unknown, partial/inferred, outside-window, missing index, prior cutoff and
+  unavailable evaluations must each have distinct output.
+- Exercise pointer hits, keyboard/arrow/Return/menu behavior, localized
+  disclosure/selection/current-value AX, Escape nesting and exact source focus
+  return. Record actual VoiceOver speech separately from AX-tree inspection.
+  Exercise Increase Contrast, Reduce Motion and Reduce Transparency on the
+  Sheet and detail; include Dark + Increase Contrast and readable small text.
+- Clear confirmation explains irreversible earlier history and next-refresh
+  baseline. Cancel/Escape writes nothing; successful clear removes old selection
+  and summary; failure retains rows. Derived-index deletion retains history.
+  Verify removed-resource summaries offer no restore/export/member actions.
+- Synthetic instrumentation must show lazy bounded history/summary reads, one
+  selected-event summary request, no per-row queries, late-result invalidation,
+  no source scan on open/filter/page/language change and no new timer/indexer.
+  Preserve folder tabs/members/search/sort/scroll, ratings, theme and refresh.
+- Screenshots, AX/help and persisted fixtures contain no raw paths, source
+  bodies, diffs, fingerprints, prompts, account values or raw exceptions.
+  Native runtime, performance, actual VoiceOver and independent QA remain
+  separate gates and must not be inferred from source tests or this contract.

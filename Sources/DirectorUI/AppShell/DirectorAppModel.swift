@@ -131,6 +131,14 @@ public final class DirectorAppModel: ObservableObject {
     /// delayed directory changes cannot leave a permanent unknown state.
     @Published public private(set) var capabilityCompanionUsageGeneration: UInt64 = 0
     @Published public private(set) var capabilityCompanionUsageIsLoading = false
+    /// Cheap app-scoped history mutation signal shared by every open window.
+    /// It changes only after source commit, explicit read/clear, or a history
+    /// failure; ordinary navigation and presentation preferences never touch
+    /// the history store.
+    @Published public private(set) var capabilityHistoryRevision: Int64?
+    @Published public private(set) var capabilityHistoryStatusSignal: CapabilityHistoryStatus = .unavailable
+    @Published public private(set) var capabilityHistoryMutationRevision: UInt64 = 0
+    private var capabilityHistoryClearGeneration: UInt64 = 0
 
     /// One truthful application-wide busy state for refresh controls. Source
     /// indexing and bounded presentation projection are both visible; queued,
@@ -294,6 +302,11 @@ public final class DirectorAppModel: ObservableObject {
     @Published public var quotaSourceID: String?
     public private(set) var statisticsCalendar: Calendar
     private let nowProvider: @Sendable () -> Date
+    /// Read-only clock seam for history presentation filters. Keeping the
+    /// original injected closure avoids freezing a Date when a sheet model is
+    /// retained across midnight, without exposing actor state or adding a
+    /// timer/scanner.
+    public nonisolated let capabilityHistoryClock: @Sendable () -> Date
     private var lastStatisticsDay: Date?
     // Presentation refreshes (including midnight statistic updates) must not
     // advance the source-index freshness baseline.
@@ -316,10 +329,12 @@ public final class DirectorAppModel: ObservableObject {
     private var menuBarPreferencesCancellable: AnyCancellable?
     private var homeUsageRankingPreferencesCancellable: AnyCancellable?
     private var capabilityFolderUsagePreferencesCancellable: AnyCancellable?
+    private var evaluationMutationCancellable: AnyCancellable?
 
     public private(set) var store: DatabaseStore?
     public private(set) var readStore: DatabaseStore?
     public private(set) var coordinator: IndexingCoordinator?
+    public private(set) var capabilityHistoryService: CapabilityHistoryCoordinator?
     public private(set) var configuration: IndexingCoordinator.Configuration?
     public private(set) var capabilityExportCoordinator: CapabilityExportCoordinator?
     public private(set) var capabilityRestoreCoordinator: CapabilityRestoreCoordinator?
@@ -396,6 +411,7 @@ public final class DirectorAppModel: ObservableObject {
         store: DatabaseStore? = nil,
         readStore: DatabaseStore? = nil,
         coordinator: IndexingCoordinator? = nil,
+        capabilityHistoryService: CapabilityHistoryCoordinator? = nil,
         configuration: IndexingCoordinator.Configuration? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
         capabilityRestoreCoordinator: CapabilityRestoreCoordinator? = nil,
@@ -418,6 +434,7 @@ public final class DirectorAppModel: ObservableObject {
         self.store = store
         self.readStore = readStore ?? store
         self.coordinator = coordinator
+        self.capabilityHistoryService = capabilityHistoryService ?? coordinator?.capabilityHistoryService
         self.configuration = configuration
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
@@ -434,6 +451,7 @@ public final class DirectorAppModel: ObservableObject {
         self.capabilityFolderUsagePeriod = capabilityFolderUsagePreferences.period
         self.accountUsageSnapshot = nil
         self.accountUsageError = nil
+        self.capabilityHistoryRevision = nil
         self.presentationRefreshCoordinator = presentationRefreshCoordinator
         self.selection = selection
         self.classificationOverrides = classificationOverrides
@@ -443,6 +461,7 @@ public final class DirectorAppModel: ObservableObject {
         statisticsCalendar.locale = Locale(identifier: "en_US_POSIX")
         self.statisticsCalendar = statisticsCalendar
         self.nowProvider = nowProvider
+        self.capabilityHistoryClock = nowProvider
         let initialNow = nowProvider()
         self.presentationNow = initialNow
         self.lastIndexCompletedAt = nil
@@ -542,6 +561,14 @@ public final class DirectorAppModel: ObservableObject {
                 self.capabilityFolderUsagePeriod = period
                 for library in self.libraryModels { library.setUsagePeriod(period) }
             }
+        self.evaluationMutationCancellable = NotificationCenter.default.publisher(
+            for: InvocationEvaluationStore.didMutateNotification,
+            object: evaluationStore
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] _ in
+            self?.capabilityHistoryMutationRevision &+= 1
+        }
     }
 
     /// Changes only the Home ranking projection. Both bounded result sets are
@@ -566,6 +593,7 @@ public final class DirectorAppModel: ObservableObject {
         readStore: DatabaseStore? = nil,
         coordinator: IndexingCoordinator?,
         configuration: IndexingCoordinator.Configuration?,
+        capabilityHistoryService: CapabilityHistoryCoordinator? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
         capabilityRestoreCoordinator: CapabilityRestoreCoordinator? = nil,
         presentationSnapshotStore: PresentationSnapshotStore? = nil,
@@ -582,6 +610,22 @@ public final class DirectorAppModel: ObservableObject {
         self.store = store
         self.readStore = readStore ?? store
         self.coordinator = coordinator
+        self.capabilityHistoryService = capabilityHistoryService ?? coordinator?.capabilityHistoryService
+        if let capabilityHistoryService = self.capabilityHistoryService {
+            capabilityHistoryStatusSignal = CapabilityHistoryStatus(
+                accessMode: capabilityHistoryService.accessMode,
+                epoch: nil,
+                revision: nil,
+                eventCount: nil,
+                baselineCount: nil,
+                isInitialized: nil,
+                initializedScopeCount: nil,
+                issueCodes: capabilityHistoryService.accessMode == .readOnly ? [.readOnlyLockConflict] : []
+            )
+        } else {
+            capabilityHistoryStatusSignal = .unavailable
+            capabilityHistoryRevision = nil
+        }
         self.configuration = configuration
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
@@ -1040,6 +1084,184 @@ public final class DirectorAppModel: ObservableObject {
         )
     }
 
+    /// Lazily reads one bounded history page. This is the only AppModel path
+    /// used by history list/detail presentation; construction, cache restore,
+    /// navigation and language changes never call it.
+    public func capabilityHistoryPage(
+        _ query: CapabilityHistoryQuery
+    ) async throws -> CapabilityHistoryPage {
+        guard let capabilityHistoryService else {
+            throw CapabilityHistoryStore.StoreError.storageUnavailable
+        }
+        let page = try await capabilityHistoryService.page(query)
+        publishCapabilityHistoryStatus(await capabilityHistoryService.status(refresh: false))
+        return page
+    }
+
+    /// Explicit lazy status read. Views may use the published signal after a
+    /// mutation and call this method only when opening history UI.
+    public func capabilityHistoryStatus() async -> CapabilityHistoryStatus {
+        guard let capabilityHistoryService else {
+            publishCapabilityHistoryStatus(.unavailable)
+            return .unavailable
+        }
+        let status = await capabilityHistoryService.status()
+        publishCapabilityHistoryStatus(status)
+        return status
+    }
+
+    /// The Settings confirmation is owned by the frontend. Calling this method
+    /// means that confirmation has already succeeded.
+    public func clearCapabilityHistoryConfirmed() async throws {
+        guard let capabilityHistoryService else {
+            throw CapabilityHistoryStore.StoreError.storageUnavailable
+        }
+        capabilityHistoryClearGeneration &+= 1
+        let status = try await capabilityHistoryService.clearConfirmed()
+        publishCapabilityHistoryStatus(status)
+    }
+
+    /// Builds the bounded usage/evaluation query only after an eligible event
+    /// is selected. Missing events intentionally return nil.
+    public func capabilityChangeUsageQuery(
+        for event: CapabilityChangeEvent,
+        nextObservedAt _: Date?,
+        period: CapabilityChangeUsagePeriod = .recent30
+    ) async -> CapabilityChangeUsageQuery? {
+        guard event.kind != .missing else { return nil }
+        // Never trust the current filtered/paged timeline to provide the
+        // interval boundary. Authenticate the epoch-qualified event and find
+        // its next same-resource neighbor in the complete retained state.
+        guard let capabilityHistoryService,
+              let boundary = try? await capabilityHistoryService.eventBoundary(
+                eventID: event.id,
+                resourceID: event.resourceID,
+                observedAt: event.observedAt
+              ) else { return nil }
+        let evaluations = evaluationStore
+        let evaluationRevision = await Task.detached(priority: .utility) {
+            Self.evaluationRevision(for: evaluations.readSnapshot())
+        }.value
+        let statisticsThrough = statisticsWindow?.end
+        guard let readStore, let statisticsThrough else {
+            return CapabilityChangeUsageQuery(
+                eventID: event.id,
+                resourceID: event.resourceID,
+                observedAt: event.observedAt,
+                nextObservedAt: boundary.nextObservedAt,
+                period: period,
+                referenceDate: nowProvider(),
+                calendar: statisticsCalendar,
+                statisticsThrough: nil,
+                databaseIdentity: nil,
+                evaluationRevision: evaluationRevision
+            )
+        }
+        guard let identity = try? await readStore.presentationIdentity() else {
+            return CapabilityChangeUsageQuery(
+                eventID: event.id,
+                resourceID: event.resourceID,
+                observedAt: event.observedAt,
+                nextObservedAt: boundary.nextObservedAt,
+                period: period,
+                referenceDate: nowProvider(),
+                calendar: statisticsCalendar,
+                statisticsThrough: statisticsThrough,
+                databaseIdentity: nil,
+                evaluationRevision: evaluationRevision
+            )
+        }
+        guard statisticsThrough >= event.observedAt else {
+            return CapabilityChangeUsageQuery(
+                eventID: event.id,
+                resourceID: event.resourceID,
+                observedAt: event.observedAt,
+                nextObservedAt: boundary.nextObservedAt,
+                period: period,
+                referenceDate: nowProvider(),
+                calendar: statisticsCalendar,
+                statisticsThrough: statisticsThrough,
+                databaseIdentity: identity,
+                evaluationRevision: evaluationRevision
+            )
+        }
+        return CapabilityChangeUsageQuery(
+            eventID: event.id,
+            resourceID: event.resourceID,
+            observedAt: event.observedAt,
+            nextObservedAt: boundary.nextObservedAt,
+            period: period,
+            referenceDate: nowProvider(),
+            calendar: statisticsCalendar,
+            statisticsThrough: statisticsThrough,
+            databaseIdentity: identity,
+            evaluationRevision: evaluationRevision
+        )
+    }
+
+    public func capabilityChangeUsageQuery(
+        for event: CapabilityChangeEvent,
+        period: CapabilityChangeUsagePeriod = .recent30
+    ) async -> CapabilityChangeUsageQuery? {
+        await capabilityChangeUsageQuery(for: event, nextObservedAt: nil, period: period)
+    }
+
+    /// One selected event produces one bounded repository task. Counts and
+    /// evaluations remain owned by the existing query/evaluation stores.
+    public func capabilityChangeUsageSummary(
+        _ query: CapabilityChangeUsageQuery
+    ) async throws -> CapabilityChangeUsageSummary {
+        try await CapabilityChangeUsageRepository(
+            database: readStore,
+            evaluations: evaluationStore
+        ).summary(for: query)
+    }
+
+    private func publishCapabilityHistoryStatus(_ status: CapabilityHistoryStatus) {
+        guard capabilityHistoryStatusSignal != status else { return }
+        capabilityHistoryStatusSignal = status
+        capabilityHistoryRevision = status.revision
+        capabilityHistoryMutationRevision &+= 1
+    }
+
+    private func synchronizeCapabilityHistoryStatus(indexingEpoch: UInt64) async {
+        guard lifecycleEpoch == indexingEpoch, !isDeletingDerivedData,
+              let capabilityHistoryService else { return }
+        let clearGeneration = capabilityHistoryClearGeneration
+        let status = await capabilityHistoryService.status(refresh: false)
+        guard lifecycleEpoch == indexingEpoch, !isDeletingDerivedData,
+              clearGeneration == capabilityHistoryClearGeneration else { return }
+        publishCapabilityHistoryStatus(status)
+    }
+
+    private nonisolated static func evaluationRevision(
+        for snapshot: InvocationEvaluationSnapshot
+    ) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in snapshot.availability.rawValue.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        for byte in String(snapshot.mutationRevision).utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        for evaluation in snapshot.evaluations.values.sorted(by: { $0.invocationID < $1.invocationID }) {
+            let fields = [
+                evaluation.invocationID,
+                evaluation.sessionID,
+                evaluation.resourceID ?? "",
+                evaluation.label.rawValue,
+                String(evaluation.updatedAt.timeIntervalSince1970.bitPattern),
+            ]
+            for byte in fields.joined(separator: "\u{1F}").utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01b3
+            }
+        }
+        return hash
+    }
+
     /// Long-running source work used by the application refresh worker. It
     /// deliberately does not go through the bounded presentation read path.
     @discardableResult
@@ -1053,7 +1275,13 @@ public final class DirectorAppModel: ObservableObject {
         sourceProgressLastPublishedAt = nil
         indexingProgress = .init(phase: .scanning, processedFiles: 0, totalFiles: 0, indexedSessions: 0, lastError: nil)
         do {
-            let result = try await coordinator.run(configuration: configuration) { [weak self] progress in
+            let result = try await coordinator.run(
+                configuration: configuration,
+                onCapabilityHistoryStatus: { [weak self] _ in
+                    guard !Task.isCancelled else { return }
+                    await self?.synchronizeCapabilityHistoryStatus(indexingEpoch: epoch)
+                }
+            ) { [weak self] progress in
                 Task { @MainActor [weak self] in
                     guard let self, self.lifecycleEpoch == epoch, !self.isDeletingDerivedData else { return }
                     let now = self.nowProvider()
@@ -1072,6 +1300,10 @@ public final class DirectorAppModel: ObservableObject {
             guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
             pluginInventoryAvailable = result.runtimePluginInventoryAvailable
             pluginPackagesAvailable = result.runtimePluginPackagesAvailable
+            // A clear may have occurred while later session parsing ran.
+            // Read current metadata instead of replaying the run's snapshot.
+            await synchronizeCapabilityHistoryStatus(indexingEpoch: epoch)
+            guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
             indexingProgress = .init(
                 phase: result.cancelled ? .cancelled : .completed,
                 processedFiles: result.processedFiles,
@@ -1108,11 +1340,15 @@ public final class DirectorAppModel: ObservableObject {
             return !result.cancelled
         } catch is CancellationError {
             guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
+            await synchronizeCapabilityHistoryStatus(indexingEpoch: epoch)
+            guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
             indexingProgress = .init(phase: .cancelled, processedFiles: 0, totalFiles: 0, indexedSessions: 0, lastError: nil)
             sourceDataFresh = false
             isIndexing = false
             presentationState = presentationStateAfterRefresh()
         } catch {
+            guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
+            await synchronizeCapabilityHistoryStatus(indexingEpoch: epoch)
             guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
             indexingError = error.localizedDescription
             indexingProgress = .init(phase: .completed, processedFiles: 0, totalFiles: 0, indexedSessions: 0, lastError: error.localizedDescription)
@@ -3141,6 +3377,9 @@ public final class DirectorAppModel: ObservableObject {
         isDeletingDerivedData = true
         defer { isDeletingDerivedData = false }
         lifecycleEpoch &+= 1
+        // Derived-index deletion preserves the independent history file, but
+        // any source result issued before this lifecycle boundary is revoked.
+        await capabilityHistoryService?.cancelPendingWrites()
         presentationRequestSequence &+= 1
         detailRequestSequence &+= 1
         diagnosticsRequestSequence &+= 1

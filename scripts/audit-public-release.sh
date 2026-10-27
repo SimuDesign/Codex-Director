@@ -70,8 +70,12 @@ file_size_bytes() {
 }
 
 normalize_safe_examples() {
+    # Exact quoted system-root constants are public platform facts. Do not
+    # normalize nested paths: they can identify a private build or artifact.
+    local system_temporary_root="/private"'/tmp'
     sed -E \
         -e 's#/Users/(example|runner|test|Shared)#{{HOME}}#g' \
+        -e "s#\"${system_temporary_root}/?\"#\"{{SYSTEM_TMP_ROOT}}\"#g" \
         -e 's#github_pat_EXAMPLE[A-Za-z0-9_]*#REDACTED_EXAMPLE#g' \
         -e 's#gh[pousr]_EXAMPLE[A-Za-z0-9]*#REDACTED_EXAMPLE#g'
 }
@@ -102,6 +106,9 @@ scan_tracked_file() {
     local lower_path="${entry_path:l}"
 
     case "$lower_path" in
+        capability-history-v*.json|*/capability-history-v*.json|.capability-history-v*.json.*|*/.capability-history-v*.json.*|.capability-history.lock|*/.capability-history.lock)
+            record_issue "local-capability-history" "$entry_path"
+            ;;
         *.sqlite|*.sqlite3|*.db|*.db-wal|*.db-shm|*.db-journal|*.log|*.codexpack.zip|*.pem|*.key|*.p12|*.mobileprovision|*.xcuserstate)
             record_issue "sensitive-file-type" "$entry_path"
             ;;
@@ -144,6 +151,9 @@ scan_history() {
         [[ -n "$object_path" ]] || continue
         local lower_path="${object_path:l}"
         case "$lower_path" in
+            capability-history-v*.json|*/capability-history-v*.json|.capability-history-v*.json.*|*/.capability-history-v*.json.*|.capability-history.lock|*/.capability-history.lock)
+                record_issue "local-capability-history-in-git" "$object_path"
+                ;;
             *.sqlite|*.sqlite3|*.db|*.db-wal|*.db-shm|*.db-journal|*.log|*.codexpack.zip|*.pem|*.key|*.p12|*.mobileprovision|*.xcuserstate|*/.env|*/.env.*|.env|.env.*)
                 if [[ "$lower_path" != ".env.example" && "$lower_path" != */.env.example ]]; then
                     record_issue "sensitive-history-path" "$object_path"

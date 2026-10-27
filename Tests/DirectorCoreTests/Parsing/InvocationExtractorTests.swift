@@ -337,6 +337,208 @@ final class InvocationExtractorTests: XCTestCase {
         XCTAssertEqual(result.calls[1].ordinal, 1)
     }
 
+    func testCommandItemCompletionOverridesGenericOutputWithoutDuplicatingCall() {
+        let completed = envelope(
+            #"{"type":"event_msg","timestamp":"2026-08-15T04:12:06.000Z","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"command-call","status":"failed","duration":{"secs":1,"nanos":250000000},"exit_code":7}}}"#,
+            line: 2
+        )
+        let result = extract([
+            call("", callID: "command-call", name: "exec_command", line: 1),
+            completed,
+            output("", callID: "command-call", line: 3),
+        ])
+
+        XCTAssertEqual(result.calls.count, 1)
+        XCTAssertEqual(result.calls[0].id, "command-call-item")
+        XCTAssertEqual(result.calls[0].status, .failed)
+        XCTAssertEqual(result.calls[0].durationMs, 1_250)
+        XCTAssertEqual(result.calls[0].errorCategory, "exit_7")
+    }
+
+    func testMCPItemCompletionsCorrelateDistinctRetryIDsAndDeduplicate() {
+        let failed = envelope(
+            #"{"type":"event_msg","timestamp":"2026-08-15T04:12:06.000Z","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"mcp-call-1","status":"failed","duration":{"secs":0,"nanos":500000000},"error":{"message":"synthetic"}}}}"#,
+            line: 2
+        )
+        let duplicate = envelope(
+            #"{"type":"event_msg","timestamp":"2026-08-15T04:12:06.100Z","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"mcp-call-1","status":"failed","duration":{"secs":0,"nanos":500000000},"error":{"message":"synthetic"}}}}"#,
+            line: 3
+        )
+        let completed = envelope(
+            #"{"type":"event_msg","timestamp":"2026-08-15T04:12:08.000Z","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"mcp-call-2","status":"completed","duration":{"secs":2,"nanos":0},"result":{}}}}"#,
+            line: 5
+        )
+        let result = extract([
+            call("", callID: "mcp-call-1", name: "js", line: 1),
+            failed,
+            duplicate,
+            call("", callID: "mcp-call-2", name: "js", line: 4),
+            completed,
+        ])
+
+        XCTAssertEqual(result.calls.count, 2)
+        XCTAssertEqual(result.calls.map(\.status), [.failed, .completed])
+        XCTAssertEqual(result.calls.map(\.durationMs), [500, 2_000])
+        XCTAssertEqual(result.calls.map(\.errorCategory), ["mcp_error", nil])
+    }
+
+    func testItemCompletionBeforeStartResolvesWithoutCreatingStandaloneCall() {
+        let completed = envelope(
+            #"{"type":"event_msg","timestamp":"2026-08-15T04:12:05.000Z","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"out-of-order","status":"failed","duration":{"secs":0,"nanos":1000000},"error":{"message":"synthetic"}}}}"#,
+            line: 1
+        )
+        let result = extract([
+            completed,
+            call("", callID: "out-of-order", name: "js", line: 2),
+        ])
+
+        XCTAssertEqual(result.calls.count, 1)
+        XCTAssertEqual(result.calls[0].id, "out-of-order-item")
+        XCTAssertEqual(result.calls[0].status, .failed)
+        XCTAssertEqual(result.calls[0].durationMs, 1)
+    }
+
+    func testMalformedAmbiguousAndUnknownItemCompletionsDoNotUpdateKnownCall() {
+        let unknown = envelope(
+            #"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","id":"known-call","status":"failed"}}}"#,
+            line: 2
+        )
+        let missingID = envelope(
+            #"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","status":"failed","duration":{"secs":0,"nanos":0}}}}"#,
+            line: 3
+        )
+        let ambiguous = envelope(
+            #"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"known-call","call_id":"different-call","status":"failed","duration":{"secs":0,"nanos":0}}}}"#,
+            line: 4
+        )
+        let invalidDuration = envelope(
+            #"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"known-call","status":"completed","duration":{"secs":999999999999,"nanos":0},"exit_code":0}}}"#,
+            line: 5
+        )
+        let result = extract([
+            call("", callID: "known-call", name: "exec_command", line: 1),
+            unknown,
+            missingID,
+            ambiguous,
+            invalidDuration,
+        ])
+
+        XCTAssertEqual(result.calls.count, 1)
+        XCTAssertEqual(result.calls[0].status, .completed)
+        XCTAssertNil(result.calls[0].durationMs)
+        XCTAssertTrue(result.issues.contains { $0.message.contains("identifier") })
+    }
+
+    func testIncrementalBaselineCompletionKeepsStableCallAndChildIdentity() {
+        let parent = InvocationEvent(
+            id: "persisted-item", sessionID: sessionID, parentCallID: nil, ordinal: 4,
+            timestamp: epoch, actorName: nil, resourceID: "tool:js", kind: .tool,
+            status: .completed, durationMs: nil, confidence: .exact, errorCategory: nil
+        )
+        let child = InvocationEvent(
+            id: "persisted-item-skill-skill:sample", sessionID: sessionID,
+            parentCallID: parent.id, ordinal: 5, timestamp: epoch, actorName: nil,
+            resourceID: "skill:sample", kind: .skill, status: .completed,
+            durationMs: nil, confidence: .inferred, errorCategory: nil,
+            evidenceKind: .skillManifestRead
+        )
+        let completed = envelope(
+            #"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","id":"persisted-call","status":"failed","duration":{"secs":1,"nanos":0},"error":{"message":"synthetic"}}}}"#,
+            line: 1
+        )
+        var accumulator = InvocationExtractor().makeAccumulator(
+            sessionID: sessionID,
+            existingCalls: [parent, child]
+        )
+        accumulator.process(completed)
+        XCTAssertEqual(accumulator.unresolvedResultIdentifiers, ["persisted-call"])
+        accumulator.resolvePendingResults(aliases: ["persisted-call": parent.id])
+        let result = accumulator.finish()
+
+        XCTAssertEqual(result.calls.map(\.id), [parent.id, child.id])
+        XCTAssertEqual(result.calls.map(\.status), [.failed, .failed])
+        XCTAssertEqual(result.calls[0].durationMs, 1_000)
+        XCTAssertEqual(result.calls[0].errorCategory, "mcp_error")
+    }
+
+    func testIncrementalChildMetadataDoesNotRewriteDelegationAndTaskCompleteUpdatesOriginal() {
+        let delegation = InvocationEvent(
+            id: "delegation-\(sessionID)", sessionID: sessionID, parentCallID: nil,
+            ordinal: 3, timestamp: epoch, actorName: nil, resourceID: "agent:sample",
+            kind: .agent, status: .started, durationMs: nil, confidence: .inferred,
+            errorCategory: nil, evidenceKind: .agentDelegation
+        )
+        let metadata = envelope(
+            #"{"type":"session_meta","payload":{"id":"session:test","parent_thread_id":"parent","agent_role":"Sample Agent"}}"#,
+            line: 1
+        )
+        var metadataOnly = InvocationExtractor().makeAccumulator(
+            sessionID: sessionID,
+            existingCalls: [delegation]
+        )
+        metadataOnly.process(metadata)
+        XCTAssertTrue(metadataOnly.finish().calls.isEmpty)
+
+        let complete = envelope(
+            #"{"type":"event_msg","payload":{"type":"task_complete"}}"#,
+            line: 2
+        )
+        var terminal = InvocationExtractor().makeAccumulator(
+            sessionID: sessionID,
+            existingCalls: [delegation]
+        )
+        terminal.process(metadata)
+        terminal.process(complete)
+        let result = terminal.finish()
+
+        XCTAssertEqual(result.calls.count, 1)
+        XCTAssertEqual(result.calls[0].id, delegation.id)
+        XCTAssertEqual(result.calls[0].ordinal, delegation.ordinal)
+        XCTAssertEqual(result.calls[0].status, .completed)
+        XCTAssertEqual(result.calls[0].resourceID, delegation.resourceID)
+    }
+
+    func testIncrementalUnknownCapabilityChildDoesNotInheritWrapperSuccess() {
+        let parent = InvocationEvent(
+            id: "persisted-wrapper", sessionID: sessionID, parentCallID: nil, ordinal: 4,
+            timestamp: epoch, actorName: nil, resourceID: "tool:exec", kind: .tool,
+            status: .unknown, durationMs: nil, confidence: .exact, errorCategory: nil
+        )
+        let child = InvocationEvent(
+            id: "persisted-wrapper-skill", sessionID: sessionID,
+            parentCallID: parent.id, ordinal: 5, timestamp: epoch, actorName: nil,
+            resourceID: "skill:sample", kind: .skill, status: .unknown,
+            durationMs: nil, confidence: .inferred, errorCategory: nil,
+            evidenceKind: .skillManifestRead
+        )
+        let completed = envelope(
+            #"{"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"persisted-call","status":"completed","duration":{"secs":0,"nanos":0},"exit_code":0}}}"#,
+            line: 1
+        )
+        var accumulator = InvocationExtractor().makeAccumulator(
+            sessionID: sessionID,
+            existingCalls: [parent, child]
+        )
+        accumulator.process(completed)
+        accumulator.resolvePendingResults(aliases: ["persisted-call": parent.id])
+        let result = accumulator.finish()
+
+        XCTAssertEqual(result.calls.count, 1)
+        XCTAssertEqual(result.calls[0].id, parent.id)
+        XCTAssertEqual(result.calls[0].status, .completed)
+        XCTAssertFalse(result.calls.contains { $0.id == child.id })
+    }
+
+    func testWrapperOutputDoesNotProveNestedSkillSucceeded() throws {
+        let extractor = InvocationExtractor(skillResolver: SkillEvidenceResolver(resources: skillResources()))
+        let result = extractor.extract(sessionID: sessionID, envelopes: [
+            envelope(#"{"type":"response_item","payload":{"type":"custom_tool_call","id":"wrapper-item","call_id":"wrapper-call","name":"exec","input":"await Promise.allSettled([tools.exec_command({cmd: 'cat sample-skill/SKILL.md'})])"}}"#, line: 1),
+            output("", callID: "wrapper-call", line: 2),
+        ])
+
+        XCTAssertEqual(result.calls.first { $0.kind == .skill }?.status, .unknown)
+    }
+
     func testDuplicateEventDoesNotDuplicateCall() {
         let first = call("", name: "read", line: 1)
         let duplicate = call("", name: "read", line: 2)

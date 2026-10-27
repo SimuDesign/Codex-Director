@@ -6,9 +6,10 @@ import Foundation
 public enum CapabilityCompanionIndex {
     // v1 could be written by the first 1.3 migration implementation while
     // global paired Agents still used their callable TOML path as identity.
-    // v2 reruns the source projection once so those users converge on the
-    // historical Brief-derived identity without reparsing session history.
-    public static let currentVersion = "capability-companions.v2"
+    // v2 reran the source projection once so users converged on the historical
+    // Brief-derived identity. v3 adds the normalized project registry layouts;
+    // session history is still not reparsed.
+    public static let currentVersion = "capability-companions.v3"
 }
 
 /// Decides whether an indexed database needs the one-time source pass that
@@ -325,17 +326,20 @@ public struct CapabilityCompanionResolver: Sendable {
     private let roots: [ScanRoot]
     private let transientRoots: [String: URL]
     private let agentPairings: [CapabilityAgentPairing]
+    private let fileSystem: FileSystemClient
 
     public init(
         resources: [CapabilityResource],
         roots: [ScanRoot],
         transientRoots: [String: URL] = [:],
-        agentPairings: [CapabilityAgentPairing] = []
+        agentPairings: [CapabilityAgentPairing] = [],
+        fileSystem: FileSystemClient = FileSystemClient()
     ) {
         self.resources = resources
         self.roots = roots
         self.transientRoots = transientRoots
         self.agentPairings = agentPairings
+        self.fileSystem = fileSystem
     }
 
     public func resolve() -> [CapabilityCompanionRelation] {
@@ -376,15 +380,19 @@ public struct CapabilityCompanionResolver: Sendable {
 
         for root in roots where root.kind == .projects {
             for declaration in registryDeclarations(root: root) {
-                let matchingAgents = agents.filter {
-                    $0.projectID == root.id && normalize($0.name) == normalize(declaration.agentName)
-                }
-                guard matchingAgents.count == 1, let agent = matchingAgents.first else {
-                    if matchingAgents.count > 1 { issueKeys.insert("agent|\(root.id)") }
-                    continue
-                }
+                guard let agent = resolveRegistryAgent(
+                    declaration.agent,
+                    rootID: root.id,
+                    candidates: agents,
+                    issueKeys: &issueKeys
+                ) else { continue }
                 for skillName in declaration.skillNames {
-                    guard let skill = resolveSkill(skillName, for: agent, candidates: skillsByName, issueKeys: &issueKeys) else { continue }
+                    guard let skill = resolveSkill(
+                        RegistryReference(token: skillName, requiresAgentStem: false),
+                        for: agent,
+                        candidates: skills,
+                        issueKeys: &issueKeys
+                    ) else { continue }
                     result.insert(CapabilityCompanionRelation(
                         agentID: agent.id,
                         skillID: skill.id,
@@ -478,8 +486,13 @@ public struct CapabilityCompanionResolver: Sendable {
         for (url, source) in urls {
             let path = url.standardizedFileURL.path
             guard seenPaths.insert(path).inserted,
-                  let data = try? Data(contentsOf: url), data.count <= 512 * 1024,
-                  let text = String(data: data, encoding: .utf8) else { continue }
+                  case .success(let read) = fileSystem.readVerifiedData(
+                      url,
+                      within: rootURL,
+                      maximumByteCount: 512 * 1024
+                  ),
+                  fileSystem.validateDocumentRead(read, at: url, within: rootURL),
+                  let text = String(data: read.data, encoding: .utf8) else { continue }
             texts.append(DeclarationSourceText(text: text, source: source))
         }
         return texts
@@ -517,6 +530,28 @@ public struct CapabilityCompanionResolver: Sendable {
         return nil
     }
 
+    private func resolveSkill(
+        _ reference: RegistryReference,
+        for agent: CapabilityResource,
+        candidates: [CapabilityResource],
+        issueKeys: inout Set<String>
+    ) -> CapabilityResource? {
+        let key = normalize(reference.token).trimmingCharacters(in: CharacterSet(charactersIn: "$`"))
+        let all = candidates.filter { skill in
+            skillAliases(skill).contains(key)
+        }
+        guard !all.isEmpty else { return nil }
+        if let projectID = agent.projectID {
+            let local = all.filter { $0.projectID == projectID }
+            if local.count == 1 { return local[0] }
+            if !local.isEmpty { issueKeys.insert("skill|\(agent.sourceRootID)"); return nil }
+        }
+        let global = all.filter { $0.projectID == nil }
+        if global.count == 1 { return global[0] }
+        if all.count > 1 { issueKeys.insert("skill|\(agent.sourceRootID)") }
+        return nil
+    }
+
     private func resolveAgent(_ token: String, for skill: CapabilityResource, candidates: [String: [CapabilityResource]], issueKeys: inout Set<String>) -> CapabilityResource? {
         let key = normalize(token).trimmingCharacters(in: CharacterSet(charactersIn: "`$"))
         guard let all = candidates[key], !all.isEmpty else { return nil }
@@ -529,6 +564,58 @@ public struct CapabilityCompanionResolver: Sendable {
         if global.count == 1 { return global[0] }
         if all.count > 1 { issueKeys.insert("agent|\(skill.sourceRootID)") }
         return nil
+    }
+
+    private func resolveRegistryAgent(
+        _ reference: RegistryReference,
+        rootID: String,
+        candidates: [CapabilityResource],
+        issueKeys: inout Set<String>
+    ) -> CapabilityResource? {
+        let key = normalize(reference.token)
+        let matching = candidates.filter { agent in
+            guard agent.projectID == rootID else { return false }
+            if reference.requiresAgentStem {
+                return agentConfigurationStems(agent).contains(key)
+            }
+            return agentAliases(agent).contains(key)
+        }
+        // Legacy registries may coexist with the historical registry-backed
+        // Agent identity and a canonical project TOML that has the same name.
+        // Keep both resources, but bind the declaration to the one unique
+        // callable TOML. Multiple TOML matches remain ambiguous.
+        let canonicalTOML = matching.filter { !agentConfigurationStems($0).isEmpty }
+        if canonicalTOML.count == 1 { return canonicalTOML[0] }
+        if canonicalTOML.count > 1 {
+            issueKeys.insert("agent|\(rootID)")
+            return nil
+        }
+        guard matching.count == 1 else {
+            if matching.count > 1 { issueKeys.insert("agent|\(rootID)") }
+            return nil
+        }
+        return matching[0]
+    }
+
+    private func skillAliases(_ resource: CapabilityResource) -> Set<String> {
+        var aliases = Set([normalize(resource.name)])
+        if let relative = resource.relativeSourcePath {
+            let url = URL(fileURLWithPath: relative)
+            aliases.insert(normalize(url.deletingPathExtension().lastPathComponent))
+            aliases.insert(normalize(url.deletingLastPathComponent().lastPathComponent))
+        }
+        aliases.insert(normalize(resource.id))
+        return aliases
+    }
+
+    private func agentAliases(_ resource: CapabilityResource) -> Set<String> {
+        Set([normalize(resource.name)] + agentConfigurationStems(resource))
+    }
+
+    private func agentConfigurationStems(_ resource: CapabilityResource) -> Set<String> {
+        guard let relative = resource.relativeSourcePath,
+              URL(fileURLWithPath: relative).pathExtension.lowercased() == "toml" else { return [] }
+        return [normalize(URL(fileURLWithPath: relative).deletingPathExtension().lastPathComponent)]
     }
 
     private func positiveSkillDirectives(in text: String) -> [String] {
@@ -594,83 +681,163 @@ public struct CapabilityCompanionResolver: Sendable {
         return Array(Set(result)).sorted()
     }
 
-    private struct RegistryDeclaration {
-        let agentName: String
+    private struct RegistryReference: Hashable {
+        let token: String
+        let requiresAgentStem: Bool
+    }
+
+    private struct RegistryDeclaration: Hashable {
+        let agent: RegistryReference
         let skillNames: [String]
     }
 
     private func registryDeclarations(root: ScanRoot) -> [RegistryDeclaration] {
-        let urls = [
-            root.url.appendingPathComponent("agents/registry.json"),
-            root.url.appendingPathComponent("registry.json")
-        ]
-        for url in urls {
-            guard let data = try? Data(contentsOf: url),
-                  data.count <= 512 * 1024,
-                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
-            var declarations: [RegistryDeclaration] = []
-            collectRegistryDeclarations(object, hintedName: nil, insidePackages: false, into: &declarations)
-            return declarations
+        let primaryURL = root.url.appendingPathComponent("agents/registry.json")
+        let primaryRead = fileSystem.readVerifiedData(
+            primaryURL,
+            within: root.url,
+            maximumByteCount: CodexProjectRegistry.maximumByteCount
+        )
+        let selection: (url: URL, read: Result<FileSystemDocumentRead, FileSystemReadError>)
+        if case .failure(.notFound) = primaryRead {
+            let compatibilityURL = root.url.appendingPathComponent("registry.json")
+            selection = (
+                compatibilityURL,
+                fileSystem.readVerifiedData(
+                    compatibilityURL,
+                    within: root.url,
+                    maximumByteCount: CodexProjectRegistry.maximumByteCount
+                )
+            )
+        } else {
+            selection = (primaryURL, primaryRead)
         }
-        return []
-    }
+        guard case .success(let read) = selection.read,
+              fileSystem.validateDocumentRead(read, at: selection.url, within: root.url),
+              case .success(let document) = CodexProjectRegistry.parse(read.data) else { return [] }
 
-    private func collectRegistryDeclarations(
-        _ value: Any,
-        hintedName: String?,
-        insidePackages: Bool,
-        into result: inout [RegistryDeclaration]
-    ) {
-        guard let dictionary = value as? [String: Any] else {
-            if let array = value as? [Any] {
-                for item in array {
-                    collectRegistryDeclarations(item, hintedName: hintedName, insidePackages: insidePackages, into: &result)
+        var declarations = Set<RegistryDeclaration>()
+        for entry in document.legacyEntries {
+            switch entry.kind {
+            case .unspecified, .agent:
+                if !entry.usesSkills.isEmpty {
+                    declarations.insert(RegistryDeclaration(
+                        agent: RegistryReference(token: entry.name, requiresAgentStem: false),
+                        skillNames: entry.usesSkills
+                    ))
+                }
+            case .skill:
+                let skillToken = entry.skillName ?? entry.name
+                for agentName in entry.invokedBy {
+                    declarations.insert(RegistryDeclaration(
+                        agent: RegistryReference(token: agentName, requiresAgentStem: false),
+                        skillNames: [skillToken]
+                    ))
+                }
+            case .workflow, .unsupported:
+                break
+            }
+            if entry.kind == .unspecified, !entry.invokedBy.isEmpty {
+                let skillToken = entry.skillName ?? entry.name
+                for agentName in entry.invokedBy {
+                    declarations.insert(RegistryDeclaration(
+                        agent: RegistryReference(token: agentName, requiresAgentStem: false),
+                        skillNames: [skillToken]
+                    ))
                 }
             }
-            return
         }
-        let nestedAgent = dictionary["agent"] as? [String: Any]
-        let ownerName = (dictionary["name"] as? String)
-            ?? (dictionary["agent"] as? String)
-            ?? (dictionary["agentName"] as? String)
-            ?? (nestedAgent?["name"] as? String)
-            ?? hintedName
 
-        // `usesSkills` belongs to an Agent package. The inverse `invokedBy`
-        // declaration belongs to a Skill package: its values are Agent names,
-        // not Skill names. Keeping these directions explicit avoids attaching
-        // a Skill to an unrelated Agent merely because both strings occur in
-        // the same registry object.
-        let usesSkills = stringValues(dictionary["usesSkills"])
-            + stringValues(nestedAgent?["usesSkills"])
-        if let agentName = (nestedAgent?["name"] as? String) ?? ownerName, !usesSkills.isEmpty {
-            result.append(RegistryDeclaration(agentName: agentName, skillNames: usesSkills))
-        }
-        let invokedBy = stringValues(dictionary["invokedBy"])
-            + stringValues(nestedAgent?["invokedBy"])
-        let type = ((dictionary["type"] as? String) ?? (dictionary["kind"] as? String) ?? "").lowercased()
-        let skillName = (dictionary["skillName"] as? String)
-            ?? (dictionary["skill"] as? String)
-            ?? ((type.contains("skill") || !invokedBy.isEmpty) ? ownerName : nil)
-        if let skillName, !invokedBy.isEmpty {
-            for agentName in invokedBy {
-                result.append(RegistryDeclaration(agentName: agentName, skillNames: [skillName]))
+        var agentAliasesByPackageID: [String: Set<RegistryReference>] = [:]
+        var skillAliasesByPackageID: [String: Set<String>] = [:]
+        for package in document.packages {
+            guard let id = package.id else { continue }
+            let key = normalize(id)
+            switch package.kind {
+            case .nativeAgent, .agent:
+                if let nativeAgent = package.nativeAgent {
+                    agentAliasesByPackageID[key, default: []].insert(RegistryReference(
+                        token: normalize(nativeAgent),
+                        requiresAgentStem: true
+                    ))
+                } else if let name = package.name {
+                    agentAliasesByPackageID[key, default: []].insert(RegistryReference(
+                        token: normalize(name),
+                        requiresAgentStem: false
+                    ))
+                }
+            case .auxiliarySkill, .skill:
+                if let name = package.name {
+                    skillAliasesByPackageID[key, default: []].insert(normalize(name))
+                }
+            case .unknown:
+                break
             }
         }
-        for (key, child) in dictionary {
-            let childInsidePackages = insidePackages || key == "packages"
-            let childHint = childInsidePackages && key != "packages" ? key : nil
-            collectRegistryDeclarations(child, hintedName: childHint, insidePackages: childInsidePackages, into: &result)
-        }
-    }
+        guard !agentAliasesByPackageID.values.contains(where: { $0.count > 1 }),
+              !skillAliasesByPackageID.values.contains(where: { $0.count > 1 }) else { return [] }
 
-    private func stringValues(_ value: Any?) -> [String] {
-        if let string = value as? String { return [string] }
-        if let values = value as? [String] { return values }
-        if let values = value as? [[String: Any]] {
-            return values.compactMap { ($0["name"] as? String) ?? ($0["id"] as? String) }
+        func agentReference(for token: String) -> RegistryReference {
+            if let aliases = agentAliasesByPackageID[normalize(token)], aliases.count == 1,
+               let alias = aliases.first {
+                return alias
+            }
+            return RegistryReference(token: token, requiresAgentStem: false)
         }
-        return []
+
+        func skillReference(for token: String) -> String {
+            if let aliases = skillAliasesByPackageID[normalize(token)], aliases.count == 1,
+               let alias = aliases.first {
+                return alias
+            }
+            return token
+        }
+
+        for package in document.packages {
+            let packageID = package.id ?? package.name
+            switch package.kind {
+            case .nativeAgent, .agent:
+                let reference: RegistryReference?
+                if let nativeAgent = package.nativeAgent {
+                    reference = RegistryReference(token: nativeAgent, requiresAgentStem: true)
+                } else if let name = package.name {
+                    reference = RegistryReference(token: name, requiresAgentStem: false)
+                } else if let packageID {
+                    reference = agentReference(for: packageID)
+                } else {
+                    reference = nil
+                }
+                guard let reference, !package.usesSkills.isEmpty else { continue }
+                declarations.insert(RegistryDeclaration(
+                    agent: reference,
+                    skillNames: package.usesSkills.map { skillReference(for: $0) }
+                ))
+            case .auxiliarySkill, .skill:
+                guard let rawSkillToken = package.name ?? packageID else { continue }
+                let skillToken = skillReference(for: rawSkillToken)
+                let agentReferences: [RegistryReference]
+                // In v5 `nativeAgent` is the canonical TOML filename stem.
+                // Otherwise only an explicit declared package-ID alias may
+                // map to a different canonical Agent name.
+                if let nativeAgent = package.nativeAgent {
+                    agentReferences = [RegistryReference(token: nativeAgent, requiresAgentStem: true)]
+                } else {
+                    agentReferences = package.invokedBy.map { agentReference(for: $0) }
+                }
+                for agent in agentReferences {
+                    declarations.insert(RegistryDeclaration(agent: agent, skillNames: [skillToken]))
+                }
+            case .unknown:
+                // Unknown future package types are coverage-only metadata.
+                // Do not guess whether they represent an Agent or a Skill.
+                continue
+            }
+        }
+        return declarations.sorted {
+            $0.agent.token == $1.agent.token
+                ? $0.skillNames.joined(separator: "\u{1f}") < $1.skillNames.joined(separator: "\u{1f}")
+                : $0.agent.token < $1.agent.token
+        }
     }
 
     private func frontmatterFields(in text: String) -> [String: String] {

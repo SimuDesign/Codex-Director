@@ -72,6 +72,36 @@ public enum PersistenceAllowlist {
         "remediation_status",
     ]
 
+    /// Keys in the independent capability-history schema v1 JSON document.
+    /// History intentionally excludes source paths, source bodies, diffs,
+    /// prompts, commands, accounts and credentials.
+    public static let capabilityHistoryStateKeys: Set<String> = [
+        "schemaVersion", "epoch", "revision", "nextSequence",
+        "retentionAnchorAt", "truncatedBefore", "latestScanCoverage", "scopes", "baselines",
+        "pendingMissing", "events", "issueCodes",
+    ]
+
+    public static let capabilityHistoryScopeKeys: Set<String> = [
+        "rootID", "scope", "rootKind", "initializedAt", "lastCompleteAt",
+    ]
+
+    public static let capabilityHistoryBaselineKeys: Set<String> = [
+        "resourceID", "sourceRootID", "name", "resourceKind", "scope",
+        "projectID", "documents", "signature", "signatureAlgorithm",
+        "documentSignatures", "document", "sha256", "presence",
+        "lastConfirmedAt", "missingSince",
+    ]
+
+    public static let capabilityHistoryPendingKeys: Set<String> = [
+        "resourceID", "sourceRootID", "firstMissingAt", "previousConfirmedAt",
+    ]
+
+    public static let capabilityHistoryEventKeys: Set<String> = [
+        "id", "resourceID", "name", "resourceKind", "scope", "projectID",
+        "kind", "changedDocuments", "changedDocumentsAreExact", "observedAt",
+        "previousConfirmedAt", "sequence", "retentionObservedAt",
+    ]
+
     /// Credential-value patterns that must never appear in persisted string
     /// values. Unlike bare-word substring checks, these only match actual
     /// credential material — API keys, tokens, PEM blocks, and key=value

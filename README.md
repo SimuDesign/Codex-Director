@@ -2,7 +2,7 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current development version: `1.5.1`. Requires macOS 26 or later.
+> Current version: `1.6.1`. Requires macOS 26 or later.
 
 Usage evidence distinguishes child-Agent delegation, Agent method reads and
 Skill manifest reads. A bounded, nonexecuting recognizer recovers supported
@@ -11,9 +11,14 @@ conditional or loop bodies, interpolated/tagged templates, unknown top-level
 evaluation and unsafe mutations. Delegation requests and
 inherited child history do not inflate capability totals. A read or dispatch is
 not proof of success or effectiveness; dynamic, unsupported or incomplete
-evidence may remain unobserved. The first refresh after this update reparses
-eligible recent 30-day 1.4.0 checkpoints in the background without replaying
-unchanged old archives or clearing folders and evaluations.
+evidence may remain unobserved. The existing parser-upgrade policy reparses
+eligible recent 30-day checkpoints from prior supported parser versions in the background without replaying
+unchanged old archives or clearing folders and evaluations. The 1.6 history
+feature itself does not advance the rollout parser or force historical reindexing.
+The separate compatibility repair uses parser v1.4.2 to merge supported
+structured tool completion states without adding calls; unchanged older
+archives remain deferred. Supported v5 project-registry declarations resolve
+to canonical Agent/Skill identities rather than duplicate capabilities.
 
 [简体中文](README.zh-CN.md) · [Version notes](CHANGELOG.md) · [中文更新说明](CHANGELOG.zh-CN.md)
 
@@ -43,6 +48,34 @@ Global and project folders reflect configuration ownership from the current read
 The browser uses responsive folder grids, compact outlined lists, brand-outline tabs, consistent section gutters and explicit control spacing, plus an in-place detail sidebar. Search, sort, the selected tab, and expanded relationships stay independent within each folder/tab for the current window session. Skill details link back to related Agents; declarations and seven-day shared-session observations remain separate, and neither implies effectiveness or proves invocation.
 
 Folder row counts cover **all usage projects**, not just the configuration owner or the folder. Each Agent and related-preview Skill shows its own attributed count; shared Skills are not added to Agent totals. Pending statistics show `—`; `0` means no attributed record in the computed period, not proof that a capability was not used. Folders and capability libraries share a remembered period independently of Home rankings, without changing membership or source files. Library scope and plugin-status filters remain available.
+
+## Capability change history
+
+Open **Change history** from Capability Folders, or expand the initially closed
+history section in an Agent or Skill detail. History records reliable local
+observations of Agent configurations and their companion method documents, and
+the `SKILL.md` of custom or independently installed Skills. Supporting scripts,
+images and binaries, plugin/system capabilities and project `AGENTS.md` files
+are outside this version's tracking scope.
+
+The first reliable scan of each scope quietly establishes a baseline. Later
+observations can record newly discovered, changed, rediscovered or missing
+capabilities. Missing requires two consecutive complete scans of an available
+scope; it is not proof of deletion. Times describe when Director observed a
+change, not when a user edited it. Several edits between scans may be missed.
+
+Select an event for a bounded 7- or 30-day summary of recorded calls and current
+manual evaluations after that observation. The actual interval and index cutoff
+are shown; unknown, incomplete and unavailable evidence are not zero. These
+read-only counts do not establish that the change caused an improvement.
+
+The separate local history stores allowlisted metadata and document hashes, not
+source contents, diffs or paths. It retains up to 180 days, 100 events per
+capability and 20,000 events overall within a 16 MiB file limit. **All retained
+records** is not an all-time archive. Deleting the derived index preserves
+history, but call summaries require an available index. Settings → Privacy has
+a separate confirmed clear action. History is not uploaded or included in
+`.codexpack.zip`; folder membership, evaluations and source files are unchanged.
 
 ## Product screenshots
 

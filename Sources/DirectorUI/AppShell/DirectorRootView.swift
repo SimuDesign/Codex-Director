@@ -12,6 +12,7 @@ public struct DirectorRootView: View {
     @State private var windowPresenceID = UUID()
     @State private var sidebarSelectionEmphasized = false
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.capabilityHistoryPresentationSource) private var injectedHistorySource
 #if DIRECTOR_INTERACTION_PERFORMANCE
     private let interactionPerformanceDriver: InteractionPerformanceDriver?
 #endif
@@ -51,6 +52,8 @@ public struct DirectorRootView: View {
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 720, minHeight: 480)
         .environment(\.locale, languageStore.locale)
+        .environment(\.capabilityHistoryPresentationSource, injectedHistorySource ?? historySource)
+        .environment(\.capabilityHistoryMutationRevision, model.capabilityHistoryMutationRevision)
         .background(WindowPresenceBridge(id: windowPresenceID, onVisibilityChange: { visible in model.setWindowVisibility(windowPresenceID, visible: visible) }, onSleepingChange: { sleeping in model.setSystemSleeping(sleeping) }, onClockChange: { timeZone in model.presentationClockDidChange(timeZone: timeZone) }, onRemove: { id in model.removeWindow(id) }).allowsHitTesting(false).accessibilityHidden(true))
     }
 
@@ -126,12 +129,15 @@ public struct DirectorRootView: View {
             CapabilityFoldersView(
                 model: model,
                 detailContext: { resource in capabilityDetailModel(for: resource) },
-                performanceDriver: interactionPerformanceDriver ?? .noop
+                performanceDriver: interactionPerformanceDriver ?? .noop,
+                historySource: injectedHistorySource ?? historySource
             )
 #else
-            CapabilityFoldersView(model: model) { resource in
-                capabilityDetailModel(for: resource)
-            }
+            CapabilityFoldersView(
+                model: model,
+                detailContext: { resource in capabilityDetailModel(for: resource) },
+                historySource: injectedHistorySource ?? historySource
+            )
 #endif
         case .customAgents:
             filteredCapabilities(category: .myAgents, model: model.libraryModels[0], titleKey: "nav.customAgents", fallback: "Custom Agents")
@@ -180,6 +186,10 @@ public struct DirectorRootView: View {
         let catalog = CapabilityCatalog(resources: model.capabilities.allRows.map(\.resource), relations: model.capabilities.relations)
         let stats = model.recentCapabilityStats
         return HomeOverviewModel(catalog: catalog, usage: stats)
+    }
+
+    private var historySource: CapabilityHistoryPresentationSource {
+        CapabilityHistoryPresentationSource.make(model: model)
     }
 
     private func sidebarItem(for category: CapabilityCategory) -> DirectorSidebarItem {

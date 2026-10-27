@@ -1669,6 +1669,129 @@ public actor DatabaseStore {
         return results
     }
 
+    /// Computes one selected history-event summary without loading every call
+    /// in the interval. The first statement aggregates the normalized usage
+    /// view. Additional statements validate only current manual-evaluation
+    /// candidates, in fixed-size chunks, inside the same read snapshot.
+    public func fetchCapabilityChangeUsage(
+        _ query: CapabilityChangeUsageQuery,
+        evaluationCandidates: [CapabilityChangeUsageEvaluationCandidate] = [],
+        cancellation: SQLiteCancellationToken? = nil
+    ) throws -> CapabilityChangeUsageDatabaseResult {
+        let resolution = query.resolve()
+        guard resolution.availability == .available,
+              let interval = resolution.interval else {
+            return CapabilityChangeUsageDatabaseResult(
+                cacheKey: query.cacheKey,
+                availability: resolution.availability,
+                interval: nil,
+                callCount: nil,
+                inferredCount: nil,
+                coverage: .unknown
+            )
+        }
+
+        queryObserver?(.allInvocations)
+        let readCancellation = cancellation ?? SQLiteCancellationToken(timeout: .seconds(5))
+        return try connection.performReadSnapshot(cancellation: readCancellation) {
+            let endOperator = interval.endInclusive ? "<=" : "<"
+            let aggregate = try connection.prepare(
+                """
+                SELECT COUNT(*),
+                       COALESCE(SUM(CASE WHEN c.confidence = 'inferred' THEN 1 ELSE 0 END), 0),
+                       COALESCE(SUM(CASE WHEN COALESCE(s.coverage, 'unknown') IN ('partial','unavailable','unknown') THEN 1 ELSE 0 END), 0)
+                FROM capability_usage_calls c
+                LEFT JOIN sessions s ON s.id = c.session_id
+                WHERE c.resource_id = ?
+                  AND c.timestamp IS NOT NULL
+                  AND c.timestamp >= ?
+                  AND c.timestamp \(endOperator) ?
+                """
+            )
+            aggregate.bind(query.resourceID, at: 1)
+            aggregate.bind(interval.start.timeIntervalSince1970, at: 2)
+            aggregate.bind(interval.end.timeIntervalSince1970, at: 3)
+            guard try aggregate.step() == .row else {
+                throw SQLiteError.statementFailed("Capability change usage aggregate returned no row")
+            }
+            let callCount = aggregate.columnInt(0)
+            let inferredCount = aggregate.columnInt(1)
+            let coverage: CoverageState = aggregate.columnInt(2) > 0 ? .partial : .complete
+
+            // The evaluation store is keyed by invocation ID, so duplicates
+            // cannot add evidence. Keeping the first stable pair also bounds
+            // repeated caller input before SQLite parameter expansion.
+            // At 400 IDs per statement this caps one summary at one aggregate
+            // plus eight lookup statements. Larger current evaluation sets
+            // keep call evidence but report rating coverage as unknown.
+            let maximumEvaluationCandidates = 3_200
+            let evaluationLookupComplete = evaluationCandidates.count <= maximumEvaluationCandidates
+            var uniqueCandidates: [CapabilityChangeUsageEvaluationCandidate] = []
+            var candidateIDs = Set<String>()
+            if evaluationLookupComplete {
+                for candidate in evaluationCandidates where candidateIDs.insert(candidate.invocationID).inserted {
+                    uniqueCandidates.append(candidate)
+                }
+            }
+            let expectedSessionByInvocation = Dictionary(
+                uniqueKeysWithValues: uniqueCandidates.map { ($0.invocationID, $0.sessionID) }
+            )
+
+            let chunkSize = 400
+            var matched: [CapabilityChangeUsageCallIdentity] = []
+            var chunkCount = 0
+            for lowerBound in stride(from: 0, to: uniqueCandidates.count, by: chunkSize) {
+                let upperBound = min(lowerBound + chunkSize, uniqueCandidates.count)
+                let chunk = uniqueCandidates[lowerBound..<upperBound]
+                guard !chunk.isEmpty else { continue }
+                chunkCount += 1
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+                let statement = try connection.prepare(
+                    """
+                    SELECT c.id, c.session_id
+                    FROM capability_usage_calls c
+                    WHERE c.resource_id = ?
+                      AND c.timestamp IS NOT NULL
+                      AND c.timestamp >= ?
+                      AND c.timestamp \(endOperator) ?
+                      AND c.id IN (\(placeholders))
+                    ORDER BY c.id
+                    """
+                )
+                statement.bind(query.resourceID, at: 1)
+                statement.bind(interval.start.timeIntervalSince1970, at: 2)
+                statement.bind(interval.end.timeIntervalSince1970, at: 3)
+                var parameter: Int32 = 4
+                for candidate in chunk {
+                    statement.bind(candidate.invocationID, at: parameter)
+                    parameter += 1
+                }
+                while try statement.step() == .row {
+                    guard let invocationID = statement.columnText(0),
+                          let sessionID = statement.columnText(1),
+                          expectedSessionByInvocation[invocationID] == sessionID else { continue }
+                    matched.append(CapabilityChangeUsageCallIdentity(
+                        invocationID: invocationID,
+                        sessionID: sessionID
+                    ))
+                }
+            }
+
+            return CapabilityChangeUsageDatabaseResult(
+                cacheKey: query.cacheKey,
+                availability: .available,
+                interval: interval,
+                callCount: callCount,
+                inferredCount: inferredCount,
+                coverage: coverage,
+                matchedEvaluationCalls: matched,
+                evaluationLookupComplete: evaluationLookupComplete,
+                evaluationLookupChunkCount: chunkCount,
+                sqlStatementCount: 1 + chunkCount
+            )
+        }
+    }
+
     /// Fetches invocation evidence using keyset pagination. The cursor is an
     /// opaque timestamp/id pair and remains stable across refreshes.
     public func fetchCapabilityInvocations(

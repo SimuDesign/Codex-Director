@@ -28,6 +28,57 @@ Application surfaces share one refresh coordinator. Source scanning and projecti
 
 The sanitized app-server snapshot is also composed into Home as the current five-hour and weekly allowance for the canonical Codex source when it is at least as recent as that window's indexed observation. This is a presentation-only merge: indexed observations remain the sole input to the seven-day weekly chart, and live account values are never inserted into session evidence or SQLite history. The account DTO and indexed projection remain separate fields in presentation-cache schema v1 so old caches stay readable.
 
+## Capability change history
+
+The inventory's verified observation batch feeds one app-scoped
+`CapabilityHistoryCoordinator` only after the inventory transaction commits.
+The raw batch, not the retained presentation inventory, is the observation
+authority. A later rollout parse failure does not erase an already committed
+inventory observation. Cache restores, navigation, language/theme/folder
+changes and account-only reads do not generate observations or start a second
+scanner. Tracking signatures use bounded verified document bytes, separately
+from the stable resource-ID and existing FNV identity contracts.
+
+`CapabilityChangeDetector` is a pure state transition over an independent
+schema-v1 baseline/events document. First initialization is per reliable scope,
+including successfully scanned empty scopes. Absence requires two consecutive
+complete available observations of the same scope; failed, omitted or offline
+scopes interrupt confirmation. Monotonic sequence orders commits independently
+of wall-clock anomalies. Retention is bounded and never discards a current
+baseline just to meet the file budget.
+
+Per-scope completeness stays conservative. Cross-source aggregation reports
+partial when some sources are usable and others unavailable; all-unavailable
+or absent scopes remain unavailable. This source coverage never stands in
+for storage readability. The UI keeps source-scan, recording/write access and
+page-read failures separate, including readable legacy states whose latest
+scan coverage is unavailable. Opening history does not rewrite those states
+or repair unavailable sources by scanning.
+
+`CapabilityHistoryStatus.latestObservationSaveFailed` is a nonpersisted actor
+status signal: the coordinator distinguishes a failed latest save from an
+unreadable retained document even when both use a storage diagnostic. It is
+retained with pending submission issues and resets after a successful commit
+or confirmed clear. It is not part of the schema-v1 JSON, source data or cache.
+
+`CapabilityHistoryStore` owns bounded loading, privacy validation, a lifetime
+cross-process writer lock, same-directory temporary publication and private
+permissions. One atomic replacement commits the baseline and events together;
+failure preserves the previous state without failing the local index. Epochs
+invalidate stale clear/commit/query work. Corrupt, unsupported and over-budget
+storage remains visible as unavailable rather than being reset. History is
+outside SQLite and is retained when the derived index is deleted.
+
+Timeline pages are lazy metadata reads. Only a selected eligible event requests
+a call summary: intersect `[observedAt, nextObservedAt)` (last interval inclusive
+through the actual index cutoff) with 7 or 30 local calendar days. SQL aggregates
+counts; bounded candidate-evaluation ID batches validate resource, session,
+invocation and interval identity in the same database snapshot. Rating edit
+time is not the interval clock. Missing, disjoint, invalid or unindexed states
+do not query or manufacture zero. Detail tasks are cancellable and guarded by
+event, period, history epoch/revision, database identity/generation and evaluation
+revision. There is no per-row SQL, unbounded all-history summary or causal score.
+
 ## Codex runtime boundary
 
 `CodexRuntimeLocator` resolves an executable in this order: an explicit Director preference, known Codex application locations, then absolute directories from `PATH`. It invokes the executable directly without a shell, applies a timeout and output cap to version probing, and exposes source, compatibility, and execute-permission state. Director never installs Codex, changes `PATH`, edits global Codex configuration, or stores Codex account information.
@@ -50,18 +101,91 @@ rule, and an incomplete list cannot be marked complete in `plugins.json`.
 Settings diagnostics retain their last valid result during a source refresh
 and reload when that index pass completes.
 
-Rollout parser v1.4.1 recognizes the current top-level `token_usage_record`
+Rollout parser v1.4.2 recognizes the current top-level `token_usage_record`
 and `inter_agent_communication_metadata` envelopes. Token totals use the
 record's cumulative `thread_token_usage`, never its per-response or per-turn
 value, and do not add it to legacy `token_count` totals. Legacy rate-limit
 windows remain a separate evidence stream. On parser upgrade, unchanged 1.2.0
-through 1.4.0 rollouts outside the last 30 local calendar days (by both cached
+through 1.4.1 rollouts outside the last 30 local calendar days (by both cached
 session end and file modification time) retain their checkpoint. Recent files
 are transactionally reparsed once; changed older files continue normal indexing.
 This bounded policy repairs recent presentation evidence without replaying years
 of unchanged archives. Cancellation does not advance an uncommitted checkpoint.
 A changing source is not stamped fully current, and append parses recover a
 bounded metadata header rather than replaying old calls or token totals.
+
+The streaming JSONL reader tracks consumed bytes separately from bytes already
+searched for a newline. Chunk arrivals search only the new byte range, keeping
+long-line newline-search work linear without truncating evidence. Compaction
+updates both cursors; bounded alias-lookback windows still omit incomplete
+tails and do not read through their endpoint. Cooperative cancellation between
+chunks does not promise interruption of an arbitrary blocked filesystem call.
+
+Source directory enumeration uses a read-only, no-follow, close-on-exec
+descriptor and validates path/descriptor identity before publishing entries.
+Enumeration failures or identity changes remain incomplete coverage, never a
+successful empty directory. This avoids Foundation's directory-enumerator
+path while preserving the existing file size/mtime fingerprint calculation.
+The nonblocking open flag does not impose a general filesystem/provider
+timeout. Local `SourceDiscovery` diagnostics contain only fixed begin,
+probe-end and root-end phases, root kind and positional ordinal/total; source
+IDs, paths, names and contents are excluded.
+
+Read-only runtime commands register child termination notification before
+launch. Exit confirmation and both bounded/discarding pipe readers complete
+the async result together; no separate `waitUntilExit` queue is required.
+The watchdog distinguishes timeout requests from normal exits and output-cap
+termination. A request to terminate an uncooperative child is not a guaranteed
+wall-clock upper bound. Launch failures and concurrent callbacks must complete
+their continuation exactly once; raw stderr remains discarded.
+
+Production indexing isolates complete single-project reads through one
+long-lived `ProjectSourceReadGate`: a two-second consumer deadline, at most two
+actual unfinished workers and lexical-path single flight. The coordinator uses
+an asynchronous scanner route while the synchronous API stays compatible.
+Timeout/busy/cancelled consumers do not free a still-running worker slot; late
+values are discarded, with no database/history publication. Globals, runtime
+and sessions do not consume project slots. A saturated gate can leave all
+project scopes unavailable; their last verified inventory is retained rather
+than represented as a fresh empty result.
+
+Project physical mapping and companion reads use that same gate. Open
+global/project uniqueness is deferred when source identity is incomplete;
+strict positive evidence inside one verified plugin-package namespace can
+still merge its native/runtime aliases. This avoids duplicating a proved
+plugin installation because an unrelated old project is unavailable. It does
+not introduce source-name priorities or claim physical de-duplication for
+unproved entries. Known unavailable project roots are omitted from source
+existence review, retaining applicable old missing-source findings only while
+their inventory endpoints remain. Manual decisions/evaluations and reliable
+history observations retain their established ownership and schemas.
+
+Supported `event_msg/item_completed` CommandExecution and McpToolCall items
+provide structured terminal evidence for an existing call, not another call
+count. Matching is identifier-based, with terminal failure protected from a
+later generic wrapper output. Unknown item shapes, ambiguous identity and
+role-less child metadata do not establish specialist capability attribution.
+The repair keeps raw commands, output and error bodies transient; persistence
+uses existing status, duration and fixed error-category fields only.
+An appended terminal result may join a previously committed call through a
+pending-only identifier lookback, hard-limited to 16 MiB before the checkpoint.
+Partial boundary records, ambiguous aliases and references outside that window
+are not guessed: the prior record remains and coverage is qualified as partial.
+This does not establish complete all-history attribution. Only changed/new
+call deltas are merged; metadata-only appends do not reset prior delegation.
+
+Project registry validation and companion projection accept supported legacy
+entries and packages layouts, including v5 explicit native-Agent/Skill
+declarations. Native configuration aliases resolve to the existing project
+TOML identity; new packages metadata does not manufacture duplicate Agents.
+Historical legacy-entry resource IDs and explicit declarations remain compatible
+so previously saved membership references are not silently dropped.
+`usesSkills` and inverse `invokedBy` retain their declaration source, unique
+same-project preference and bounded global previews. Unsupported schemas,
+malformed structure, ambiguous references and unavailable files remain
+qualified rather than guessed. Relationship projection v3 requests the existing
+source refresh independently from rollout-parser upgrade; neither operation
+changes folder memberships, evaluations or capability source files.
 
 Agent identity resolution preserves canonical stable IDs and consumes ephemeral
 TOML/Brief aliases for both scopes. Explicit paths identify their own configured
@@ -134,7 +258,7 @@ Usage/name sorting consumes this cached dictionary. An absent dictionary means
 pending (`—`); an absent resource/window after successful computation means
 no attributed record (`0`), not proof of non-use. Evidence qualifiers remain
 in localized help/AX/details. Companion shared-session evidence stays seven-day
-and noncausal. Parser v1.4.1 may trigger only the bounded recent checkpoint
+and noncausal. Parser v1.4.2 may trigger only the bounded recent checkpoint
 repair described above; it does not introduce a schema, cache, manifest or
 preference migration.
 

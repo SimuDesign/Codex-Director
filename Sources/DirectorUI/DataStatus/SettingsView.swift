@@ -7,7 +7,10 @@ public struct SettingsView: View {
     @ObservedObject private var model: DirectorAppModel
     @EnvironmentObject private var languageStore: AppLanguageStore
     @EnvironmentObject private var themeStore: AppThemeStore
+    @Environment(\.capabilityHistoryPresentationSource) private var historySourceFromEnvironment
     @State private var confirmDelete = false
+    @State private var confirmClearCapabilityHistory = false
+    @State private var isClearingCapabilityHistory = false
     @State private var operationError: String?
     @State private var showsCapabilityExport = false
     @State private var showsCapabilityRestore = false
@@ -129,6 +132,22 @@ public struct SettingsView: View {
                                 Text(t("settings.privacy.sourceBoundary", "Source resources and session files are never modified. Capability exports are unencrypted local files written only to a location you choose. Deleting derived data preserves evaluations and classification corrections."))
                                     .font(DirectorTypography.supporting)
                                     .foregroundStyle(DirectorColor.textSecondary)
+                                Text(t("settings.privacy.historyRetention", "Capability change history is stored locally as safe metadata only. It is retained separately from the derived index and does not store source paths, document bodies or diffs."))
+                                    .font(DirectorTypography.supporting)
+                                    .foregroundStyle(DirectorColor.textSecondary)
+                                Button {
+                                    confirmClearCapabilityHistory = true
+                                } label: {
+                                    if isClearingCapabilityHistory {
+                                        ProgressView().controlSize(.small)
+                                        Text(t("settings.history.clearing", "Clearing history…"))
+                                    } else {
+                                        Text(t("settings.history.clear", "Clear capability change history"))
+                                    }
+                                }
+                                .buttonStyle(DirectorSecondaryActionButtonStyle(size: .settings, destructive: true))
+                                .disabled(isClearingCapabilityHistory)
+                                .accessibilityHint(t("settings.history.clearHint", "Permanently clears retained local change events and establishes a new baseline on the next normal refresh."))
                             }
                             section(ordinal: "05", titleKey: "settings.diagnostics.title", fallback: "Diagnostics", tone: .teal) {
                                 labeledRow(t("settings.diagnostics.parser", "Parser version"), RolloutEventDecoder.parserVersion)
@@ -164,7 +183,24 @@ public struct SettingsView: View {
             Button(t("settings.delete", "Delete derived index"), role: .destructive) { Task { do { try await model.deleteDerivedData() } catch { operationError = "settings.delete.failed" } } }
             Button(t("common.cancel", "Cancel"), role: .cancel) {}
         } message: {
-            Text(t("settings.delete.confirmBody", "Only the derived index is removed. Original resources and session files remain unchanged."))
+            Text(t("settings.delete.confirmBody", "Only the derived index is removed. Original resources and session files remain unchanged. Capability change history is retained."))
+        }
+        .confirmationDialog(t("settings.history.clearConfirmTitle", "Clear capability change history?"), isPresented: $confirmClearCapabilityHistory, titleVisibility: .visible) {
+            Button(t("settings.history.clearConfirm", "Clear history"), role: .destructive) {
+                isClearingCapabilityHistory = true
+                Task {
+                    do {
+                        _ = try await historySource.clearLoader()
+                        isClearingCapabilityHistory = false
+                    } catch {
+                        isClearingCapabilityHistory = false
+                        operationError = "settings.history.clearFailed"
+                    }
+                }
+            }
+            Button(t("common.cancel", "Cancel"), role: .cancel) {}
+        } message: {
+            Text(t("settings.history.clearConfirmBody", "This permanently clears local capability change history. Earlier records cannot be rebuilt from current files; the next normal refresh establishes a new baseline. Source files, evaluations, folders and the derived index remain unchanged."))
         }
         .alert(t("settings.operationError", "Operation failed"), isPresented: Binding(get: { operationError != nil }, set: { if !$0 { operationError = nil } })) { Button(t("common.cancel", "Cancel"), role: .cancel) {} } message: { Text(t(operationError ?? "settings.operationError", "Unable to complete this operation.")) }
         .sheet(isPresented: $showsCapabilityExport) {
@@ -216,7 +252,11 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "1.5.1"
+        return version ?? "1.6.1"
+    }
+
+    private var historySource: CapabilityHistoryPresentationSource {
+        historySourceFromEnvironment ?? CapabilityHistoryPresentationSource.make(model: model)
     }
 
     private func section<Content: View>(ordinal: String, titleKey: String, fallback: String, tone: DirectorAccentTone, @ViewBuilder content: () -> Content) -> some View {

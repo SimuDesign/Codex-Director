@@ -10,6 +10,7 @@ public struct DirectorStartupServices: Sendable {
     public let coordinator: IndexingCoordinator?
     public let configuration: IndexingCoordinator.Configuration?
     public let snapshotStore: PresentationSnapshotStore?
+    public let capabilityHistoryService: CapabilityHistoryCoordinator?
     public let capabilityExportCoordinator: CapabilityExportCoordinator?
     public let capabilityRestoreCoordinator: CapabilityRestoreCoordinator?
     public let accountUsageReading: CodexAccountUsageReading?
@@ -21,6 +22,7 @@ public struct DirectorStartupServices: Sendable {
         coordinator: IndexingCoordinator?,
         configuration: IndexingCoordinator.Configuration?,
         snapshotStore: PresentationSnapshotStore?,
+        capabilityHistoryService: CapabilityHistoryCoordinator? = nil,
         capabilityExportCoordinator: CapabilityExportCoordinator? = nil,
         capabilityRestoreCoordinator: CapabilityRestoreCoordinator? = nil,
         accountUsageReading: CodexAccountUsageReading? = nil,
@@ -31,6 +33,7 @@ public struct DirectorStartupServices: Sendable {
         self.coordinator = coordinator
         self.configuration = configuration
         self.snapshotStore = snapshotStore
+        self.capabilityHistoryService = capabilityHistoryService ?? coordinator?.capabilityHistoryService
         self.capabilityExportCoordinator = capabilityExportCoordinator
         self.capabilityRestoreCoordinator = capabilityRestoreCoordinator
         self.accountUsageReading = accountUsageReading
@@ -79,6 +82,7 @@ public final class DirectorStartupController: ObservableObject {
                 readStore: services.readStore,
                 coordinator: services.coordinator,
                 configuration: services.configuration,
+                capabilityHistoryService: services.capabilityHistoryService,
                 capabilityExportCoordinator: services.capabilityExportCoordinator,
                 capabilityRestoreCoordinator: services.capabilityRestoreCoordinator,
                 presentationSnapshotStore: cache ?? services.snapshotStore,

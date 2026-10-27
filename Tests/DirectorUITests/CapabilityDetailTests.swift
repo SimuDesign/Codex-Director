@@ -14,6 +14,9 @@ final class CapabilityDetailTests: XCTestCase {
     }
 
     private enum ScriptedInvocationError: Error { case failed }
+    private struct SensitiveChangeUsageError: LocalizedError {
+        var errorDescription: String? { "synthetic failure at /Users/exampleuser/private.sqlite: SELECT secret" }
+    }
 
     private actor ScriptedInvocationLoader {
         let page: CapabilityDetailInvocationPage
@@ -67,6 +70,48 @@ final class CapabilityDetailTests: XCTestCase {
         func releaseFirst() { releaseFirstRequest = true }
     }
 
+    private actor ScriptedChangeUsageLoader {
+        private(set) var requests: [CapabilityChangeUsageQuery] = []
+        private var waitForFirst = false
+        private var releaseFirst = false
+        private var failNext = false
+
+        func call(_ query: CapabilityChangeUsageQuery) async throws -> CapabilityChangeUsageSummary {
+            requests.append(query)
+            let requestNumber = requests.count
+            if failNext {
+                failNext = false
+                throw SensitiveChangeUsageError()
+            }
+            while requestNumber == 1 && waitForFirst && !releaseFirst {
+                try Task.checkCancellation()
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            let resolution = query.resolve()
+            guard resolution.availability == .available else {
+                return .unavailable(for: query, availability: resolution.availability)
+            }
+            let count = query.eventID == "event:second" ? 2 : 1
+            return CapabilityChangeUsageSummary(
+                cacheKey: query.cacheKey,
+                availability: .available,
+                interval: resolution.interval,
+                callCount: count,
+                inferredCount: 0,
+                coverage: .complete,
+                evaluatedCount: 0,
+                effectiveCount: 0,
+                ineffectiveCount: 0,
+                uncertainCount: 0,
+                unratedCount: count
+            )
+        }
+
+        func holdFirstRequest() { waitForFirst = true }
+        func releaseFirstRequest() { releaseFirst = true }
+        func failNextRequest() { failNext = true }
+    }
+
     private actor CompletionLatch {
         private(set) var completed = false
         func markCompleted() { completed = true }
@@ -90,6 +135,24 @@ final class CapabilityDetailTests: XCTestCase {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return await loader.requestCount >= count
+    }
+
+    private func waitForChangeUsageRequest(_ loader: ScriptedChangeUsageLoader, count: Int) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline {
+            if await loader.requests.count >= count { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await loader.requests.count >= count
+    }
+
+    private func waitForChangeUsageToFinish(_ model: CapabilityDetailViewModel) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while clock.now < deadline && model.changeUsageState == .loading {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private func waitForEvidenceToFinish(_ model: CapabilityDetailViewModel) async {
@@ -122,6 +185,36 @@ final class CapabilityDetailTests: XCTestCase {
         return CapabilityDetailViewModel(row: row, evaluationStore: evaluationStore, invocationLoader: { resourceID, projectID, window, pageSize, cursor in
             try await loader.call(resourceID, projectID, window, pageSize, cursor)
         })
+    }
+
+    private func makeChangeUsageModel(
+        loader: ScriptedChangeUsageLoader,
+        evaluationStore: InvocationEvaluationStore? = nil
+    ) -> CapabilityDetailViewModel {
+        let resource = CapabilityResource(id: "skill:evidence", name: "Evidence", kind: .skill, status: .idle, scope: .global, projectID: nil, confidence: .exact, summary: "Declared purpose", sourceRootID: "global", relativeSourcePath: "SKILL.md", sourcePathHash: nil, lastSeenAt: Date(timeIntervalSince1970: 1_800_000_000))
+        let row = CapabilityLibraryRow(entry: CapabilityCatalogEntry(resource: resource, category: .customSkills, parentPluginID: nil), recent7Count: 1, inferredCount: 0, lastUsedAt: nil, sourceModifiedAt: nil)
+        return CapabilityDetailViewModel(
+            row: row,
+            evaluationStore: evaluationStore,
+            changeUsageLoader: { query in try await loader.call(query) }
+        )
+    }
+
+    private func changeUsageQuery(eventID: String = "event:first", evaluationRevision: UInt64 = 0) -> CapabilityChangeUsageQuery {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return CapabilityChangeUsageQuery(
+            eventID: eventID,
+            resourceID: "skill:evidence",
+            observedAt: now.addingTimeInterval(-100),
+            nextObservedAt: nil,
+            referenceDate: now,
+            calendar: calendar,
+            statisticsThrough: now,
+            databaseIdentity: PresentationIdentity(databaseEpoch: "epoch:detail", dataGeneration: 4),
+            evaluationRevision: evaluationRevision
+        )
     }
 
     func testDetailDefersEvaluationDecodeUntilEvidenceIsRequested() async throws {
@@ -457,5 +550,114 @@ final class CapabilityDetailTests: XCTestCase {
         try await store.replaceSession(PersistedSessionBatch(session: TaskSummary(id: "reload-session", projectID: "reload-project", startedAt: base, endedAt: nil, status: .completed, coverage: .complete, parserVersion: "test", sourceFileID: "reload-source", title: nil), calls: initial + [event("reload-2", 2)], tokenSnapshots: [], quotaSnapshots: [], findings: []))
         model.reload(); for _ in 0..<20 { if model.state != .loading { break }; await Task.yield() }
         XCTAssertEqual(model.invocations.map(\.id), ["reload-2", "reload-1"]); XCTAssertEqual(model.evaluation(for: retained)?.label, .effective)
+    }
+
+    func testSelectedChangeUsageRunsOneTaskAndReusesTheSameCacheIdentity() async {
+        let loader = ScriptedChangeUsageLoader()
+        let model = makeChangeUsageModel(loader: loader)
+        let query = changeUsageQuery()
+
+        model.requestChangeUsage(query)
+        let didStart = await waitForChangeUsageRequest(loader, count: 1)
+        XCTAssertTrue(didStart)
+        await waitForChangeUsageToFinish(model)
+        model.requestChangeUsage(query)
+        try? await Task.sleep(for: .milliseconds(30))
+
+        let requestCount = await loader.requests.count
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(model.changeUsageSummary?.callCount, 1)
+        XCTAssertEqual(model.changeUsageCacheKey, query.cacheKey)
+    }
+
+    func testChangingSelectedEventCancelsOldSummaryAndRejectsStaleOverwrite() async {
+        let loader = ScriptedChangeUsageLoader()
+        await loader.holdFirstRequest()
+        let model = makeChangeUsageModel(loader: loader)
+
+        model.requestChangeUsage(changeUsageQuery(eventID: "event:first"))
+        let firstStarted = await waitForChangeUsageRequest(loader, count: 1)
+        XCTAssertTrue(firstStarted)
+        model.requestChangeUsage(changeUsageQuery(eventID: "event:second"))
+        let secondStarted = await waitForChangeUsageRequest(loader, count: 2)
+        XCTAssertTrue(secondStarted)
+        await waitForChangeUsageToFinish(model)
+        await loader.releaseFirstRequest()
+        try? await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(model.changeUsageCacheKey?.eventID, "event:second")
+        XCTAssertEqual(model.changeUsageSummary?.callCount, 2)
+    }
+
+    func testHistoryClearCancellationRevokesLateSelectedSummary() async {
+        let loader = ScriptedChangeUsageLoader()
+        await loader.holdFirstRequest()
+        let model = makeChangeUsageModel(loader: loader)
+
+        model.requestChangeUsage(changeUsageQuery())
+        let didStart = await waitForChangeUsageRequest(loader, count: 1)
+        XCTAssertTrue(didStart)
+        model.cancelChangeUsage()
+        await loader.releaseFirstRequest()
+        try? await Task.sleep(for: .milliseconds(30))
+
+        XCTAssertEqual(model.changeUsageState, .idle)
+        XCTAssertNil(model.changeUsageCacheKey)
+        XCTAssertNil(model.changeUsageSummary)
+    }
+
+    func testChangeUsageFailurePublishesFixedPrivacySafeKey() async {
+        let loader = ScriptedChangeUsageLoader()
+        await loader.failNextRequest()
+        let model = makeChangeUsageModel(loader: loader)
+
+        model.requestChangeUsage(changeUsageQuery())
+        let didStart = await waitForChangeUsageRequest(loader, count: 1)
+        XCTAssertTrue(didStart)
+        await waitForChangeUsageToFinish(model)
+
+        XCTAssertEqual(model.changeUsageState, .failed("detail.changeUsageLoadFailed"))
+        if case .failed(let value) = model.changeUsageState {
+            XCTAssertFalse(value.contains("/Users/"))
+            XCTAssertFalse(value.localizedCaseInsensitiveContains("select"))
+            XCTAssertFalse(value.localizedCaseInsensitiveContains("secret"))
+        }
+    }
+
+    func testEvaluationEditInvalidatesSelectedChangeUsageRevisionAndReloadsOnce() async throws {
+        var data: Data?
+        let evaluations = InvocationEvaluationStore(
+            readData: { data },
+            writeData: { data = $0; return true },
+            removeData: { data = nil; return true }
+        )
+        let loader = ScriptedChangeUsageLoader()
+        let model = makeChangeUsageModel(loader: loader, evaluationStore: evaluations)
+        let query = changeUsageQuery(evaluationRevision: 10)
+        model.requestChangeUsage(query)
+        let firstStarted = await waitForChangeUsageRequest(loader, count: 1)
+        XCTAssertTrue(firstStarted)
+        await waitForChangeUsageToFinish(model)
+
+        let invocation = CapabilityDetailInvocation(
+            event: InvocationEvent(
+                id: "call:evaluation-edit", sessionID: "session:evaluation-edit",
+                parentCallID: nil, ordinal: 0,
+                timestamp: Date(timeIntervalSince1970: 1_799_999_950),
+                actorName: nil, resourceID: "skill:evidence", kind: .skill,
+                status: .completed, durationMs: nil, confidence: .exact,
+                errorCategory: nil
+            ),
+            projectID: nil,
+            projectName: nil
+        )
+        XCTAssertTrue(model.setEvaluation(.effective, for: invocation))
+        let secondStarted = await waitForChangeUsageRequest(loader, count: 2)
+        XCTAssertTrue(secondStarted)
+        await waitForChangeUsageToFinish(model)
+
+        let revisions = await loader.requests.map(\.evaluationRevision)
+        XCTAssertEqual(revisions, [10, 11])
+        XCTAssertEqual(model.changeUsageCacheKey?.evaluationRevision, 11)
     }
 }

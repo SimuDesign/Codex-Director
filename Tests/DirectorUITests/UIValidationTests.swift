@@ -126,6 +126,24 @@ final class UIValidationTests: XCTestCase {
 
     func testCaptureLayoutKeepsControlsOutsideTheRequestedProductViewport() {
         let requested = CGSize(width: 1_280, height: 800)
+        let measured = CGSize(width: 1_280, height: 748)
+        let toolbarInset = UIValidationCaptureLayout.nativeContentInset(
+            contentRectSize: requested,
+            contentLayoutRectSize: measured,
+            contentViewBoundsSize: measured
+        )
+
+        XCTAssertEqual(toolbarInset, CGSize(width: 0, height: 52))
+        XCTAssertEqual(
+            UIValidationCaptureLayout.windowContentSize(
+                productSize: requested,
+                controlsHeight: 0,
+                showsControls: false,
+                nativeContentInset: toolbarInset
+            ),
+            CGSize(width: 1_280, height: 852),
+            "the host must request the native inset in addition to the product viewport"
+        )
 
         XCTAssertEqual(
             UIValidationCaptureLayout.windowContentSize(
@@ -146,18 +164,27 @@ final class UIValidationTests: XCTestCase {
         XCTAssertEqual(
             UIValidationCaptureLayout.reportedProductViewportSize(
                 requested: requested,
-                measured: CGSize(width: 1_280, height: 748),
+                measured: measured,
                 captureMode: true
             ),
-            requested
+            measured
+        )
+        XCTAssertNotEqual(
+            UIValidationCaptureLayout.reportedProductViewportSize(
+                requested: requested,
+                measured: measured,
+                captureMode: true
+            ),
+            requested,
+            "capture mode must not report the requested window size as actual product geometry"
         )
         XCTAssertEqual(
             UIValidationCaptureLayout.reportedProductViewportSize(
                 requested: requested,
-                measured: CGSize(width: 1_280, height: 748),
+                measured: measured,
                 captureMode: false
             ),
-            CGSize(width: 1_280, height: 748)
+            measured
         )
     }
 

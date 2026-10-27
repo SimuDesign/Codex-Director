@@ -17,20 +17,48 @@ enum UIValidationCaptureLayout {
         productSize: CGSize,
         controlsHeight: CGFloat,
         showsControls: Bool,
-        dividerHeight: CGFloat = Self.dividerHeight
+        dividerHeight: CGFloat = Self.dividerHeight,
+        nativeContentInset: CGSize = .zero
     ) -> CGSize {
         CGSize(
-            width: productSize.width,
-            height: productSize.height + (showsControls ? max(0, controlsHeight) + max(0, dividerHeight) : 0)
+            width: productSize.width + max(0, nativeContentInset.width),
+            height: productSize.height
+                + (showsControls ? max(0, controlsHeight) + max(0, dividerHeight) : 0)
+                + max(0, nativeContentInset.height)
         )
     }
 
+    /// Returns the window-content correction needed when AppKit's titlebar or
+    /// toolbar leaves the root content view smaller than the requested content
+    /// rect. The content view is the primary measurement; the layout rect is
+    /// the safe fallback while the view is still being installed in a window.
+    static func nativeContentInset(
+        contentRectSize: CGSize,
+        contentLayoutRectSize: CGSize,
+        contentViewBoundsSize: CGSize
+    ) -> CGSize {
+        let observedWidth = contentViewBoundsSize.width > 0
+            ? contentViewBoundsSize.width
+            : contentLayoutRectSize.width
+        let observedHeight = contentViewBoundsSize.height > 0
+            ? contentViewBoundsSize.height
+            : contentLayoutRectSize.height
+
+        return CGSize(
+            width: max(0, contentRectSize.width - observedWidth),
+            height: max(0, contentRectSize.height - observedHeight)
+        )
+    }
+
+    /// Reports the product content geometry measured by the host. The window
+    /// request is sizing input only; capture mode must never relabel an
+    /// unmeasured/requested size as actual evidence.
     static func reportedProductViewportSize(
         requested: CGSize,
         measured: CGSize,
         captureMode: Bool
     ) -> CGSize {
-        captureMode ? requested : measured
+        measured
     }
 }
 
@@ -113,6 +141,7 @@ private struct ValidationWorkspace: View {
     @State private var productViewportSize: CGSize = .zero
     @State private var isCaptureMode = false
     @State private var simulatesRefresh = false
+    @State private var historyScenario: UIValidationSession.HistoryScenario = .representative
     @Environment(\.colorSchemeContrast) private var systemContrast
     @Environment(\.accessibilityReduceTransparency) private var systemReduceTransparency
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
@@ -166,6 +195,7 @@ private struct ValidationWorkspace: View {
         DirectorRootView(model: session.model)
             .environmentObject(languageStore)
             .environmentObject(themeStore)
+            .environment(\.capabilityHistoryPresentationSource, session.historyPresentationSource(for: historyScenario))
             .id(session.generation)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(ProductCaptureReader { productCaptureView = $0 })
@@ -241,6 +271,14 @@ private struct ValidationWorkspace: View {
                     Button("Last 30 days") { session.model.setHomeUsageRankingPeriod(.thirtyDays) }
                 }
                 .accessibilityValue(session.model.homeUsageRankingPeriod.rawValue)
+
+                Menu("History state") {
+                    ForEach(UIValidationSession.HistoryScenario.allCases) { value in
+                        Button(value.title) { historyScenario = value }
+                    }
+                }
+                .accessibilityLabel("History validation state")
+                .accessibilityValue(historyScenario.title)
 
                 Picker("Appearance", selection: $appearance) {
                     ForEach(UIValidationHost.Appearance.allCases) { value in Text(value.title).tag(value) }
@@ -358,15 +396,27 @@ private struct ValidationWorkspace: View {
     private func applyRequestedProductSize(to targetWindow: NSWindow? = nil, captureMode: Bool? = nil) {
         guard let targetWindow = targetWindow ?? window else { return }
         let showingControls = !(captureMode ?? isCaptureMode)
-        let desired = UIValidationCaptureLayout.windowContentSize(
+        let desiredContent = UIValidationCaptureLayout.windowContentSize(
             productSize: requestedProductSize,
             controlsHeight: controlsHeight,
             showsControls: showingControls
         )
+        let contentRectSize = targetWindow.contentRect(forFrameRect: targetWindow.frame).size
+        let nativeContentInset = UIValidationCaptureLayout.nativeContentInset(
+            contentRectSize: contentRectSize,
+            contentLayoutRectSize: targetWindow.contentLayoutRect.size,
+            contentViewBoundsSize: targetWindow.contentView?.bounds.size ?? .zero
+        )
+        let desiredWindow = UIValidationCaptureLayout.windowContentSize(
+            productSize: requestedProductSize,
+            controlsHeight: controlsHeight,
+            showsControls: showingControls,
+            nativeContentInset: nativeContentInset
+        )
         guard let current = targetWindow.contentView?.bounds.size,
-              abs(current.width - desired.width) <= 0.5,
-              abs(current.height - desired.height) <= 0.5 else {
-            targetWindow.setContentSize(desired)
+              abs(current.width - desiredContent.width) <= 0.5,
+              abs(current.height - desiredContent.height) <= 0.5 else {
+            targetWindow.setContentSize(desiredWindow)
             return
         }
     }
