@@ -2,6 +2,16 @@ import SwiftUI
 import Combine
 import DirectorCore
 
+@MainActor
+private final class WeakQuotaHistoryController {
+    weak var value: QuotaHistoryController?
+    let windowID: UUID?
+    init(_ value: QuotaHistoryController, windowID: UUID?) {
+        self.value = value
+        self.windowID = windowID
+    }
+}
+
 /// Trustworthy state of the derived-data presentation.
 ///
 /// `empty` means an indexing pass completed and found no facts. `initial`
@@ -323,6 +333,9 @@ public final class DirectorAppModel: ObservableObject {
     private let menuBarPreferences: MenuBarPreferences
     private let homeUsageRankingPreferences: HomeUsageRankingPreferences
     private let capabilityFolderUsagePreferences: CapabilityFolderUsagePreferences
+    private let quotaHistoryPreferences: QuotaHistoryPreferences
+    private var quotaHistoryControllers: [WeakQuotaHistoryController] = []
+    private var quotaHistoryDataGeneration: UInt64 = 0
     /// Keeps model instances in separate windows aligned with the shared
     /// application preference. The App scene and Settings may observe the
     /// same store through different model instances.
@@ -365,6 +378,11 @@ public final class DirectorAppModel: ObservableObject {
     private var sourceProgressLastPublishedAt: Date?
     private var cacheInvalidationTask: Task<Void, Never>?
     private var presentationCachePermit: PresentationSnapshotStore.WritePermit?
+    /// Tracks the one legacy daily-quota repair task for this model lifecycle.
+    /// The generation prevents a cancelled/late task from clearing a newer
+    /// task's state after a service or database lifecycle change.
+    private var quotaAlgorithmRepairTask: Task<Void, Never>?
+    private var quotaAlgorithmRepairGeneration: UInt64 = 0
     private var monitorStatisticsDay: Date?
     private var pendingMonitorDayProjection = false
     private var libraryPresentationKeys: [String: LibraryPresentationKey] = [:]
@@ -374,6 +392,7 @@ public final class DirectorAppModel: ObservableObject {
     /// Deterministic async seam for publication race tests. Production never
     /// assigns this hook; it only delays the already-built immutable DTO.
     internal var presentationProjectionTestHook: (@Sendable () async throws -> Void)?
+    internal var initialDirectoryReadTestHook: (@Sendable () async -> Void)?
 
     private struct PresentationTicket: Sendable {
         let lifecycleEpoch: UInt64
@@ -428,6 +447,7 @@ public final class DirectorAppModel: ObservableObject {
         menuBarPreferences: MenuBarPreferences = MenuBarPreferences(memoryEnabled: true),
         homeUsageRankingPreferences: HomeUsageRankingPreferences = HomeUsageRankingPreferences(memoryPeriod: .thirtyDays),
         capabilityFolderUsagePreferences: CapabilityFolderUsagePreferences = CapabilityFolderUsagePreferences(memoryPeriod: .thirtyDays),
+        quotaHistoryPreferences: QuotaHistoryPreferences = QuotaHistoryPreferences(memoryPeriod: .thirtyDays),
         accountUsageReading: CodexAccountUsageReading? = nil,
         capabilityFolderStore: CapabilityFolderStore = CapabilityFolderStore.makeMemory()
     ) {
@@ -449,6 +469,7 @@ public final class DirectorAppModel: ObservableObject {
         self.homeUsageRankingPeriod = homeUsageRankingPreferences.snapshot()
         self.capabilityFolderUsagePreferences = capabilityFolderUsagePreferences
         self.capabilityFolderUsagePeriod = capabilityFolderUsagePreferences.period
+        self.quotaHistoryPreferences = quotaHistoryPreferences
         self.accountUsageSnapshot = nil
         self.accountUsageError = nil
         self.capabilityHistoryRevision = nil
@@ -609,6 +630,8 @@ public final class DirectorAppModel: ObservableObject {
         }
         self.store = store
         self.readStore = readStore ?? store
+        quotaHistoryDataGeneration &+= 1
+        forEachQuotaHistoryController { $0.serviceDidChange() }
         self.coordinator = coordinator
         self.capabilityHistoryService = capabilityHistoryService ?? coordinator?.capabilityHistoryService
         if let capabilityHistoryService = self.capabilityHistoryService {
@@ -643,7 +666,11 @@ public final class DirectorAppModel: ObservableObject {
         if cacheStatus == .unavailable || presentationState == .preview {
             presentationState = .initial
         }
-        if !visibleWindowIDs.isEmpty { startSourceDataMonitor() }
+        if !visibleWindowIDs.isEmpty {
+            // The monitor may start before initial loading, but its action
+            // gate waits for the database identity and retry schedule.
+            startSourceDataMonitor()
+        }
     }
 
     public func installPresentationSnapshotStore(_ snapshotStore: PresentationSnapshotStore?) {
@@ -777,6 +804,7 @@ public final class DirectorAppModel: ObservableObject {
     }
 
     private func invalidateLifecycle() {
+        cancelLegacyQuotaRepair()
         lifecycleEpoch &+= 1
         presentationRequestSequence &+= 1
         detailRequestSequence &+= 1
@@ -856,6 +884,42 @@ public final class DirectorAppModel: ObservableObject {
         quotaSourceID = id
     }
 
+    /// Creates a window-owned history session over the existing read-only
+    /// database actor. App-scoped preferences are shared, browsing is not.
+    public func makeQuotaHistoryController(windowID: UUID? = nil) -> QuotaHistoryController {
+        let controller = QuotaHistoryController(
+            preferences: quotaHistoryPreferences,
+            now: { [weak self] in self?.nowProvider() ?? Date() },
+            timeZone: { [weak self] in self?.statisticsCalendar.timeZone ?? .current },
+            serviceReady: { [weak self] in self?.readStore != nil && self?.isDeletingDerivedData == false },
+            dataGeneration: { [weak self] in self?.quotaHistoryDataGeneration ?? 0 },
+            fetch: { [weak self] query, token in
+                guard let readStore = self?.readStore, self?.isDeletingDerivedData == false else {
+                    throw QuotaHistoryControllerError.databaseNotReady
+                }
+                return try await readStore.fetchQuotaHistory(query: query, cancellation: token)
+            }
+        )
+        quotaHistoryControllers.append(WeakQuotaHistoryController(controller, windowID: windowID))
+        return controller
+    }
+
+    private func forEachQuotaHistoryController(_ action: (QuotaHistoryController) -> Void) {
+        quotaHistoryControllers.removeAll { $0.value == nil }
+        for reference in quotaHistoryControllers {
+            if let controller = reference.value { action(controller) }
+        }
+    }
+
+    private func forEachVisibleQuotaHistoryController(_ action: (QuotaHistoryController) -> Void) {
+        quotaHistoryControllers.removeAll { $0.value == nil }
+        for reference in quotaHistoryControllers {
+            guard reference.windowID.map(visibleWindowIDs.contains) ?? !visibleWindowIDs.isEmpty,
+                  let controller = reference.value else { continue }
+            action(controller)
+        }
+    }
+
     /// Current wall-clock value used by presentation-only scheduling and
     /// diagnostics. Tests inject `nowProvider`; production owns the clock.
     @Published public private(set) var presentationNow: Date
@@ -867,9 +931,13 @@ public final class DirectorAppModel: ObservableObject {
         if visible { visibleWindowIDs.insert(id) }
         else { visibleWindowIDs.remove(id) }
         if visible {
+            forEachVisibleQuotaHistoryController { $0.checkClockAndRefresh() }
             scheduleCapabilityRelationshipMigrationIfNeeded()
             if hasLoadedInitialData {
-                if !(normalPresentationRefreshDeferred && selection == .home) {
+                let needsLegacyQuotaRepair = quotaOverviewSnapshot?.hasCurrentDailyUsageAlgorithm == false
+                scheduleLegacyQuotaRepairIfNeeded()
+                if !needsLegacyQuotaRepair,
+                   !(normalPresentationRefreshDeferred && selection == .home) {
                     ensurePresentationRefreshCoordinator().scheduleStartup(domains: [.quota, .directory])
                 }
                 scheduleHomeRankingUpgradeIfNeeded()
@@ -962,7 +1030,11 @@ public final class DirectorAppModel: ObservableObject {
         isSystemSleeping = value
         if value { suspendPendingAutomaticWorkIfHidden() }
         else {
-            if !visibleWindowIDs.isEmpty, hasLoadedInitialData,
+            forEachVisibleQuotaHistoryController { $0.checkClockAndRefresh() }
+            let needsLegacyQuotaRepair = quotaOverviewSnapshot?.hasCurrentDailyUsageAlgorithm == false
+            scheduleLegacyQuotaRepairIfNeeded()
+            if !needsLegacyQuotaRepair,
+               !visibleWindowIDs.isEmpty, hasLoadedInitialData,
                !(normalPresentationRefreshDeferred && selection == .home) {
                 ensurePresentationRefreshCoordinator().scheduleStartup(domains: [.quota, .directory])
             }
@@ -980,6 +1052,7 @@ public final class DirectorAppModel: ObservableObject {
             statisticsCalendar = updated
         }
         presentationNow = nowProvider()
+        forEachVisibleQuotaHistoryController { $0.checkClockAndRefresh() }
         lastStatisticsDay = nil
         restartSourceDataMonitor()
         guard !visibleWindowIDs.isEmpty, !isSystemSleeping else { return }
@@ -993,37 +1066,34 @@ public final class DirectorAppModel: ObservableObject {
     /// path and therefore never loads all findings or sessions.
     public func loadDiagnosticsIfNeeded(force: Bool = false) async {
         guard let readStore, !isDeletingDerivedData else { return }
-        if !force, presentationDiagnostics != nil { return }
         diagnosticsRequestSequence &+= 1
         let sequence = diagnosticsRequestSequence
         let epoch = lifecycleEpoch
-        let identity: PresentationIdentity
-        do {
-            identity = try await readStore.presentationIdentity()
-        } catch {
-            diagnosticsLoading = false
-            diagnosticsError = "diagnostics_load_failed"
-            return
-        }
-        diagnosticsLoading = true
-        diagnosticsError = nil
         defer {
-            if sequence == diagnosticsRequestSequence { diagnosticsLoading = false }
+            if sequence == diagnosticsRequestSequence, diagnosticsLoading { diagnosticsLoading = false }
         }
         do {
+            let metadata = try await readStore.fetchPresentationIndexMetadata()
+            guard sequence == diagnosticsRequestSequence, epoch == lifecycleEpoch,
+                  !isDeletingDerivedData, !Task.isCancelled else { return }
+            if !force, diagnosticsError == nil,
+               let previous = presentationDiagnostics,
+               previous.metadata == metadata { return }
+
+            if !diagnosticsLoading { diagnosticsLoading = true }
+            if diagnosticsError != nil { diagnosticsError = nil }
             let summary = try await readStore.fetchPresentationDiagnostics()
-            let currentIdentity = try await readStore.presentationIdentity()
+            let currentMetadata = try await readStore.fetchPresentationIndexMetadata()
             guard sequence == diagnosticsRequestSequence,
                   epoch == lifecycleEpoch,
-                  summary.metadata.identity == identity,
-                  currentIdentity == identity,
+                  summary.metadata == currentMetadata,
                   !isDeletingDerivedData,
                   !Task.isCancelled else { return }
             presentationDiagnostics = summary
         } catch {
             guard sequence == diagnosticsRequestSequence,
                   epoch == lifecycleEpoch,
-                  !isDeletingDerivedData else { return }
+                  !isDeletingDerivedData, !Task.isCancelled else { return }
             diagnosticsError = "diagnostics_load_failed"
         }
     }
@@ -1325,6 +1395,8 @@ public final class DirectorAppModel: ObservableObject {
                     relationshipIndexVersion: CapabilityCompanionIndex.currentVersion
                 )
                 guard lifecycleEpoch == epoch, !isDeletingDerivedData else { return false }
+                quotaHistoryDataGeneration &+= 1
+                forEachQuotaHistoryController { $0.indexedDataDidCommit() }
                 presentationRefreshCoordinator?.setAutomaticSourceEnabled(true)
                 diagnosticsRequestSequence &+= 1
                 // Keep the last valid bounded diagnostics while an open
@@ -2375,6 +2447,7 @@ public final class DirectorAppModel: ObservableObject {
         } else if monitorStatisticsDay != currentDay {
             monitorStatisticsDay = currentDay
             pendingMonitorDayProjection = true
+            forEachVisibleQuotaHistoryController { $0.checkClockAndRefresh() }
         }
 
         var wakeDate = nextPresentationWakeDate(after: now)
@@ -2384,8 +2457,14 @@ public final class DirectorAppModel: ObservableObject {
            readStore != nil,
            hasLoadedInitialData {
             let scheduler = ensurePresentationRefreshCoordinator()
-            let schedulerDue = broadAutomaticAllowed && scheduler.nextWakeDate.map { $0 <= now } == true
-            let dayDue = broadAutomaticAllowed && pendingMonitorDayProjection
+            let legacyQuotaRetryDue = quotaOverviewSnapshot?.hasCurrentDailyUsageAlgorithm == false
+                && scheduler.scheduleState.projectionRetryDate.map { $0 <= now } == true
+            if legacyQuotaRetryDue && !scheduler.isRunning {
+                scheduleLegacyQuotaRepairIfNeeded(scheduler: scheduler)
+            }
+            let schedulerDue = broadAutomaticAllowed && !legacyQuotaRetryDue
+                && scheduler.nextWakeDate.map { $0 <= now } == true
+            let dayDue = broadAutomaticAllowed && !legacyQuotaRetryDue && pendingMonitorDayProjection
             let homeRetryDue = homeRankingRetryPending &&
                 (scheduler.scheduleState.projectionRetryDate.map { $0 <= now } == true)
             if (schedulerDue || dayDue || homeRetryDue),
@@ -2511,6 +2590,8 @@ public final class DirectorAppModel: ObservableObject {
         capabilityRelationshipMigrationTask = nil
         homeRankingUpgradeTask?.cancel()
         homeRankingUpgradeTask = nil
+        quotaAlgorithmRepairTask?.cancel()
+        quotaAlgorithmRepairTask = nil
     }
 
     private var currentClassificationRevision: String {
@@ -2726,7 +2807,8 @@ public final class DirectorAppModel: ObservableObject {
     }
 
     private func applyCachedPresentation(_ snapshot: PresentationSnapshot) {
-        quotaOverviewSnapshot = snapshot.quota
+        quotaOverviewSnapshot = snapshot.quota.map(Self.maskUnsupportedDailyQuota)
+        forEachQuotaHistoryController { $0.updateHomeSnapshot(quotaOverviewSnapshot) }
         accountUsageSnapshot = snapshot.accountUsage
         accountUsageRefreshScheduler?.updateSnapshot(snapshot.accountUsage)
         accountUsageError = nil
@@ -2750,6 +2832,96 @@ public final class DirectorAppModel: ObservableObject {
         sourceDataFresh = false
     }
 
+    /// Schema-v1 caches remain useful for current allowance, source identity,
+    /// and Home rows, but their daily values and cycle markers were produced
+    /// by the superseded reset-pair algorithm. Mask only those fields until a
+    /// bounded quota projection writes the current algorithm version.
+    private static func maskUnsupportedDailyQuota(_ snapshot: QuotaOverviewSnapshot) -> QuotaOverviewSnapshot {
+        guard !snapshot.hasCurrentDailyUsageAlgorithm else { return snapshot }
+        let sources = snapshot.sources.map { source in
+            QuotaOverviewSourceSnapshot(
+                id: source.id,
+                name: source.name,
+                rawDisplayName: source.rawDisplayName,
+                current: source.current,
+                shortCurrent: source.shortCurrent,
+                daily: source.daily.map {
+                    QuotaOverviewDay(day: $0.day, observation: $0.observation)
+                }
+            )
+        }
+        return QuotaOverviewSnapshot(
+            identity: snapshot.identity,
+            generatedAt: snapshot.generatedAt,
+            window: snapshot.window,
+            coverage: snapshot.coverage,
+            sources: sources,
+            dailyUsageAlgorithmVersion: nil
+        )
+    }
+
+    private func scheduleLegacyQuotaRepairIfNeeded(
+        quota: QuotaOverviewSnapshot? = nil,
+        scheduler: RefreshCoordinator? = nil,
+        ticket: DisplayTicket? = nil
+    ) {
+        let legacyQuota = quota ?? quotaOverviewSnapshot
+        guard let legacyQuota,
+              !legacyQuota.hasCurrentDailyUsageAlgorithm,
+              quotaAlgorithmRepairTask == nil,
+              hasLoadedInitialData,
+              !isDeletingDerivedData,
+              !isSystemSleeping,
+              !visibleWindowIDs.isEmpty else { return }
+
+        let repairGeneration = quotaAlgorithmRepairGeneration &+ 1
+        quotaAlgorithmRepairGeneration = repairGeneration
+        let lifecycle = lifecycleEpoch
+        let classification = classificationEpoch
+        let classificationRevision = currentClassificationRevision
+        let resolvedScheduler = scheduler ?? ensurePresentationRefreshCoordinator()
+        // A failed projection owns its retry deadline in the shared
+        // scheduler. Do not turn a later window callback into an immediate
+        // force loop that bypasses that bounded backoff.
+        if let projectionRetryDate = resolvedScheduler.scheduleState.projectionRetryDate,
+           projectionRetryDate > nowProvider() {
+            return
+        }
+        let repairTask = Task { @MainActor [weak self] in
+            defer { self?.finishLegacyQuotaRepair(repairGeneration) }
+            guard let self,
+                  repairGeneration == self.quotaAlgorithmRepairGeneration,
+                  lifecycle == self.lifecycleEpoch,
+                  classification == self.classificationEpoch,
+                  classificationRevision == self.currentClassificationRevision,
+                  ticket.map(self.isCurrent) ?? true,
+                  self.hasLoadedInitialData,
+                  !self.isDeletingDerivedData,
+                  !self.isSystemSleeping,
+                  !self.visibleWindowIDs.isEmpty,
+                  let currentQuota = self.quotaOverviewSnapshot,
+                  !currentQuota.hasCurrentDailyUsageAlgorithm else { return }
+            _ = await resolvedScheduler.request(RefreshRequest(
+                domains: [.quota],
+                reason: .automatic,
+                force: true,
+                sourceIntent: false
+            ))
+        }
+        quotaAlgorithmRepairTask = repairTask
+    }
+
+    private func finishLegacyQuotaRepair(_ generation: UInt64) {
+        guard generation == quotaAlgorithmRepairGeneration else { return }
+        quotaAlgorithmRepairTask = nil
+    }
+
+    private func cancelLegacyQuotaRepair() {
+        quotaAlgorithmRepairGeneration &+= 1
+        quotaAlgorithmRepairTask?.cancel()
+        quotaAlgorithmRepairTask = nil
+    }
+
     /// Reconciles the monitor's day marker with the actual published window.
     /// A ticker may have started before cache restoration and observed today;
     /// the cache's older, still-valid window must then schedule one projection
@@ -2762,6 +2934,7 @@ public final class DirectorAppModel: ObservableObject {
     }
 
     private func invalidateCachedPresentation() {
+        cancelLegacyQuotaRepair()
         quotaOverviewSnapshot = nil
         accountUsageSnapshot = nil
         accountUsageRefreshScheduler?.updateSnapshot(nil)
@@ -2823,6 +2996,7 @@ public final class DirectorAppModel: ObservableObject {
             let directory: PresentationDirectorySnapshot
             do {
                 directory = try await readStore.fetchPresentationDirectory()
+                await initialDirectoryReadTestHook?()
                 let authoritativeIdentity = try await readStore.presentationIdentity()
                 guard isCurrent(ticket), authoritativeIdentity == directory.metadata.identity else { return false }
                 // Establish the cache lifecycle permit after the authoritative
@@ -2901,6 +3075,11 @@ public final class DirectorAppModel: ObservableObject {
                         bootstrapStatus = .ready
                         restartSourceDataMonitor()
                         scheduleHomeRankingUpgradeIfNeeded()
+                        scheduleLegacyQuotaRepairIfNeeded(
+                            quota: snapshot.quota,
+                            scheduler: scheduler,
+                            ticket: ticket
+                        )
                         return true
                     }
                     let legacyHomeNeedsUpgrade = snapshot.home?.needsRankingUpgrade ?? false
@@ -2917,6 +3096,11 @@ public final class DirectorAppModel: ObservableObject {
                     bootstrapStatus = .ready
                     restartSourceDataMonitor()
                     scheduleHomeRankingUpgradeIfNeeded()
+                    scheduleLegacyQuotaRepairIfNeeded(
+                        quota: snapshot.quota,
+                        scheduler: scheduler,
+                        ticket: ticket
+                    )
                     return true
                 }
                 guard isCurrent(ticket) else { return false }
@@ -3094,6 +3278,7 @@ public final class DirectorAppModel: ObservableObject {
         folderUsagePeriods = Dictionary(uniqueKeysWithValues: startup.recentUsagePeriods.map { ($0.resourceID, $0) })
         folderUsageWindow = window
         quotaOverviewSnapshot = quota
+        forEachQuotaHistoryController { $0.updateHomeSnapshot(quota) }
         presentationHomeSummary = homeSummary
         for library in libraryModels {
             // Startup replaces only the compact catalog/recent projection;
@@ -3374,9 +3559,12 @@ public final class DirectorAppModel: ObservableObject {
     /// Deletes all derived data. Source files are never touched.
     public func deleteDerivedData() async throws {
         guard !isDeletingDerivedData else { return }
+        cancelLegacyQuotaRepair()
         isDeletingDerivedData = true
         defer { isDeletingDerivedData = false }
         lifecycleEpoch &+= 1
+        quotaHistoryDataGeneration &+= 1
+        forEachQuotaHistoryController { $0.derivedDataWillDelete() }
         // Derived-index deletion preserves the independent history file, but
         // any source result issued before this lifecycle boundary is revoked.
         await capabilityHistoryService?.cancelPendingWrites()

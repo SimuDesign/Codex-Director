@@ -143,6 +143,88 @@ final class CapabilityRestoreTests: XCTestCase {
         super.tearDown()
     }
 
+    func testArchiveDigestRejectsGrowthPastInjectedLimitBeforeVerification() async throws {
+        let fixture = try makeFixture()
+        try Data(repeating: 0x42, count: 512).write(to: fixture.archive)
+        var limits = CapabilityPackageLimits()
+        limits.maxArchiveBytes = 1_024
+        let archive = fixture.archive
+        let restore = CapabilityRestoreCoordinator(
+            homeDirectory: fixture.restoredHome,
+            hooks: .none,
+            packageLimits: limits,
+            afterArchiveStat: { _ in
+                if let writer = try? FileHandle(forWritingTo: archive) {
+                    defer { try? writer.close() }
+                    _ = try? writer.seekToEnd()
+                    try? writer.write(contentsOf: Data(repeating: 0x43, count: 1_024))
+                }
+            }
+        )
+        do {
+            _ = try await restore.openPackage(at: archive, trustedSource: true)
+            XCTFail("The archive grew beyond the reading budget")
+        } catch {
+            XCTAssertEqual(error as? CapabilityRestoreError, .resourceLimitExceeded)
+        }
+    }
+
+    func testArchiveDigestRejectsNonRegularSourceWithoutFollowingLink() async throws {
+        let fixture = try makeFixture()
+        let source = fixture.archive.deletingLastPathComponent().appendingPathComponent("source.zip")
+        try Data(repeating: 0x42, count: 64).write(to: source)
+        try FileManager.default.createSymbolicLink(atPath: fixture.archive.path, withDestinationPath: source.path)
+        let restore = CapabilityRestoreCoordinator(homeDirectory: fixture.restoredHome)
+        do {
+            _ = try await restore.openPackage(at: fixture.archive, trustedSource: true)
+            XCTFail("A symbolic-link source must be rejected")
+        } catch {
+            XCTAssertEqual(error as? CapabilityRestoreError, .invalidArchive)
+        }
+        XCTAssertEqual(try Data(contentsOf: source).count, 64)
+    }
+
+    func testRestoreVerifiesOpenSnapshotWhenSnapshotPathIsReplaced() async throws {
+        let fixture = try makeFixture()
+        let prepared = try await makePackage(fixture: fixture)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let displaced = fixture.root.appendingPathComponent("displaced-snapshot.zip")
+        let marker = fixture.root.appendingPathComponent("snapshot-path.txt")
+        let restore = CapabilityRestoreCoordinator(
+            homeDirectory: fixture.restoredHome,
+            hooks: .none,
+            beforeSnapshotVerification: { snapshot in
+                try? Data(snapshot.path.utf8).write(to: marker)
+                try? FileManager.default.moveItem(at: snapshot, to: displaced)
+                try? Data("foreign".utf8).write(to: snapshot)
+            }
+        )
+        let info = try await restore.openPackage(at: fixture.archive, trustedSource: true)
+        XCTAssertEqual(info.manifest.formatVersion, 1)
+        let snapshot = URL(fileURLWithPath: try String(contentsOf: marker, encoding: .utf8))
+        XCTAssertEqual(try String(contentsOf: snapshot, encoding: .utf8), "foreign")
+        await restore.discard()
+        try FileManager.default.removeItem(at: snapshot)
+    }
+
+    func testRestoreRemovesItsOwnedSnapshotAfterOpen() async throws {
+        let fixture = try makeFixture()
+        let prepared = try await makePackage(fixture: fixture)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let marker = fixture.root.appendingPathComponent("snapshot-path.txt")
+        let restore = CapabilityRestoreCoordinator(
+            homeDirectory: fixture.restoredHome,
+            hooks: .none,
+            beforeSnapshotVerification: { snapshot in
+                try? Data(snapshot.path.utf8).write(to: marker)
+            }
+        )
+        _ = try await restore.openPackage(at: fixture.archive, trustedSource: true)
+        let snapshot = URL(fileURLWithPath: try String(contentsOf: marker, encoding: .utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: snapshot.path))
+        await restore.discard()
+    }
+
     func testTrustedPackageRestoresGlobalAndProjectCapabilitiesAndSupportsUndo() async throws {
         let fixture = try makeFixture()
         let prepared = try await makePackage(fixture: fixture)

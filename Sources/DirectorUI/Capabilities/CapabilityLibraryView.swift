@@ -468,7 +468,7 @@ private struct CapabilityGroupHeaderBorder: Shape {
 
 public struct CapabilityLibraryView: View {
     @ObservedObject public var model: CapabilityLibraryViewModel
-    public let title: String; public let subtitle: String; public var onScopeChanged: ((CapabilityBrowseScope) -> Void)?
+    public let title: String; public let subtitle: String; public var onScopeChanged: ((CapabilityBrowseScope) async -> Void)?
     public var detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)?
     /// Optional folder organization hooks supplied by the app model. Keeping
     /// these as closures lets the library remain usable by isolated hosts
@@ -489,12 +489,15 @@ public struct CapabilityLibraryView: View {
     @State private var cachedDetailKey = ""
     @State private var selectedRowEmphasized = false
     @State private var groupDisclosure = CapabilityLibraryDisclosureState()
-    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, pluginInventoryAvailable: Bool? = nil, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil, onUsagePeriodChanged: ((CapabilityFolderUsagePeriod) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.pluginInventoryAvailable = pluginInventoryAvailable; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership; self.onUsagePeriodChanged = onUsagePeriodChanged }
+    @FocusState private var lazyFocusedRowID: String?
+    @State private var lazyFocusRestoreID: String?
+    public init(model: CapabilityLibraryViewModel, title: String, subtitle: String, presentationState: DirectorPresentationState = .loaded, pluginInventoryAvailable: Bool? = nil, queryStatus: DirectorLibraryQueryStatus? = nil, resultContext: DirectorLibraryResultContext? = nil, queryTrigger: String? = nil, onScopeChanged: ((CapabilityBrowseScope) async -> Void)? = nil, detailContext: ((CapabilityLibraryRow) -> CapabilityDetailViewModel)? = nil, folderDefinitions: [CapabilityFolderDefinition] = [], folderMembership: ((String, String) -> Bool)? = nil, onToggleFolderMembership: ((String, String, Bool) -> Void)? = nil, onUsagePeriodChanged: ((CapabilityFolderUsagePeriod) -> Void)? = nil) { self.model = model; self.title = title; self.subtitle = subtitle; self.presentationState = presentationState; self.pluginInventoryAvailable = pluginInventoryAvailable; self.queryStatus = queryStatus; self.resultContext = resultContext; self.queryTrigger = queryTrigger; self.onScopeChanged = onScopeChanged; self.detailContext = detailContext; self.folderDefinitions = folderDefinitions; self.folderMembership = folderMembership; self.onToggleFolderMembership = onToggleFolderMembership; self.onUsagePeriodChanged = onUsagePeriodChanged }
     public var body: some View {
         DirectorEditorialFrame {
             GeometryReader { proxy in
                 ZStack(alignment: .trailing) {
                     list(width: proxy.size.width)
+                        .accessibilityHidden(usesLazyScroll && selected != nil)
 
                     if let row = selected {
                         Color.black.opacity(0.24)
@@ -506,7 +509,8 @@ public struct CapabilityLibraryView: View {
                         DirectorSideSheet(
                             width: sideSheetWidth(for: proxy.size.width),
                             onClose: { model.selectedID = nil },
-                            closeLabel: copy("detail.close", "Close detail")
+                            closeLabel: copy("detail.close", "Close detail"),
+                            focusCloseOnAppear: usesLazyScroll
                         ) {
                             detail(row, showsBackButton: false)
                         }
@@ -519,7 +523,10 @@ public struct CapabilityLibraryView: View {
             }
         }
         .navigationTitle(title)
-        .task(id: queryTaskID) { guard queryTrigger != nil else { return }; onScopeChanged?(model.context.scope) }
+        .task(id: queryTaskID) {
+            guard queryTrigger != nil else { return }
+            await onScopeChanged?(model.context.scope)
+        }
         .onAppear {
             if model.language != languageStore.language {
                 model.language = languageStore.language
@@ -528,6 +535,17 @@ public struct CapabilityLibraryView: View {
         .onChange(of: languageStore.language) { _, value in model.language = value }
         .onChange(of: model.context.search) { _, _ in groupDisclosure.revealAll() }
         .onExitCommand { model.selectedID = nil }
+        .onChange(of: model.selectedID) { _, selectedID in
+            guard usesLazyScroll,
+                  selectedID == nil,
+                  let restoreID = lazyFocusRestoreID,
+                  model.rows(for: effectiveScope).contains(where: { $0.id == restoreID }) else { return }
+            Task { @MainActor in
+                await Task.yield()
+                guard selected == nil, lazyFocusRestoreID == restoreID else { return }
+                lazyFocusedRowID = restoreID
+            }
+        }
     }
     private var queryTaskID: String? { queryTrigger.map { "\($0)|\(String(describing: model.context.scope))" } }
     private var effectiveScope: CapabilityBrowseScope { if (queryStatus == .loading || queryStatus == .failed), let resultContext { return resultContext.scope }; return model.context.scope }
@@ -548,16 +566,38 @@ public struct CapabilityLibraryView: View {
     private func sideSheetWidth(for width: CGFloat) -> CGFloat {
         min(DirectorSpacing.sideSheetMaxWidth, max(DirectorSpacing.sideSheetMinWidth, width * 0.34))
     }
+    private var usesLazyScroll: Bool {
+        guard model.category == .customAgents || model.category == .customSkills else { return false }
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        switch ProcessInfo.processInfo.environment["CODEX_DIRECTOR_LIBRARY_RENDERER"] {
+        case "appkit", "appkit-custom", "native-original": return false
+        default: break
+        }
+#endif
+        return true
+    }
+
     @ViewBuilder private func list(width: CGFloat) -> some View {
-        #if DIRECTOR_INTERACTION_PERFORMANCE
-        if ProcessInfo.processInfo.environment["CODEX_DIRECTOR_LIBRARY_RENDERER"] == "appkit" {
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        switch ProcessInfo.processInfo.environment["CODEX_DIRECTOR_LIBRARY_RENDERER"] {
+        case "appkit":
             diagnosticAppKitList(width: width)
+        case "appkit-custom" where model.category == .customAgents || model.category == .customSkills:
+            diagnosticAppKitList(width: width, deferred: true)
+        default:
+            defaultList(width: width)
+        }
+#else
+        defaultList(width: width)
+#endif
+    }
+
+    @ViewBuilder private func defaultList(width: CGFloat) -> some View {
+        if usesLazyScroll {
+            lazyScrollList(width: width)
         } else {
             nativeList(width: width)
         }
-        #else
-        nativeList(width: width)
-        #endif
     }
 
     private func nativeList(width: CGFloat) -> some View {
@@ -660,69 +700,168 @@ public struct CapabilityLibraryView: View {
         .frame(maxWidth: .infinity, alignment: .center)
     }
 
+    private func lazyScrollList(width: CGFloat) -> some View {
+        let contentWidth = DirectorPageLayout.contentWidth(for: width)
+        let margin = DirectorPageLayout.contentMargin(for: width)
+        let compact = width < DirectorPageLayout.compactBreakpoint
+        let groups = model.groupedRows(for: effectiveScope)
+        let navigableRowIDs = groups
+            .filter { !groupDisclosure.isCollapsed($0.id) }
+            .flatMap { $0.rows.map(\.id) }
+
+        return ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    scrollableLibraryHeader(contentWidth: contentWidth, rowInset: 0, compact: compact)
+                    if groups.isEmpty {
+                        Text(emptyMessage)
+                            .font(DirectorTypography.body)
+                            .foregroundStyle(DirectorColor.textSecondary)
+                            .padding(.vertical, DirectorSpacing.space4)
+                    } else {
+                        ForEach(groups) { group in
+                            groupHeader(group, rowInsets: .init(), hasPrecedingGroup: group.id != groups.first?.id)
+                            if !groupDisclosure.isCollapsed(group.id) {
+                                ForEach(group.renderRows) { item in
+                                    libraryRow(item.row, boundary: item.boundary, rowInsets: .init(), exposesMenuSeparately: true)
+                                        .contentShape(Rectangle())
+                                        .id(item.row.id)
+                                        .onTapGesture {
+                                            lazyFocusRestoreID = item.row.id
+                                            lazyFocusedRowID = item.row.id
+                                            model.selectedID = item.row.id
+                                        }
+                                        .focusable(selected == nil)
+                                        .focused($lazyFocusedRowID, equals: item.row.id)
+                                        .onKeyPress(.upArrow) {
+                                            moveLazyFocus(from: item.row.id, offset: -1, rowIDs: navigableRowIDs, proxy: proxy)
+                                        }
+                                        .onKeyPress(.downArrow) {
+                                            moveLazyFocus(from: item.row.id, offset: 1, rowIDs: navigableRowIDs, proxy: proxy)
+                                        }
+                                        .onKeyPress(.return) {
+                                            guard selected == nil else { return .ignored }
+                                            lazyFocusRestoreID = item.row.id
+                                            model.selectedID = item.row.id
+                                            return .handled
+                                        }
+                                        .onKeyPress(.escape) {
+                                            guard model.selectedID != nil else { return .ignored }
+                                            model.selectedID = nil
+                                            return .handled
+                                        }
+                                        .accessibilityAction(.default) {
+                                            lazyFocusRestoreID = item.row.id
+                                            lazyFocusedRowID = item.row.id
+                                            model.selectedID = item.row.id
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, margin)
+            }
+            .frame(minHeight: 220)
+        }
+    }
+
+    private func moveLazyFocus(
+        from rowID: String,
+        offset: Int,
+        rowIDs: [String],
+        proxy: ScrollViewProxy
+    ) -> KeyPress.Result {
+        guard selected == nil,
+              let index = rowIDs.firstIndex(of: rowID) else { return .ignored }
+        let targetIndex = index + offset
+        guard rowIDs.indices.contains(targetIndex) else { return .handled }
+        let targetID = rowIDs[targetIndex]
+        lazyFocusRestoreID = targetID
+        proxy.scrollTo(targetID, anchor: .center)
+        Task { @MainActor in
+            await Task.yield()
+            guard selected == nil, lazyFocusRestoreID == targetID else { return }
+            lazyFocusedRowID = targetID
+        }
+        return .handled
+    }
+
     #if DIRECTOR_INTERACTION_PERFORMANCE
-    private func diagnosticAppKitList(width: CGFloat) -> some View {
+    private func diagnosticAppKitList(width: CGFloat, deferred: Bool = false) -> some View {
         let contentWidth = DirectorPageLayout.contentWidth(for: width)
         // The native List path subtracts its own 8pt content inset. This
         // diagnostic plain NSTableView has no such inset.
         let rowInset = DirectorPageLayout.contentMargin(for: width)
         let compact = width < DirectorPageLayout.compactBreakpoint
         var rows: [FullPageLibraryPrototypeRow] = [
-            .init(
+            diagnosticAppKitRow(
                 id: "diagnostic-header",
                 height: compact ? 444 : 336,
                 selectable: false,
-                view: AnyView(diagnosticAppKitHeader(contentWidth: contentWidth, rowInset: rowInset, compact: compact))
-            )
+                deferred: deferred
+            ) { [self] in
+                AnyView(self.scrollableLibraryHeader(contentWidth: contentWidth, rowInset: rowInset, compact: compact)
+                    .environmentObject(self.languageStore))
+            }
         ]
         if displayedRows.isEmpty {
-            rows.append(.init(
+            rows.append(diagnosticAppKitRow(
                 id: "diagnostic-empty",
                 height: 72,
                 selectable: false,
-                view: AnyView(Text(emptyMessage)
+                deferred: deferred
+            ) { [self] in
+                AnyView(Text(self.emptyMessage)
                     .font(DirectorTypography.body)
                     .foregroundStyle(DirectorColor.textSecondary)
                     .padding(.horizontal, rowInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading))
-            ))
+            })
         } else {
             let groups = model.groupedRows(for: effectiveScope)
             for group in groups {
-                rows.append(.init(
+                rows.append(diagnosticAppKitRow(
                     id: "diagnostic-group-\(group.id)",
                     height: compact ? 60 : 56,
                     selectable: false,
-                    view: AnyView(groupHeader(group, rowInsets: .init())
+                    deferred: deferred
+                ) { [self] in
+                    AnyView(self.groupHeader(group, rowInsets: .init())
                         .padding(.horizontal, rowInset)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom))
-                ))
+                })
                 if !groupDisclosure.isCollapsed(group.id) {
                     for (index, row) in group.rows.enumerated() {
                         let boundary = groupBoundary(for: index, count: group.rows.count)
-                        rows.append(.init(
+                        rows.append(diagnosticAppKitRow(
                             id: row.id,
                             height: compact ? 112 : 96,
                             selectable: true,
-                            view: AnyView(libraryRow(row, boundary: boundary, rowInsets: .init())
+                            deferred: deferred
+                        ) { [self] in
+                            AnyView(self.libraryRow(row, boundary: boundary, rowInsets: .init())
                                 .tint(DirectorColor.accent(pageTone))
                                 .padding(.horizontal, rowInset)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top))
-                        ))
+                        })
                     }
                 }
                 if group.id != groups.last?.id {
-                    rows.append(.init(
+                    rows.append(diagnosticAppKitRow(
                         id: "diagnostic-group-space-\(group.id)",
                         height: DirectorSpacing.space5,
                         selectable: false,
-                        view: AnyView(Color.clear)
-                    ))
+                        deferred: deferred
+                    ) { AnyView(Color.clear) })
                 }
             }
         }
         return FullPageLibraryRendererPrototype(
             rows: rows,
+            viewportWidth: width,
+            searchText: model.context.search,
             selectedID: $model.selectedID,
             folderOptions: { resourceID in
                 guard let folderMembership else { return [] }
@@ -739,7 +878,22 @@ public struct CapabilityLibraryView: View {
         .frame(minHeight: 220)
     }
 
-    private func diagnosticAppKitHeader(contentWidth: CGFloat, rowInset: CGFloat, compact: Bool) -> some View {
+    private func diagnosticAppKitRow(
+        id: String,
+        height: CGFloat,
+        selectable: Bool,
+        deferred: Bool,
+        makeView: @escaping @MainActor () -> AnyView
+    ) -> FullPageLibraryPrototypeRow {
+        if deferred {
+            return FullPageLibraryPrototypeRow(id: id, height: height, selectable: selectable, makeView: makeView)
+        }
+        return FullPageLibraryPrototypeRow(id: id, height: height, selectable: selectable, view: makeView())
+    }
+
+    #endif
+
+    private func scrollableLibraryHeader(contentWidth: CGFloat, rowInset: CGFloat, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             capabilityHeader(compact: compact, minimumTitleScale: 1)
                 .padding(.bottom, DirectorSpacing.space6)
@@ -768,7 +922,6 @@ public struct CapabilityLibraryView: View {
         .padding(.horizontal, rowInset)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
-    #endif
 
     private func pageRowInsets(for width: CGFloat) -> EdgeInsets {
         let margin = DirectorPageLayout.listRowInset(for: width)
@@ -865,7 +1018,6 @@ public struct CapabilityLibraryView: View {
 
     private func selectScope(_ scope: CapabilityBrowseScope) {
         model.context = model.context.updated(scope: scope)
-        onScopeChanged?(model.context.scope)
     }
 
     private func selectSort(_ sort: CapabilitySort) {
@@ -957,7 +1109,12 @@ public struct CapabilityLibraryView: View {
         .listRowInsets(rowInsets)
     }
 
-    private func libraryRow(_ row: CapabilityLibraryRow, boundary: CapabilityGroupRowBorder.Boundary, rowInsets: EdgeInsets) -> some View {
+    private func libraryRow(
+        _ row: CapabilityLibraryRow,
+        boundary: CapabilityGroupRowBorder.Boundary,
+        rowInsets: EdgeInsets,
+        exposesMenuSeparately: Bool = false
+    ) -> some View {
         #if DIRECTOR_INTERACTION_PERFORMANCE
         InteractionPerformanceProbe.increment(.rowViewBuild)
         #endif
@@ -1073,7 +1230,7 @@ public struct CapabilityLibraryView: View {
                     .accessibilityHidden(true)
             }
         }
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: exposesMenuSeparately ? .contain : .combine)
         .listRowInsets(rowInsets)
         .accessibilityLabel(text.accessibilityLabel)
     }
@@ -1335,7 +1492,6 @@ public struct CapabilityLibraryView: View {
         case .enabled: model.context = model.context.updated(pluginStatusFilter: model.context.pluginStatusFilter == .enabled ? .all : .enabled)
         default: break
         }
-        onScopeChanged?(model.context.scope)
     }
     private func copy(_ key: String, _ fallback: String, _ args: CVarArg...) -> String { languageStore.localizer.format(key, fallback: fallback, arguments: args) }
     private func number(_ value: Int) -> String { copy("library.number", "%lld", Int64(value)) }

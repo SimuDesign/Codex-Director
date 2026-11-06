@@ -556,6 +556,7 @@ final class CapabilityHistoryPresentationTests: XCTestCase {
         XCTAssertEqual(summary.availability, .indexUnavailable)
     }
 
+#if DEBUG || DIRECTOR_INTERACTION_PERFORMANCE
     func testSyntheticValidationSessionUsesMemoryHistoryWithoutAddingDataset() async throws {
         let session = try UIValidationSession(dataset: .representative)
         try await session.prepare()
@@ -575,6 +576,8 @@ final class CapabilityHistoryPresentationTests: XCTestCase {
         XCTAssertTrue(presentation.events.contains { $0.resourceID == "agent:validation-global" })
         XCTAssertEqual(UIValidationSession.Dataset.allCases.count, 7)
     }
+
+#endif
 
     func testPresentationClockAdvancesAfterModelCreation() async throws {
         let store = try CapabilityHistoryStore.memory(initialEpoch: 23)

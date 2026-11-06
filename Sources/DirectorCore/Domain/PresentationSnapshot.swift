@@ -70,13 +70,23 @@ public struct QuotaOverviewSourceSnapshot: Codable, Equatable, Sendable, Identif
 }
 
 public struct QuotaOverviewSnapshot: Codable, Equatable, Sendable {
+    public static let currentDailyUsageAlgorithmVersion = QuotaDailyUsage.currentAlgorithmVersion
     public let identity: PresentationIdentity
     public let generatedAt: Date
     public let window: CapabilityQueryWindow
     public let coverage: CoverageState
     public let sources: [QuotaOverviewSourceSnapshot]
-    public init(identity: PresentationIdentity, generatedAt: Date = Date(), window: CapabilityQueryWindow, coverage: CoverageState, sources: [QuotaOverviewSourceSnapshot]) {
+    /// Nil denotes a schema-v1 cache whose daily values and cycle markers were
+    /// produced without the stateful reset classifier. Current allowance and
+    /// source observations remain valid, but legacy daily presentation must be
+    /// treated as unknown until a bounded quota projection refreshes it.
+    public let dailyUsageAlgorithmVersion: Int?
+    public var hasCurrentDailyUsageAlgorithm: Bool {
+        dailyUsageAlgorithmVersion == Self.currentDailyUsageAlgorithmVersion
+    }
+    public init(identity: PresentationIdentity, generatedAt: Date = Date(), window: CapabilityQueryWindow, coverage: CoverageState, sources: [QuotaOverviewSourceSnapshot], dailyUsageAlgorithmVersion: Int? = Self.currentDailyUsageAlgorithmVersion) {
         self.identity = identity; self.generatedAt = generatedAt; self.window = window; self.coverage = coverage; self.sources = sources
+        self.dailyUsageAlgorithmVersion = dailyUsageAlgorithmVersion
     }
 }
 

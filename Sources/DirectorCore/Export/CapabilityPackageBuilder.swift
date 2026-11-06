@@ -19,6 +19,7 @@ struct CapabilityPackageBuilder: Sendable {
     /// other's staging directories. Production retains the stable prefix so
     /// recovery diagnostics remain recognizable.
     let stagingPrefix: String
+    let limits: CapabilityPackageLimits
     private var fileManager: FileManager { .default }
 
     init(
@@ -26,13 +27,15 @@ struct CapabilityPackageBuilder: Sendable {
         pluginProvider: any CapabilityPluginInventoryProviding,
         now: @escaping @Sendable () -> Date,
         afterFileRead: (@Sendable (URL) -> Void)? = nil,
-        stagingPrefix: String = "CodexDirectorExport-"
+        stagingPrefix: String = "CodexDirectorExport-",
+        limits: CapabilityPackageLimits = CapabilityPackageLimits()
     ) {
         self.environment = environment
         self.pluginProvider = pluginProvider
         self.now = now
         self.afterFileRead = afterFileRead
         self.stagingPrefix = stagingPrefix
+        self.limits = limits
     }
 
     func prepare(
@@ -41,10 +44,11 @@ struct CapabilityPackageBuilder: Sendable {
         cancellation: CapabilityExportCancellation = CapabilityExportCancellation()
     ) async throws -> CapabilityPreparedPackage {
         try cancellation.check()
-        progress?(CapabilityExportProgress(phase: .discovering))
         let discovery = CapabilityPackageDiscovery(environment: environment)
-        let sources = discovery.selectedSources(for: selection)
-        let projects = discovery.selectedProjects(for: selection)
+        try discovery.validateSelection(selection)
+        progress?(CapabilityExportProgress(phase: .discovering))
+        let sources = try discovery.selectedSources(for: selection)
+        let projects = try discovery.selectedProjects(for: selection)
         let createdAt = now()
         let plugins = await pluginProvider.inventory(at: createdAt)
         try cancellation.check()
@@ -119,6 +123,11 @@ struct CapabilityPackageBuilder: Sendable {
                     ))
                 }
             }
+            issues.append(contentsOf: unrestorableLinkIssues(
+                entries: capabilityEntries,
+                source: source,
+                packageRoot: root
+            ))
             capabilityEntries.sort { $0.archivePath < $1.archivePath }
             entries.append(contentsOf: capabilityEntries)
             manifests.append(CapabilityPackageCapability(
@@ -154,6 +163,7 @@ struct CapabilityPackageBuilder: Sendable {
             at: root
         )
         try cancellation.check()
+        issues.append(contentsOf: try stagedLimitIssues(at: root))
 
         let binaryCount = entries.filter { $0.inspection == .unscannedBinary }.count
         if binaryCount > 0 {
@@ -235,52 +245,47 @@ struct CapabilityPackageBuilder: Sendable {
         cancellation: CapabilityExportCancellation,
         progress: (Int) -> Void
     ) throws -> StageResult {
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey]
-        guard let enumerator = fileManager.enumerator(
-            at: component.sourceURL,
-            includingPropertiesForKeys: keys,
-            options: [],
-            errorHandler: { _, _ in true }
-        ) else { return StageResult() }
-
         var result = StageResult()
-        for case let item as URL in enumerator {
+        var pending = [component.sourceURL]
+        while let directory = pending.popLast() {
             try cancellation.check()
-            let relative = relativePath(of: item, under: component.sourceURL)
-            guard !relative.isEmpty else { continue }
-            let values = try item.resourceValues(forKeys: Set(keys))
-            let name = item.lastPathComponent
-            if values.isDirectory == true, shouldExclude(name: name) {
-                enumerator.skipDescendants()
-                continue
-            }
-            if values.isDirectory != true, shouldExclude(name: name) { continue }
-
-            let destinationRelative = join(component.relativeDestination, relative)
-            let targetRelative = join(component.relativeTargetPath, relative)
-            if values.isSymbolicLink == true {
-                let staged = try stageSymlink(
-                    at: item,
-                    destinationRelativePath: destinationRelative,
-                    targetRelativePath: targetRelative,
-                    containmentRoot: component.containmentRoot,
-                    source: source,
-                    packageRoot: packageRoot
-                )
-                result.merge(staged)
-                progress(1)
-            } else if values.isDirectory != true {
-                let staged = try stageFile(
-                    at: item,
-                    destinationRelativePath: destinationRelative,
-                    targetRelativePath: targetRelative,
-                    source: source,
-                    packageRoot: packageRoot,
-                    replacements: replacements,
-                    requirements: &requirements
-                )
-                result.merge(staged)
-                progress(1)
+            let children = try fileManager.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: []
+            ).sorted { $0.lastPathComponent < $1.lastPathComponent }
+            for item in children {
+                try cancellation.check()
+                let relative = relativePath(of: item, under: component.sourceURL)
+                guard !relative.isEmpty, !shouldExclude(name: item.lastPathComponent) else { continue }
+                let destinationRelative = join(component.relativeDestination, relative)
+                let targetRelative = join(component.relativeTargetPath, relative)
+                // destinationOfSymbolicLink uses the directory entry itself,
+                // so a dangling link is still observed and validated.
+                if (try? fileManager.destinationOfSymbolicLink(atPath: item.path)) != nil {
+                    let staged = try stageSymlink(
+                        at: item,
+                        destinationRelativePath: destinationRelative,
+                        targetRelativePath: targetRelative,
+                        containmentRoot: component.containmentRoot,
+                        source: source,
+                        packageRoot: packageRoot
+                    )
+                    result.merge(staged)
+                    progress(1)
+                } else if try item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+                    pending.append(item)
+                } else {
+                    let staged = try stageFile(
+                        at: item,
+                        destinationRelativePath: destinationRelative,
+                        targetRelativePath: targetRelative,
+                        source: source,
+                        packageRoot: packageRoot,
+                        replacements: replacements,
+                        requirements: &requirements
+                    )
+                    result.merge(staged)
+                    progress(1)
+                }
             }
         }
         return result
@@ -315,6 +320,9 @@ struct CapabilityPackageBuilder: Sendable {
             )])
         }
         let before = try fileManager.attributesOfItem(atPath: sourceURL.path)
+        if (before[.size] as? NSNumber)?.uint64Value ?? 0 > limits.maxRegularFileBytes {
+            return StageResult(issues: [resourceLimitIssue(capabilityID: source.id)])
+        }
         let originalData = try Data(contentsOf: sourceURL, options: .mappedIfSafe)
         afterFileRead?(sourceURL)
         let after = try fileManager.attributesOfItem(atPath: sourceURL.path)
@@ -358,6 +366,9 @@ struct CapabilityPackageBuilder: Sendable {
         } else {
             outputData = originalData
             inspection = .unscannedBinary
+        }
+        guard UInt64(outputData.count) <= limits.maxRegularFileBytes else {
+            return StageResult(issues: [resourceLimitIssue(capabilityID: source.id)])
         }
 
         let archivePath = join(source.archiveBasePath, destinationRelativePath)
@@ -430,7 +441,7 @@ struct CapabilityPackageBuilder: Sendable {
             .standardizedFileURL
             .resolvingSymlinksInPath()
         let resolvedRoot = containmentRoot.standardizedFileURL.resolvingSymlinksInPath()
-        guard candidate.isContained(in: resolvedRoot) else {
+        guard candidate == resolvedRoot || !relativePath(of: candidate, under: resolvedRoot).isEmpty else {
             return StageResult(issues: [issue(
                 severity: .blocking,
                 code: "unsafe_symlink",
@@ -442,9 +453,12 @@ struct CapabilityPackageBuilder: Sendable {
 
         let archivePath = join(source.archiveBasePath, destinationRelativePath)
         let outputURL = packageRoot.appendingPathComponent(archivePath)
+        let data = Data(destination.utf8)
+        guard UInt64(data.count) <= limits.maxSymlinkBytes else {
+            return StageResult(issues: [resourceLimitIssue(capabilityID: source.id)])
+        }
         try fileManager.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fileManager.createSymbolicLink(atPath: outputURL.path, withDestinationPath: destination)
-        let data = Data(destination.utf8)
         return StageResult(entries: [CapabilityPackageEntry(
             archivePath: archivePath,
             logicalRoot: source.logicalRoot,
@@ -455,6 +469,41 @@ struct CapabilityPackageBuilder: Sendable {
             contentType: "inode/symlink",
             inspection: .validatedSymlink
         )])
+    }
+
+    private func unrestorableLinkIssues(
+        entries: [CapabilityPackageEntry],
+        source: CapabilityPackageSource,
+        packageRoot: URL
+    ) -> [CapabilityExportIssue] {
+        let filePaths = Set(entries.filter { $0.inspection != .validatedSymlink }.map(\.archivePath))
+        let linkPaths = Set(entries.filter { $0.inspection == .validatedSymlink }.map(\.archivePath))
+        return entries.compactMap { entry in
+            guard entry.inspection == .validatedSymlink else { return nil }
+            let linkURL = packageRoot.appendingPathComponent(entry.archivePath)
+            guard let target = try? fileManager.destinationOfSymbolicLink(atPath: linkURL.path) else {
+                return issue(
+                    severity: .blocking, code: "unrestorable_symlink", capabilityID: source.id,
+                    relativePath: entry.relativePath,
+                    message: "A symbolic link target is missing from the selected package content."
+                )
+            }
+            let targetURL = URL(fileURLWithPath: target, relativeTo: linkURL.deletingLastPathComponent())
+                .standardizedFileURL
+            let targetPath = relativePath(of: targetURL, under: packageRoot)
+            let inCapability = targetPath.hasPrefix(source.archiveBasePath + "/")
+            let targetIsFile = filePaths.contains(targetPath)
+            let targetIsNonemptyDirectory = filePaths.contains { $0.hasPrefix(targetPath + "/") }
+            let traversesLink = linkPaths.contains { targetPath == $0 || targetPath.hasPrefix($0 + "/") }
+            guard inCapability, !traversesLink, targetIsFile || targetIsNonemptyDirectory else {
+                return issue(
+                    severity: .blocking, code: "unrestorable_symlink", capabilityID: source.id,
+                    relativePath: entry.relativePath,
+                    message: "A symbolic link target is missing from the selected package content."
+                )
+            }
+            return nil
+        }
     }
 
     private func writeMetadata(
@@ -477,7 +526,7 @@ struct CapabilityPackageBuilder: Sendable {
         ) else { throw CapabilityExportError.invalidArchive }
         for case let url as URL in enumerator {
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            guard values.isDirectory != true else { continue }
+            guard values.isDirectory != true || values.isSymbolicLink == true else { continue }
             let relative = relativePath(of: url, under: root)
             guard relative != "checksums.json" else { continue }
             let data: Data
@@ -490,6 +539,49 @@ struct CapabilityPackageBuilder: Sendable {
         }
         try encoded(CapabilityPackageChecksums(files: checksums))
             .write(to: root.appendingPathComponent("checksums.json"), options: .atomic)
+    }
+
+    private func stagedLimitIssues(at root: URL) throws -> [CapabilityExportIssue] {
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey],
+            options: [], errorHandler: { _, _ in false }
+        ) else { throw CapabilityExportError.invalidArchive }
+        var count = 0
+        var total: UInt64 = 0
+        for case let url as URL in enumerator {
+            let relative = relativePath(of: url, under: root)
+            let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
+            count += 1
+            if count > limits.maxEntries || relative.utf8.count > limits.maxPathUTF8Bytes
+                || relative.split(separator: "/").count > limits.maxPathDepth {
+                return [resourceLimitIssue()]
+            }
+            guard values.isDirectory != true || values.isSymbolicLink == true else { continue }
+            let size: UInt64
+            let maximum: UInt64
+            if values.isSymbolicLink == true {
+                size = UInt64(try fileManager.destinationOfSymbolicLink(atPath: url.path).utf8.count)
+                maximum = limits.maxSymlinkBytes
+            } else {
+                size = UInt64(max(0, values.fileSize ?? 0))
+                maximum = ["manifest.json", "checksums.json", "plugins.json", "requirements.json", "RESTORE.md"].contains(relative)
+                    ? limits.maxMetadataFileBytes : limits.maxRegularFileBytes
+            }
+            let (sum, overflow) = total.addingReportingOverflow(size)
+            if size > maximum || overflow || sum > limits.maxTotalExpandedBytes {
+                return [resourceLimitIssue()]
+            }
+            total = sum
+        }
+        return []
+    }
+
+    private func resourceLimitIssue(capabilityID: String? = nil) -> CapabilityExportIssue {
+        issue(
+            severity: .blocking, code: "package_resource_limit", capabilityID: capabilityID,
+            message: "The selected package exceeds a safe size or entry limit. Exclude content and run preflight again."
+        )
     }
 
     private func pathReplacements(projects: [CapabilityPackageProjectContext]) -> [(String, String)] {
@@ -553,8 +645,15 @@ struct CapabilityPackageBuilder: Sendable {
     }
 
     private func relativePath(of url: URL, under root: URL) -> String {
-        let rootPath = root.standardizedFileURL.path
-        let path = url.standardizedFileURL.path
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        // Standardizing a dangling final symlink can preserve /private/var
+        // while the existing root standardizes to /var. Resolve only the
+        // parent so the final directory entry keeps its lexical identity.
+        let path = url.deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .appendingPathComponent(url.lastPathComponent)
+            .path
         guard path.hasPrefix(rootPath + "/") else { return "" }
         return String(path.dropFirst(rootPath.count + 1))
     }

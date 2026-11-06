@@ -472,6 +472,7 @@ struct CapabilityRestoreSheet: View {
         if let error = error as? CapabilityRestoreError {
             switch error {
             case .untrustedSource: return "settings.migration.restore.error.trust"
+            case .resourceLimitExceeded: return "settings.migration.restore.error.limit"
             case .missingProjectMapping, .duplicateProjectMapping, .invalidProjectMapping: return "settings.migration.restore.error.mapping"
             default: return "settings.migration.restore.error.generic"
             }

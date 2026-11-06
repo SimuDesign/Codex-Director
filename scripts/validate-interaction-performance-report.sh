@@ -56,7 +56,8 @@ def require(condition, code):
         print(f"error={code}", file=sys.stderr)
         raise SystemExit(1)
 
-require(report.get("schemaVersion") == 3, "interaction_report_schema_invalid")
+schema = report.get("schemaVersion")
+require(schema in {3, 4}, "interaction_report_schema_invalid")
 require(report.get("fixture") == expected_fixture, "interaction_report_fixture_invalid")
 require(report.get("measurementMode") == "release-optimized-synthetic-root-model-and-layout-markers", "interaction_report_mode_invalid")
 require(report.get("inputToPaintMeasurement", "").startswith("not_claimed;"), "interaction_report_input_to_paint_claim_invalid")
@@ -109,7 +110,7 @@ for sample in samples:
     for event in events:
         require(isinstance(event, dict), "interaction_report_stage_event_invalid")
         require(isinstance(event.get("name"), str) and event["name"] in {
-            "sidebar-home", "sidebar-custom-agents", "sidebar-custom-skills",
+            "sidebar-home", "sidebar-quota-history", "sidebar-custom-agents", "sidebar-custom-skills",
             "sidebar-installed-skills", "sidebar-installed-plugins", "sidebar-folder", "folder-entry",
             "folder-tab", "folder-sort", "detail", "folder-member-add",
             "folder-member-remove", "sidebar-settings"
@@ -120,7 +121,7 @@ for sample in samples:
         phases = event.get("phaseDurationsMilliseconds")
         counts = event.get("phaseCounts")
         require(isinstance(phases, dict) and {"selectionMutation", "initialLayoutSettlement"}.issubset(phases), "interaction_report_stage_phases_missing")
-        require(set(phases).issubset({"selectionMutation", "initialLayoutSettlement", "libraryReloadAwait", "finalLayoutSettlement", "identityRead", "rowProjectionBuild"}), "interaction_report_stage_phase_name_invalid")
+        require(set(phases).issubset({"selectionMutation", "initialLayoutSettlement", "libraryReloadAwait", "finalLayoutSettlement", "identityRead", "rowProjectionBuild", "sidebarDraw", "destinationDraw"}), "interaction_report_stage_phase_name_invalid")
         require(all(isinstance(value, (int, float)) and math.isfinite(value) and value >= 0 for value in phases.values()), "interaction_report_stage_phase_duration_invalid")
         require(isinstance(counts, dict) and set(counts).issubset({"identityRead", "rowProjectionBuild", "rowViewBuild", "libraryReloadFailure", "libraryReloadCompleted", "libraryReloadLoaded"}), "interaction_report_stage_phase_counts_invalid")
         require(all(isinstance(value, int) and value >= 0 for value in counts.values()), "interaction_report_stage_phase_counts_invalid")
@@ -137,6 +138,8 @@ for sample in samples:
         cursor += 1
 
     take("sidebar-home")
+    if schema >= 4:
+        take("sidebar-quota-history")
     for library_stage in (
         "sidebar-custom-agents", "sidebar-custom-skills",
         "sidebar-installed-skills", "sidebar-installed-plugins"

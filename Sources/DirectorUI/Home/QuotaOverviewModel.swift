@@ -155,7 +155,10 @@ public struct QuotaOverviewModel: Equatable, Sendable {
         }
         self.currentObservation = source.current
         self.shortCurrentObservation = source.shortCurrent
-        self.dailySnapshots = Self.makeCompactDailySnapshots(source.daily, calendar: calendar)
+        self.dailySnapshots = Self.makeCompactDailySnapshots(
+            source.daily,
+            algorithmIsSupported: projectedSnapshot.hasCurrentDailyUsageAlgorithm
+        )
     }
 
     /// Rebuild with a new observation set while retaining the selected source
@@ -264,7 +267,8 @@ public struct QuotaOverviewModel: Equatable, Sendable {
             generatedAt: max(snapshot.generatedAt, accountUsage.capturedAt),
             window: snapshot.window,
             coverage: snapshot.coverage,
-            sources: sources
+            sources: sources,
+            dailyUsageAlgorithmVersion: snapshot.dailyUsageAlgorithmVersion
         )
     }
 
@@ -324,99 +328,46 @@ public struct QuotaOverviewModel: Equatable, Sendable {
             let next = calendar.date(byAdding: .day, value: 1, to: day) ?? day.addingTimeInterval(86_400)
             let candidates = observations.filter { $0.capturedAt >= day && $0.capturedAt < next }
             let selected = candidates.max { $0.capturedAt < $1.capturedAt }
-            let changed: Bool
-            if selected != nil {
-                // Compare the first observation of this day with the last
-                // observation before the day. Looking only at the observation
-                // immediately before the selected (latest) one misses a
-                // reset when today contains multiple observations.
-                let first = candidates.min { $0.capturedAt < $1.capturedAt }
-                let priorBeforeDay = observations.last { $0.capturedAt < day }
-                let sameDayTransition = candidates.dropFirst().contains { item in
-                    guard let previousIndex = observations.firstIndex(where: { $0.id == item.id }), previousIndex > 0 else { return false }
-                    let previous = observations[previousIndex - 1]
-                    return previous.capturedAt >= day && QuotaDailyUsage.reportedCycleChanged(from: previous, to: item)
-                }
-                let boundaryTransition: Bool
-                if let first, let priorBeforeDay {
-                    boundaryTransition = QuotaDailyUsage.reportedCycleChanged(from: priorBeforeDay, to: first)
-                } else {
-                    boundaryTransition = false
-                }
-                changed = sameDayTransition || boundaryTransition
-            } else {
-                changed = false
-            }
+            let projection = QuotaDailyUsage.project(
+                on: day,
+                observations: observations,
+                calendar: calendar
+            )
             return DailySnapshot(
                 date: day,
                 observation: selected,
-                cycleChanged: changed,
-                usedPercent: QuotaDailyUsage.observedUsedPercent(
-                    on: day,
-                    observations: observations,
-                    calendar: calendar
-                )
+                cycleChanged: projection.cycleChanged,
+                usedPercent: projection.usedPercent
             )
         }
     }
 
     /// New compact projections carry the fully reset-aware value. For a
     /// schema-v1 cache written by an older app, preserve startup availability
-    /// by deriving only an unambiguous adjacent-day increase. Reset days and
-    /// gaps remain unavailable until the next bounded quota projection.
+    /// for current rings and observations while leaving daily usage and cycle
+    /// markers unknown until the forced bounded quota repair completes.
     private static func makeCompactDailySnapshots(
         _ days: [QuotaOverviewDay],
-        calendar: Calendar
+        algorithmIsSupported: Bool
     ) -> [DailySnapshot] {
-        var previousObservation: QuotaSnapshot?
-        var previousObservationDay: Date?
-        return days.map { day in
-            let legacyValue: Double?
-            if day.usedPercentDelta != nil {
-                legacyValue = nil
-            } else {
-                legacyValue = legacyDailyUsedPercent(
-                    day: day.day,
+        guard algorithmIsSupported else {
+            return days.map { day in
+                DailySnapshot(
+                    date: day.day,
                     observation: day.observation,
-                    previousObservation: previousObservation,
-                    previousObservationDay: previousObservationDay,
-                    calendar: calendar
+                    cycleChanged: false,
+                    usedPercent: nil
                 )
             }
-            if let observation = day.observation {
-                previousObservation = observation
-                previousObservationDay = day.day
-            }
+        }
+        return days.map { day in
             return DailySnapshot(
                 date: day.day,
                 observation: day.observation,
                 cycleChanged: day.cycleChanged,
-                usedPercent: day.usedPercentDelta ?? legacyValue
+                usedPercent: day.usedPercentDelta
             )
         }
-    }
-
-    private static func legacyDailyUsedPercent(
-        day: Date,
-        observation: QuotaSnapshot?,
-        previousObservation: QuotaSnapshot?,
-        previousObservationDay: Date?,
-        calendar: Calendar
-    ) -> Double? {
-        guard let observation, (0...100).contains(observation.usedPercent) else { return nil }
-        guard let previousObservation, let previousObservationDay else {
-            return observation.usedPercent == 0 ? 0 : nil
-        }
-        guard let expectedPriorDay = calendar.date(byAdding: .day, value: -1, to: day),
-              calendar.isDate(previousObservationDay, inSameDayAs: expectedPriorDay),
-              (0...100).contains(previousObservation.usedPercent) else { return nil }
-
-        guard QuotaDailyUsage.isSameReportedCycle(
-            from: previousObservation,
-            to: observation
-        ) == true else { return nil }
-        let difference = observation.usedPercent - previousObservation.usedPercent
-        return difference >= 0 ? difference : nil
     }
 
 }

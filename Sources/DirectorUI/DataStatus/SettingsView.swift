@@ -212,7 +212,7 @@ public struct SettingsView: View {
                 .environmentObject(languageStore)
         }
         // Refresh diagnostics if an index pass finishes while Settings stays open.
-        .task(id: model.lastIndexCompletedAt) { await model.loadDiagnosticsIfNeeded(force: true) }
+        .task(id: model.lastIndexCompletedAt) { await model.loadDiagnosticsIfNeeded() }
     }
 
     private var languagePicker: some View {
@@ -252,7 +252,7 @@ public struct SettingsView: View {
 
     private var appVersion: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return version ?? "1.6.1"
+        return version ?? "1.7.2"
     }
 
     private var historySource: CapabilityHistoryPresentationSource {

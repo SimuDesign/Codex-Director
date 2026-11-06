@@ -999,6 +999,66 @@ public actor DatabaseStore {
         return results
     }
 
+    /// Reads exactly one canonical weekly source, its fixed 60-day context,
+    /// and one deterministic predecessor. No new historical collection runs.
+    public func fetchQuotaHistory(
+        query: QuotaHistoryQuery,
+        cancellation: SQLiteCancellationToken? = nil
+    ) throws -> QuotaHistorySnapshot {
+        queryObserver?(.quotaHistory)
+        let token = cancellation ?? SQLiteCancellationToken(timeout: .seconds(5))
+        return try connection.performReadSnapshot(cancellation: token) {
+            let identity = try presentationIdentity()
+            if token.shouldInterrupt { throw SQLiteError.cancelled }
+            let sourcePredicate: String
+            let sourceValue: String
+            if query.sourceKey.hasPrefix("id:"), query.sourceKey.count > 3 {
+                sourcePredicate = "limit_id = ?"
+                sourceValue = String(query.sourceKey.dropFirst(3))
+            } else if query.sourceKey.hasPrefix("name:"), query.sourceKey.count > 5 {
+                sourcePredicate = "(limit_id IS NULL OR limit_id = '') AND limit_name = ?"
+                sourceValue = String(query.sourceKey.dropFirst(5))
+            } else {
+                return try QuotaHistoryUsage.project(query: query, identity: identity, observations: [], cancellation: token)
+            }
+            let columns = "id, captured_at, window_minutes, used_percent, resets_at, limit_id, limit_name, confidence"
+            let predecessor = try connection.prepare(
+                "SELECT \(columns) FROM quota_snapshots WHERE window_minutes = 10080 AND \(sourcePredicate) AND captured_at < ? ORDER BY captured_at DESC, id DESC LIMIT 1"
+            )
+            predecessor.bind(sourceValue, at: 1)
+            predecessor.bind(query.contextStart.timeIntervalSince1970, at: 2)
+            var values: [QuotaSnapshot] = []
+            if try predecessor.step() == .row { values.append(try Self.readQuotaHistoryRow(predecessor)) }
+            let range = try connection.prepare(
+                "SELECT \(columns) FROM quota_snapshots WHERE window_minutes = 10080 AND \(sourcePredicate) AND captured_at >= ? AND captured_at <= ? ORDER BY captured_at ASC, id ASC"
+            )
+            range.bind(sourceValue, at: 1)
+            range.bind(query.contextStart.timeIntervalSince1970, at: 2)
+            range.bind(query.asOf.timeIntervalSince1970, at: 3)
+            while try range.step() == .row {
+                if values.count & 255 == 0, token.shouldInterrupt { throw SQLiteError.cancelled }
+                values.append(try Self.readQuotaHistoryRow(range))
+            }
+            if token.shouldInterrupt { throw SQLiteError.cancelled }
+            return try QuotaHistoryUsage.project(
+                query: query, identity: identity, observations: values,
+                cancellation: token
+            )
+        }
+    }
+
+    private static func readQuotaHistoryRow(_ statement: SQLiteStatement) throws -> QuotaSnapshot {
+        try QuotaSnapshot(
+            id: statement.columnText(0) ?? "",
+            capturedAt: Date(timeIntervalSince1970: statement.columnDouble(1)),
+            windowMinutes: statement.columnInt(2),
+            usedPercent: statement.columnDouble(3),
+            resetsAt: statement.columnIsNull(4) ? nil : Date(timeIntervalSince1970: statement.columnDouble(4)),
+            limitID: statement.columnText(5), limitName: statement.columnText(6),
+            confidence: EvidenceConfidence(rawValue: statement.columnText(7) ?? "") ?? .unknown
+        )
+    }
+
     public func presentationIdentity() throws -> PresentationIdentity {
         queryObserver?(.identity)
         return try connection.performReadSnapshot { () -> PresentationIdentity in
@@ -1143,20 +1203,10 @@ public actor DatabaseStore {
                 let ordered = weeklyRows.sorted { lhs, rhs in lhs.capturedAt < rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id < rhs.id) }
                 let recent = ordered.filter { $0.capturedAt >= window.start }
                 let groupedDays = Dictionary(grouping: recent) { (observation: QuotaSnapshot) in calendar.startOfDay(for: observation.capturedAt) }
-                var previousObservation: QuotaSnapshot?
-                var changes: [Date: Bool] = [:]
-                for observation in ordered {
-                    let changed = previousObservation.map {
-                        QuotaDailyUsage.reportedCycleChanged(from: $0, to: observation)
-                    } ?? false
-                    let day = calendar.startOfDay(for: observation.capturedAt)
-                    if observation.capturedAt >= window.start { changes[day, default: false] = changes[day, default: false] || changed }
-                    previousObservation = observation
-                }
                 let daily = (0..<7).compactMap { offset -> QuotaOverviewDay? in
                     guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: window.start)) else { return nil }
                     let observation = groupedDays[day]?.max { lhs, rhs in lhs.capturedAt < rhs.capturedAt || (lhs.capturedAt == rhs.capturedAt && lhs.id < rhs.id) }
-                    let usedPercentDelta = QuotaDailyUsage.observedUsedPercent(
+                    let projection = QuotaDailyUsage.project(
                         on: day,
                         observations: ordered,
                         calendar: calendar
@@ -1164,8 +1214,8 @@ public actor DatabaseStore {
                     return QuotaOverviewDay(
                         day: day,
                         observation: observation,
-                        cycleChanged: changes[day] ?? false,
-                        usedPercentDelta: usedPercentDelta
+                        cycleChanged: projection.cycleChanged,
+                        usedPercentDelta: projection.usedPercent
                     )
                 }
                 let latest = ordered.last
@@ -1180,7 +1230,13 @@ public actor DatabaseStore {
                 let rawName = displaySnapshot?.limitName.flatMap { $0.isEmpty ? nil : $0 }
                 return QuotaOverviewSourceSnapshot(id: id, name: displayName, rawDisplayName: rawName, current: latest, shortCurrent: shortCurrent, daily: daily)
             }.sorted { $0.id < $1.id }
-            return QuotaOverviewSnapshot(identity: identity, window: window, coverage: values.isEmpty ? .unknown : .complete, sources: sources)
+            return QuotaOverviewSnapshot(
+                identity: identity,
+                window: window,
+                coverage: values.isEmpty ? .unknown : .complete,
+                sources: sources,
+                dailyUsageAlgorithmVersion: QuotaOverviewSnapshot.currentDailyUsageAlgorithmVersion
+            )
         }
     }
 

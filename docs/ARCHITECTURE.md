@@ -5,7 +5,7 @@ Codex Director separates local source discovery from Director-owned projections 
 ## Layers
 
 - **DirectorCore** discovers local resources, parses allowlisted evidence, coordinates refresh, persists projections and evaluations, and builds capability packages.
-- **DirectorUI** renders the seven primary destinations, detail flows, settings, export flow, themes, localization, and accessibility states.
+- **DirectorUI** renders the eight primary destinations, detail flows, settings, export flow, themes, localization, and accessibility states.
 - **CodexDirectorApp** owns application composition, dependency injection, windows, and app-level shared stores.
 
 ## Data authority
@@ -27,6 +27,31 @@ capabilities automatically and never changes source files or folder membership.
 Application surfaces share one refresh coordinator. Source scanning and projection are distinct phases. Cached results appear before background refresh, failures retain the last valid projection, and late or cancelled work cannot overwrite newer state. The enabled menu bar has one app-scoped account-only scheduler: after startup grace it uses exact `com.openai.codex` frontmost identity for a one-minute account cadence, a two-minute cadence for ten minutes after confirmed departure, a five-minute cadence for another active application outside grace, a conservative two-minute cadence when identity is unknown, and a thirty-minute cadence after thirty minutes of aggregate input idle time. It pauses on lock, sleep or Low Power Mode. The monitor reduces transient bundle identity to a safe enum and in-memory departure timestamp; it keeps no application-activity history and reads no window, task or input-event contents. Foreground identity is not evidence of background task execution. The scheduler keeps account-read and local policy/activity deadlines separate, reevaluates policy before every read, and anchors failed reads at stable 5/15/30-minute retry deadlines. One bounded wake checks idle recovery at most once per minute when needed without starting Codex. Opening the popover refreshes missing, expired or at-least-two-minute-old account data through the same coordinator. Account reads also respect the earliest reported reset. The bounded wake-up never starts capability indexing or reads SQLite.
 
 The sanitized app-server snapshot is also composed into Home as the current five-hour and weekly allowance for the canonical Codex source when it is at least as recent as that window's indexed observation. This is a presentation-only merge: indexed observations remain the sole input to the seven-day weekly chart, and live account values are never inserted into session evidence or SQLite history. The account DTO and indexed projection remain separate fields in presentation-cache schema v1 so old caches stay readable.
+
+Daily weekly-allowance values use a stateful accepted-cycle anchor rather than
+treating reset-time drift as a new cycle. Natural and early resets require
+supporting observation evidence; retired-cycle replays cannot become a new
+baseline, and unproved transitions remain unavailable. Daily values and reset
+markers share the classifier. The optional `dailyUsageAlgorithmVersion` in the
+quota projection preserves presentation-cache schema v1 compatibility: legacy
+daily values are hidden until the shared projection coordinator recomputes
+them. Current allowance and other cached content remain available. Calculation
+upgrades use bounded projection reads, not source scans or session replay;
+an intentional unknown daily value has no adjacent-day fallback.
+
+The narrow near-start one-point-decrease case has bounded lookahead: only a
+timely reappearance of the accepted anchor with usage strictly above the
+pre-drop report supports drift. Equal replay or missing support remains
+unknown. Legacy repair is dispatched only after initial loading and persisted
+retry restoration, so it cannot invalidate bootstrap's presentation ticket or
+bypass a saved retry deadline.
+
+Runtime partial failures are retained by failed source category. CLI MCP
+fallback keeps the previous observation time and warning state, without
+classifying plugin-provided MCP children as CLI MCP. Successful empty results
+still prune their category. Presentation-cache deletion/invalidation fences
+compatibility auto-activation within the shared actor; explicit activation
+starts the next lifecycle. This is not a new cross-process cache transaction.
 
 ## Capability change history
 
@@ -266,6 +291,16 @@ preference migration.
 
 Exports use manifest v1 with checksums, logical roots, path placeholders, plugin inventory, dependency inventory, and bilingual recovery instructions. Packages are local and unencrypted. The app verifies the completed ZIP before moving it to the user-selected destination.
 
+Export staging, archive verification and restore share application resource
+limits without changing manifest v1: 512 MiB input/expanded bytes, 20,000 entries
+including directories, 64 MiB per regular file, 8 MiB per root metadata file,
+64 KiB per link and 4,096 UTF-8 bytes/64 components per entry path. Declared and
+actual streaming sizes, arithmetic, CRC and local symlink headers are checked.
+Oversized older ZIPs remain unchanged. Only direct relative links to included
+real files/directories are portable; dangling/chain/omitted targets are rejected.
+Malformed project selections are rejected before source discovery rather than
+being used to construct a trapping dictionary.
+
 Restore uses the same manifest v1 verifier but keeps the package in an isolated
 temporary extraction owned by an app-scoped `CapabilityRestoreCoordinator`.
 Global roots are fixed to the current user's approved Agent, Skill, and
@@ -370,3 +405,33 @@ empty set means the query completed with no observed calls. The selected period
 is a separate app-owned UserDefaults value containing only `7d` or `30d`; it
 defaults to thirty days without overwriting valid remembered choices and contains
 no resource metadata or usage evidence.
+
+
+## On-demand quota history — 1.7.0
+
+Quota history is a separate read-only projection over existing weekly
+`quota_snapshots`, not an expansion of the startup cache. A fixed source,
+60-local-day context plus its predecessor is read consistently, classified
+once and aggregated into compact day/transition DTOs. The 7/30/60 controls
+slice that same result in memory. Historical unknown recovery has its own
+policy while the Home seven-day wrapper retains its existing fail-closed
+semantics. Comparison eligibility includes database identity, source, timezone,
+natural day and effective inclusive/exclusive cutoff; different cutoffs are
+not automatically algorithm conflicts. Matching-input conflicting values
+become an explicit unknown history day.
+
+Quota history is a full sidebar page immediately after Home; the Home shortcut
+navigates to that same route. Its explicit source selection uses the stable
+raw selection rather than the current-value model's first-source fallback.
+Missing sources remain unavailable until an explicit choice is made.
+
+Per-window controllers own cancellable, generation-guarded requests and
+browsing state. Page activation opens one guarded read; leaving closes only
+the captured session and cancels unfinished work. No modal close action or
+Escape-to-Home behavior remains. An app-shared preference stores only the independent period.
+Successful index replacement invalidates visible history; account-only
+updates alter current values without rereading history or changing historical
+freshness. Closing, deletion and epoch changes prevent late publication.
+No history polling, new account identity, live journal, schema/parser/cache
+migration or source replay is introduced. History remains disposable with
+the derived index; source buckets cannot establish same-account continuity.

@@ -200,6 +200,289 @@ final class CapabilityPackageTests: XCTestCase {
         XCTAssertTrue(preview.issues.contains { $0.code == "unsafe_symlink" && $0.severity == .blocking })
     }
 
+    func testDanglingInternalLinkIsBlockedBeforePackageCanBeRestored() async throws {
+        try await assertUnrestorableLinkIsBlocked(target: "../assets/missing.txt", name: "dangling-link")
+    }
+
+    func testLinkToExcludedContentIsBlockedBeforePackageCanBeRestored() async throws {
+        try await assertUnrestorableLinkIsBlocked(target: "../cache/ignored.txt", name: "excluded-link")
+    }
+
+    private func assertUnrestorableLinkIsBlocked(target: String, name: String) async throws {
+        let fixture = try makeFixture()
+        let link = fixture.home.appendingPathComponent(".codex/skills/local-skill/assets/\(name)")
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target)
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+
+        // Exercise the complete builder -> ZIP -> restore path while this is
+        // still accepted, so the regression covers a real unreadable package.
+        if !prepared.preview.hasBlockingIssues {
+            let archive = fixture.output.appendingPathComponent("unrestorable.codexpack.zip")
+            _ = try CapabilityPackageArchiveWriter().write(
+                prepared: prepared, to: archive, progressHandler: nil,
+                cancellation: CapabilityExportCancellation()
+            )
+            let restore = CapabilityRestoreCoordinator(homeDirectory: fixture.secondHome)
+            let info = try await restore.openPackage(at: archive, trustedSource: true)
+            let skillID = try XCTUnwrap(info.manifest.capabilities.first {
+                $0.id == "global:skill:codex:local-skill"
+            }?.id)
+            let restoreSelection = CapabilityRestoreSelection(includedCapabilityIDs: [skillID])
+            _ = try await restore.preview(selection: restoreSelection)
+            do {
+                _ = try await restore.restore(selection: restoreSelection)
+                XCTFail("Unrestorable link unexpectedly survived restore")
+            } catch {
+                // The export preflight must now stop this before a ZIP is made.
+            }
+        }
+        XCTAssertTrue(prepared.preview.issues.contains {
+            $0.code == "unrestorable_symlink" && $0.severity == .blocking
+        })
+    }
+
+    func testUnknownExportProjectIsRejectedBeforeSourceCollection() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        var selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        selection.projects.append(CapabilityExportProjectSelection(projectID: "project-unknown", includeSkills: true))
+        do {
+            _ = try await coordinator.prepare(selection: selection)
+            XCTFail("Unknown project must fail closed")
+        } catch {
+            XCTAssertEqual(error as? CapabilityExportError, .invalidSelection)
+        }
+    }
+
+    func testRepeatedExportProjectIsRejectedWithoutCreatingStaging() async throws {
+        let fixture = try makeFixture()
+        let prefix = "CodexDirectorInvalidSelection-"
+        let coordinator = makeCoordinator(fixture: fixture, stagingPrefix: prefix)
+        var selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let first = try XCTUnwrap(selection.projects.first)
+        selection.projects.append(CapabilityExportProjectSelection(
+            projectID: first.projectID, includeSkills: true
+        ))
+        let before = temporaryItems(withPrefix: prefix)
+        do {
+            _ = try await coordinator.prepare(selection: selection)
+            XCTFail("Repeated project ID must fail closed")
+        } catch {
+            XCTAssertEqual(error as? CapabilityExportError, .invalidSelection)
+        }
+        XCTAssertEqual(temporaryItems(withPrefix: prefix), before)
+    }
+
+    func testArchiveLimitsRejectSmallSyntheticPackageAndLeaveDestinationClean() async throws {
+        let fixture = try makeFixture()
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let archive = fixture.output.appendingPathComponent("small.codexpack.zip")
+        _ = try CapabilityPackageArchiveWriter().write(
+            prepared: prepared, to: archive, progressHandler: nil,
+            cancellation: CapabilityExportCancellation()
+        )
+        let archiveHash = try hashItem(archive)
+
+        var policies = [CapabilityPackageLimits]()
+        var entryLimit = CapabilityPackageLimits()
+        entryLimit.maxEntries = 1
+        policies.append(entryLimit)
+        var fileLimit = CapabilityPackageLimits()
+        fileLimit.maxRegularFileBytes = 1
+        policies.append(fileLimit)
+        var metadataLimit = CapabilityPackageLimits()
+        metadataLimit.maxMetadataFileBytes = 1
+        policies.append(metadataLimit)
+        var totalLimit = CapabilityPackageLimits()
+        totalLimit.maxTotalExpandedBytes = 1
+        policies.append(totalLimit)
+        var archiveLimit = CapabilityPackageLimits()
+        archiveLimit.maxArchiveBytes = 1
+        policies.append(archiveLimit)
+
+        for (index, limits) in policies.enumerated() {
+            let extraction = fixture.output.appendingPathComponent("rejected-\(index)")
+            XCTAssertThrowsError(try CapabilityPackageArchiveVerifier(limits: limits).verify(
+                archiveURL: archive, extractionDirectory: extraction
+            )) { error in
+                XCTAssertEqual(error as? CapabilityExportError, .resourceLimitExceeded)
+            }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: extraction.path))
+            XCTAssertEqual(try hashItem(archive), archiveHash)
+        }
+    }
+
+    func testBuilderUsesSameSmallMetadataLimitAsVerifier() async throws {
+        let fixture = try makeFixture()
+        var limits = CapabilityPackageLimits()
+        limits.maxMetadataFileBytes = 1
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) },
+            limits: limits
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        XCTAssertTrue(prepared.preview.issues.contains {
+            $0.code == "package_resource_limit" && $0.severity == .blocking
+        })
+    }
+
+    func testVerifierRejectsOversizedLocalSymlinkHeaderWithoutLeavingExtraction() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let original = fixture.output.appendingPathComponent("original.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: original)
+        var bytes = [UInt8](try Data(contentsOf: original))
+        let signature: [UInt8] = [0x50, 0x4b, 0x03, 0x04]
+        var changed = false
+        for offset in 0..<(bytes.count - 30) where Array(bytes[offset..<(offset + 4)]) == signature {
+            let nameLength = Int(bytes[offset + 26]) | Int(bytes[offset + 27]) << 8
+            guard offset + 30 + nameLength <= bytes.count else { continue }
+            let name = String(decoding: bytes[(offset + 30)..<(offset + 30 + nameLength)], as: UTF8.self)
+            guard name.hasSuffix("assets/run-link") else { continue }
+            for index in (offset + 18)..<(offset + 22) { bytes[index] = 0xff }
+            changed = true
+            break
+        }
+        XCTAssertTrue(changed)
+        let malformed = fixture.output.appendingPathComponent("malformed.codexpack.zip")
+        try Data(bytes).write(to: malformed)
+        let extraction = fixture.output.appendingPathComponent("malformed-extraction")
+        XCTAssertThrowsError(try CapabilityPackageArchiveVerifier().verify(
+            archiveURL: malformed, extractionDirectory: extraction
+        ))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: extraction.path))
+    }
+
+    func testVerifierCountsActualDecompressedBytesWhenHeaderUnderstatesSize() async throws {
+        let fixture = try makeFixture()
+        let oversized = fixture.home.appendingPathComponent(".codex/skills/local-skill/assets/oversized.bin")
+        try Data(repeating: 0xa5, count: 2_048).write(to: oversized)
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let original = fixture.output.appendingPathComponent("actual.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: original)
+        var bytes = [UInt8](try Data(contentsOf: original))
+        var changed = false
+        for offset in 0..<(bytes.count - 46)
+        where Array(bytes[offset..<(offset + 4)]) == [0x50, 0x4b, 0x01, 0x02] {
+            let nameLength = Int(bytes[offset + 28]) | Int(bytes[offset + 29]) << 8
+            guard offset + 46 + nameLength <= bytes.count else { continue }
+            let name = String(decoding: bytes[(offset + 46)..<(offset + 46 + nameLength)], as: UTF8.self)
+            guard name.hasSuffix("assets/oversized.bin") else { continue }
+            bytes[offset + 24] = 1
+            for index in (offset + 25)..<(offset + 28) { bytes[index] = 0 }
+            changed = true
+            break
+        }
+        XCTAssertTrue(changed)
+        let forged = fixture.output.appendingPathComponent("understated.codexpack.zip")
+        try Data(bytes).write(to: forged)
+        var limits = CapabilityPackageLimits()
+        limits.maxRegularFileBytes = 1_024
+        let extraction = fixture.output.appendingPathComponent("understated-extraction")
+        XCTAssertThrowsError(try CapabilityPackageArchiveVerifier(limits: limits).verify(
+            archiveURL: forged, extractionDirectory: extraction
+        )) { error in
+            XCTAssertEqual(error as? CapabilityExportError, .resourceLimitExceeded)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: extraction.path))
+    }
+
+    func testVerifierLeavesPreexistingExtractionContentsUntouched() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let archive = fixture.output.appendingPathComponent("fixture.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: archive)
+        let extraction = fixture.output.appendingPathComponent("occupied", isDirectory: true)
+        let sentinel = extraction.appendingPathComponent("keep.txt")
+        try write("keep", to: sentinel)
+        XCTAssertThrowsError(try CapabilityPackageArchiveVerifier().verify(
+            archiveURL: archive, extractionDirectory: extraction
+        ))
+        XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "keep")
+    }
+
+    func testVerifierDoesNotPublishThroughSwappedExtractionRoot() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let archive = fixture.output.appendingPathComponent("fixture.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: archive)
+
+        let extraction = fixture.output.appendingPathComponent("existing", isDirectory: true)
+        let displaced = fixture.output.appendingPathComponent("displaced", isDirectory: true)
+        let outside = fixture.output.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: true)
+        try write("foreign", to: outside.appendingPathComponent("keep.txt"))
+        let verifier = CapabilityPackageArchiveVerifier(limits: CapabilityPackageLimits()) { _ in
+            try? FileManager.default.moveItem(at: extraction, to: displaced)
+            try? FileManager.default.createSymbolicLink(atPath: extraction.path, withDestinationPath: outside.path)
+        }
+        XCTAssertThrowsError(try verifier.verify(archiveURL: archive, extractionDirectory: extraction))
+        XCTAssertEqual(try String(contentsOf: outside.appendingPathComponent("keep.txt"), encoding: .utf8), "foreign")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("payload").path))
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: displaced.path).isEmpty)
+    }
+
+    func testVerifierDoesNotOverwriteNewOrAddedExtractionContent() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let archive = fixture.output.appendingPathComponent("fixture.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: archive)
+
+        for existedInitially in [false, true] {
+            let extraction = fixture.output.appendingPathComponent("occupied-\(existedInitially)", isDirectory: true)
+            if existedInitially {
+                try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: true)
+            }
+            let sentinel = extraction.appendingPathComponent("keep.txt")
+            let verifier = CapabilityPackageArchiveVerifier(limits: CapabilityPackageLimits()) { _ in
+                try? FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: true)
+                try? Data("foreign".utf8).write(to: sentinel)
+            }
+            XCTAssertThrowsError(try verifier.verify(archiveURL: archive, extractionDirectory: extraction))
+            XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "foreign")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: extraction.appendingPathComponent("payload").path))
+        }
+    }
+
     func testTopLevelSkillSymlinkCannotEscapeSkillCollection() async throws {
         let fixture = try makeFixture()
         let outsideSkill = fixture.root.appendingPathComponent("outside-skill", isDirectory: true)
@@ -376,6 +659,190 @@ final class CapabilityPackageTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
         let outputNames = try FileManager.default.contentsOfDirectory(atPath: fixture.output.path)
         XCTAssertFalse(outputNames.contains { $0.hasPrefix(".CodexDirectorExport-") })
+    }
+
+    func testWriterCleanupPreservesReplacementStagingDirectory() async throws {
+        let fixture = try makeFixture()
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let displaced = fixture.output.appendingPathComponent("displaced-staging", isDirectory: true)
+        let marker = fixture.output.appendingPathComponent("staging-path.txt")
+        let writer = CapabilityPackageArchiveWriter(afterPackaging: { staging in
+            try? Data(staging.path.utf8).write(to: marker)
+            try? FileManager.default.moveItem(at: staging, to: displaced)
+            try? FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
+            try? Data("foreign".utf8).write(to: staging.appendingPathComponent("keep.txt"))
+        })
+        let destination = fixture.output.appendingPathComponent("rejected.codexpack.zip")
+        XCTAssertThrowsError(try writer.write(
+            prepared: prepared, to: destination, progressHandler: nil,
+            cancellation: CapabilityExportCancellation()
+        ))
+        let staging = URL(fileURLWithPath: try String(contentsOf: marker, encoding: .utf8))
+        XCTAssertEqual(try String(contentsOf: staging.appendingPathComponent("keep.txt"), encoding: .utf8), "foreign")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destination.path))
+        try FileManager.default.removeItem(at: staging)
+    }
+
+    func testWriterNeverPublishesPackageTmpSwappedAfterVerification() async throws {
+        let fixture = try makeFixture()
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let displaced = fixture.output.appendingPathComponent("verified-original.zip")
+        let destination = fixture.output.appendingPathComponent("existing.codexpack.zip")
+        try Data("previous".utf8).write(to: destination)
+        let writer = CapabilityPackageArchiveWriter(afterVerification: { temporary in
+            try? FileManager.default.moveItem(at: temporary, to: displaced)
+            try? Data("foreign".utf8).write(to: temporary)
+        })
+        XCTAssertThrowsError(try writer.write(
+            prepared: prepared, to: destination, progressHandler: nil,
+            cancellation: CapabilityExportCancellation()
+        ))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "previous")
+        let quarantine = try FileManager.default.contentsOfDirectory(
+            at: fixture.output, includingPropertiesForKeys: nil
+        ).first { $0.lastPathComponent.hasPrefix(".CodexDirectorOwnedCleanup-") }
+        let retained = try XCTUnwrap(quarantine)
+        XCTAssertEqual(try String(contentsOf: retained.appendingPathComponent("package.tmp"), encoding: .utf8), "foreign")
+        try FileManager.default.removeItem(at: retained)
+    }
+
+    func testWriterPreservesDestinationCreatedDuringVerification() async throws {
+        let fixture = try makeFixture()
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let destination = fixture.output.appendingPathComponent("appeared.codexpack.zip")
+        let writer = CapabilityPackageArchiveWriter(afterVerification: { _ in
+            try? Data("foreign".utf8).write(to: destination)
+        })
+        XCTAssertThrowsError(try writer.write(
+            prepared: prepared, to: destination, progressHandler: nil,
+            cancellation: CapabilityExportCancellation()
+        ))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "foreign")
+    }
+
+    func testWriterPreservesExistingDestinationReplacedDuringVerification() async throws {
+        let fixture = try makeFixture()
+        let builder = CapabilityPackageBuilder(
+            environment: environment(fixture: fixture),
+            pluginProvider: PluginProvider(status: .complete),
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }
+        )
+        let selection = CapabilityExportSelection.defaults(for: CapabilityPackageDiscovery(
+            environment: environment(fixture: fixture)
+        ).options())
+        let prepared = try await builder.prepare(selection: selection, progress: nil)
+        defer { try? FileManager.default.removeItem(at: prepared.directory) }
+        let destination = fixture.output.appendingPathComponent("existing.codexpack.zip")
+        let moved = fixture.output.appendingPathComponent("original-destination.zip")
+        try Data("previous".utf8).write(to: destination)
+        let writer = CapabilityPackageArchiveWriter(afterVerification: { _ in
+            try? FileManager.default.moveItem(at: destination, to: moved)
+            try? Data("foreign".utf8).write(to: destination)
+        })
+        XCTAssertThrowsError(try writer.write(
+            prepared: prepared, to: destination, progressHandler: nil,
+            cancellation: CapabilityExportCancellation()
+        ))
+        XCTAssertEqual(try String(contentsOf: destination, encoding: .utf8), "foreign")
+        XCTAssertEqual(try String(contentsOf: moved, encoding: .utf8), "previous")
+    }
+
+    func testConvenienceVerifierCleanupPreservesReplacementDirectory() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let archive = fixture.output.appendingPathComponent("fixture.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: archive)
+        let displaced = fixture.output.appendingPathComponent("displaced-verification", isDirectory: true)
+        let marker = fixture.output.appendingPathComponent("verification-path.txt")
+        let verifier = CapabilityPackageArchiveVerifier(
+            limits: CapabilityPackageLimits(),
+            beforeTemporaryCleanup: { extraction in
+                try? Data(extraction.path.utf8).write(to: marker)
+                try? FileManager.default.moveItem(at: extraction, to: displaced)
+                try? FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: true)
+                try? Data("foreign".utf8).write(to: extraction.appendingPathComponent("keep.txt"))
+            }
+        )
+        try verifier.verify(archiveURL: archive)
+        let extraction = URL(fileURLWithPath: try String(contentsOf: marker, encoding: .utf8))
+        XCTAssertEqual(try String(contentsOf: extraction.appendingPathComponent("keep.txt"), encoding: .utf8), "foreign")
+        try FileManager.default.removeItem(at: extraction)
+    }
+
+    func testConvenienceVerifierRemovesItsOwnedDirectoryAfterSuccess() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let archive = fixture.output.appendingPathComponent("fixture.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: archive)
+        let marker = fixture.output.appendingPathComponent("verification-path.txt")
+        let verifier = CapabilityPackageArchiveVerifier(
+            limits: CapabilityPackageLimits(),
+            beforeTemporaryCleanup: { extraction in
+                try? Data(extraction.path.utf8).write(to: marker)
+            }
+        )
+        try verifier.verify(archiveURL: archive)
+        let extraction = URL(fileURLWithPath: try String(contentsOf: marker, encoding: .utf8))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: extraction.path))
+    }
+
+    func testVerifierCleanupNeverRecursesIntoSwappedQuarantineName() async throws {
+        let fixture = try makeFixture()
+        let coordinator = makeCoordinator(fixture: fixture)
+        let selection = CapabilityExportSelection.defaults(for: try await coordinator.options())
+        let preview = try await coordinator.prepare(selection: selection)
+        XCTAssertFalse(preview.hasBlockingIssues)
+        let archive = fixture.output.appendingPathComponent("fixture.codexpack.zip")
+        _ = try await coordinator.writePreparedPackage(to: archive)
+        let displaced = fixture.output.appendingPathComponent("owned-displaced", isDirectory: true)
+        let marker = fixture.output.appendingPathComponent("quarantine-path.txt")
+        let verifier = CapabilityPackageArchiveVerifier(
+            limits: CapabilityPackageLimits(),
+            afterTemporaryQuarantine: { quarantine in
+                try? Data(quarantine.path.utf8).write(to: marker)
+                try? FileManager.default.moveItem(at: quarantine, to: displaced)
+                try? FileManager.default.createDirectory(at: quarantine, withIntermediateDirectories: true)
+                try? Data("foreign".utf8).write(to: quarantine.appendingPathComponent("keep.txt"))
+            }
+        )
+        try verifier.verify(archiveURL: archive)
+        let quarantine = URL(fileURLWithPath: try String(contentsOf: marker, encoding: .utf8))
+        XCTAssertEqual(try String(contentsOf: quarantine.appendingPathComponent("keep.txt"), encoding: .utf8), "foreign")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: displaced.appendingPathComponent("manifest.json").path))
+        try FileManager.default.removeItem(at: quarantine)
     }
 
     func testVerifiedPackageAtomicallyReplacesExistingDestination() async throws {

@@ -496,8 +496,8 @@ final class StartupIndependentAcceptanceTests: XCTestCase {
             quota("gap-nil", day.addingTimeInterval(14_500), nil, "gap", "Gap", 10_080),
             quota("gap-b", day.addingTimeInterval(14_600), day.addingTimeInterval(30_000), "gap", "Gap", 10_080),
             // Prior-day A -> first observation today B is a real boundary change.
-            quota("boundary-a", day.addingTimeInterval(-7_200), day.addingTimeInterval(40_000), "boundary", "Boundary"),
-            quota("boundary-b", day.addingTimeInterval(18_000), day.addingTimeInterval(50_000), "boundary", "Boundary"),
+            quota("boundary-a", day.addingTimeInterval(-7_200), day.addingTimeInterval(14_400), "boundary", "Boundary"),
+            quota("boundary-b", day.addingTimeInterval(18_000), day.addingTimeInterval(7 * 86_400 + 14_400), "boundary", "Boundary"),
             // Future observations must not become current or daily data.
             quota("future", windowEnd.addingTimeInterval(86_400), windowEnd.addingTimeInterval(172_800), "future", "Future")
         ]

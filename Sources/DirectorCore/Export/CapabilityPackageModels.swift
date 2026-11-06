@@ -413,6 +413,7 @@ public enum CapabilityExportError: Error, Sendable, Equatable {
     case invalidSelection
     case sourceChanged
     case invalidArchive
+    case resourceLimitExceeded
     case unsafeArchivePath
     case checksumMismatch
     case cancelled
@@ -771,6 +772,7 @@ public enum CapabilityRestoreError: Swift.Error, Sendable, Equatable {
     case noPackage
     case untrustedSource
     case invalidArchive
+    case resourceLimitExceeded
     case unsafeArchivePath
     case checksumMismatch
     case missingProjectMapping(String)

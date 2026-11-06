@@ -548,7 +548,9 @@ final class CapabilityDetailTests: XCTestCase {
         let model = CapabilityDetailViewModel(row: row, projectID: "reload-project", store: store, evaluationStore: evaluations, now: base.addingTimeInterval(10), pageSize: 2)
         await model.loadNow(); let retained = model.invocations[0]; XCTAssertTrue(model.setEvaluation(.effective, for: retained))
         try await store.replaceSession(PersistedSessionBatch(session: TaskSummary(id: "reload-session", projectID: "reload-project", startedAt: base, endedAt: nil, status: .completed, coverage: .complete, parserVersion: "test", sourceFileID: "reload-source", title: nil), calls: initial + [event("reload-2", 2)], tokenSnapshots: [], quotaSnapshots: [], findings: []))
-        model.reload(); for _ in 0..<20 { if model.state != .loading { break }; await Task.yield() }
+        model.reload()
+        await waitForEvidenceToFinish(model)
+        XCTAssertEqual(model.state, .loaded)
         XCTAssertEqual(model.invocations.map(\.id), ["reload-2", "reload-1"]); XCTAssertEqual(model.evaluation(for: retained)?.label, .effective)
     }
 

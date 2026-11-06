@@ -1,15 +1,15 @@
 # Codex Director Design System v1
 
-Version: `1.6.1` (visible marketing version; internal build `43`)
+Version: `1.7.2` (visible marketing version; internal build `48`)
 Target: native macOS application, minimum macOS 26.0, Xcode 26 SDK  
 Status: approved capability-centered structure, nonblocking startup and shared Scheme A visual contract; implementation acceptance pending  
-Last updated: 2026-10-27
+Last updated: 2026-11-06
 
 ## 1. Purpose
 
 Codex Director is a private, local operational application for understanding available AI capabilities and observing how they are used. Its interface must make dense evidence legible without turning the product into a generic admin dashboard or a decorative AI control room.
 
-The 0.2 product goal is personal Agent/Skill inventory and usage feedback: understand what has been developed or installed, what each capability is declared to do, where it was used, and what warrants human validation or improvement. File existence, invocation frequency and execution completion are not effectiveness. The approved contract is [the 0.2 implementation plan](../../docs/plans/2026-08-28-capability-centered-redesign.md). Its seven-page structure supersedes all earlier product navigation; privacy and source protection remain unchanged.
+The 0.2 product goal is personal Agent/Skill inventory and usage feedback: understand what has been developed or installed, what each capability is declared to do, where it was used, and what warrants human validation or improvement. File existence, invocation frequency and execution completion are not effectiveness. The approved contract is [the 0.2 implementation plan](../../docs/plans/2026-08-28-capability-centered-redesign.md). Its capability-centered structure, extended by the approved 1.7.1 quota-history page, supersedes earlier product navigation; privacy and source protection remain unchanged.
 
 The product adopts Apple's Liquid Glass design language as expressed on macOS. It does not copy iPhone navigation, touch layouts, or ornamental glass treatments. Native macOS structure, pointer behavior, keyboard access, resizable windows, menu-bar integration, and user control take precedence.
 
@@ -75,13 +75,15 @@ Compact and ambient surfaces must not expose prompts, tool arguments, tokens, ra
 | Primary destination | User question | Required structure |
 | --- | --- | --- |
 | 首页 / Home | How much quota remains, how many capabilities, what was used? | Three Card Atlas outline modules: quota ring + annotated daily bars; continuous four-metric strip; three-column Top10 comparison ledger |
+| 额度历史 / Quota history | What weekly use and cycle transitions were observed? | Full sidebar page, explicit source, current/reset values, remembered 7/30/60-day period, coverage, chart and inline daily evidence |
+| 能力文件夹 / Capability Folders | How are my capabilities organized and related? | Custom, Global and Project folders, scoped tabs, member management and companion previews |
 | 自定义 Agent / Custom Agents | What Agents have I developed and used? | Category totals; visible scope/search/sort; purpose-first list; invocation detail |
 | 自定义 Skill / Custom Skills | What Skills have I developed and used? | Same shared browsing contract |
 | 安装 Skill / Installed Skills | Which independently installed Skills do I use? | Independent installed Skills only; plugin-provided Skills remain labeled in capability folders but do not enter this total, list, or ranking |
 | 安装插件 / Installed Plugins | Which installed packages are enabled and observed? | Current package inventory, incl disabled; attribution limitations visible |
 | 设置 / Settings | Is my data current and private? | Language and app appearance, indexing/status/diagnostics, capability migration, confirmed derived-data deletion, privacy, author and version |
 
-There are exactly seven primary destinations, with Capability Folders immediately after Home. Old Capabilities, Tasks, Review, Usage and Data Status entries are removed. Related calls and findings remain detail content; indexing and diagnostics move into Settings. Topology, workflow and desktop-pet contracts below remain dormant platform guidance; the user-controlled menu-bar quota surface is defined in §19 and defaults to visible for new installs.
+There are exactly eight primary destinations: Home, Quota history, Capability Folders, Custom Agents, Custom Skills, Installed Skills, Installed Plugins and Settings. Old Capabilities, Tasks, Review, Usage and Data Status entries are removed. Related calls and findings remain detail content; indexing and diagnostics move into Settings. Topology, workflow and desktop-pet contracts below remain dormant platform guidance; the user-controlled menu-bar quota surface is defined in §19 and defaults to visible for new installs.
 
 Home contains exactly three Card Atlas modules. Their outer boundaries are one restrained outline grammar, while their internals remain distinct: quota rings/reset/chart, continuous metrics with responsive internal rules, and a top-aligned ranking ledger. The quota rings and daily bars share a single visibly selected source. Bars show the weekly allowance percentage observed as used on each local calendar day, derived from reset-aware increases between consecutive same-source account reports and never from Tokens, calls, or cost. Gaps and ambiguous transitions remain unavailable rather than zero; valid five-hour and weekly reset timestamps sit directly below the ring, while the daily chart does not add ambiguous reset labels. Inventory excludes project counts/instructions. Rankings contain only observed calls and explain that frequency is not effectiveness in their detailed context rather than a module subtitle.
 
@@ -93,7 +95,7 @@ Capability ownership and usage project are different dimensions. Default list sc
 
 Use a native resizable window with these regions:
 
-1. **Sidebar**: the seven approved primary destinations.
+1. **Sidebar**: the eight approved primary destinations.
 2. **Workspace**: overview modules or capability inventory.
 3. **Inspector**: capability purpose, usage, calls and evaluations; staged into the same area at narrow widths.
 4. **Controls**: visible scope, search, sort and relevant view actions.
@@ -303,12 +305,12 @@ Under Reduce Motion:
 - Use a stable SF Symbol, label, selection state, and optional evidence-backed badge.
 - Do not use resource-type colors as full-row backgrounds.
 - The active destination uses the shared blue → ice → mint brand gradient with the same black foreground for its monochrome symbol and label. Suppress the native blue visual tint so it cannot appear behind the custom gradient; the native List remains the selection and keyboard source of truth.
-- Keep the seven approved destinations in the specified order. Capability Folders is immediately after Home; configuration scope and usage project live inside the relevant page, not as additional navigation destinations.
+- Keep the eight approved destinations in the specified order. Quota history is immediately after Home, followed by Capability Folders; configuration scope and usage project live inside the relevant page, not as additional navigation destinations.
 
 ### 11.2 Toolbar
 
 - Place only frequent, context-relevant actions in the toolbar.
-- Keep the manual data update in the window's trailing primary-action position so it remains available on all seven destinations. It is a compact gradient text button that always shows a refresh symbol plus “Refresh data” when idle, and a native indeterminate progress ring plus “Refreshing…” while source or projection work is active. Its two labels share one layout footprint, so state changes do not shift the toolbar. Never collapse it to an icon at narrow widths. Hide the macOS shared toolbar glass background for this already-filled control and omit its toolbar-size shadow so the button has exactly one visible container.
+- Keep the manual data update in the window's trailing primary-action position so it remains available on all eight destinations. It is a compact gradient text button that always shows a refresh symbol plus “Refresh data” when idle, and a native indeterminate progress ring plus “Refreshing…” while source or projection work is active. Its two labels share one layout footprint, so state changes do not shift the toolbar. Never collapse it to an icon at narrow widths. Hide the macOS shared toolbar glass background for this already-filled control and omit its toolbar-size shadow so the button has exactly one visible container.
 - Supply menu equivalents and keyboard shortcuts where appropriate.
 - Group related controls and avoid a row of unrelated glass capsules.
 - Search, sort and scope controls retain stable locations and visible current values.
@@ -385,7 +387,7 @@ Use dynamic Light/Dark bindings, existing label colors and stronger boundaries/m
 
 Gradient actions use a purpose-specific dynamic rail. Light uses `#0065B3` → `#00738B` → `#087765` with white content; Dark retains the brighter blue → ice → mint rail with black content. Hover and pressed rails are opaque state-specific colors. Disabled actions use an opaque neutral rail with the same theme foreground instead of compositing a faded active gradient. Every sampled point of every state must meet `4.5:1`. Brand titles/charts, navigation selection and action fills are separate roles. `DirectorPrimaryActionButtonStyle` provides standard, 28pt toolbar and equal-width Settings action sizes while preserving native focus, hover, pressed, disabled and Increase Contrast behavior.
 
-Home uses Card Atlas's three unnumbered `.title2` modules, 32pt inter-module spacing, a tighter 16pt hero-to-first-module gap, 40/16pt page gutters and a 1440pt maximum content width. The compact hero reads “Welcome to Codex Director”, has no decorative illustration or inline refresh action, and leaves refresh to the global toolbar. The quota stage stacks below 760pt; the metric strip is four columns at 760pt and above, two columns from 420–759pt and one below 420pt; rankings use three top-aligned columns at 1000pt and above and stack below. Draw each day's observed weekly-quota use above gradient bars, retain seven dates and evidence gaps, scale the percentage axis to the largest available daily value, and remove per-day reset text, vertical grid lines, the visible daily table and duplicate remaining value. The quota ring uses a 20pt stroke and one Reduce Motion-aware entrance reveal. Inventory SF Symbols match navigation and are decorative AX-hidden. Home numeric roles (`homeMetric`, `homePercentage`, `homeTimestamp`, `homeRank`, `homeRankCount`) use Avenir Next with tabular digits only for numeric values; interface labels and prose retain the system font. All capability pages use `DirectorEditorialFrame`, `DirectorEditorialHero`, `DirectorMetricSequence`, `DirectorMetricCard`, `DirectorFilterRibbon`, project-group outline boundaries and a transient `DirectorSideSheet`; page content is capped at 1440pt with 40/16pt outer padding. Capability metrics remain four columns at 760pt and above, two columns from 420–759pt, and one below 420pt; their final outer heights are 96pt desktop and 88pt compact, with visible hover and selected treatments but no decorative selected underline. The entire capability page is one native `List(selection:)` scroll container, so the header, metrics, filter rail, status and ledger move together. The filter rail owns the single flexible search field plus narrower visible scope, sort and plugin-status controls where applicable; it does not repeat a result count. Capability Folders uses folder-entry cards, immutable Global/Project projections, folder-scoped Agent/Skill filters, and multi-membership actions that remain available to keyboard and VoiceOver users. Menus place one disclosure chevron on the right. Global and Project folders are presented as privacy-safe derived views, followed by custom folder cards with 16pt internal row padding and a separator between every item. Capability row titles use the named 16pt semibold and 14pt regular summary roles; call counts use named 16pt/13pt roles. Category symbols are `person.crop.circle`, `sparkles`, `shippingbox` and `puzzlepiece.extension`; metric symbols are `globe`, `folder`, `clock.arrow.circlepath`, `calendar.badge.exclamationmark`, `checkmark.circle` and `tray.full`. Symbols are decorative and AX-hidden when adjacent text carries the meaning.
+Home uses Card Atlas's three unnumbered `.title2` modules, 32pt inter-module spacing, a tighter 16pt hero-to-first-module gap, 40/16pt page gutters and a 1440pt maximum content width. The compact hero reads “Welcome to Codex Director”, has no decorative illustration or inline refresh action, and leaves refresh to the global toolbar. The quota stage stacks below 760pt; the metric strip is four columns at 760pt and above, two columns from 420–759pt and one below 420pt; rankings use three top-aligned columns at 1000pt and above and stack below. Draw each day's observed weekly-quota use above gradient bars, retain seven dates and evidence gaps, scale the percentage axis to the largest available daily value, and remove per-day reset text, vertical grid lines, the visible daily table and duplicate remaining value. The quota ring uses a 20pt stroke and one Reduce Motion-aware entrance reveal. Inventory SF Symbols match navigation and are decorative AX-hidden. Home numeric roles (`homeMetric`, `homePercentage`, `homeTimestamp`, `homeRank`, `homeRankCount`) use Avenir Next with tabular digits only for numeric values; interface labels and prose retain the system font. All capability pages use `DirectorEditorialFrame`, `DirectorEditorialHero`, `DirectorMetricSequence`, `DirectorMetricCard`, `DirectorFilterRibbon`, project-group outline boundaries and a transient `DirectorSideSheet`; page content is capped at 1440pt with 40/16pt outer padding. Capability metrics remain four columns at 760pt and above, two columns from 420–759pt, and one below 420pt; their final outer heights are 96pt desktop and 88pt compact, with visible hover and selected treatments but no decorative selected underline. The header, metrics, filter rail, status and ledger move together in one scroll container. Custom Agent and Custom Skill use a SwiftUI scroll view with lazy result rows, and the installed libraries use native `List(selection:)`. The filter rail owns the single flexible search field plus narrower visible scope, sort and plugin-status controls where applicable; it does not repeat a result count. Capability Folders uses folder-entry cards, immutable Global/Project projections, folder-scoped Agent/Skill filters, and multi-membership actions that remain available to keyboard and VoiceOver users. Menus place one disclosure chevron on the right. Global and Project folders are presented as privacy-safe derived views, followed by custom folder cards with 16pt internal row padding and a separator between every item. Capability row titles use the named 16pt semibold and 14pt regular summary roles; call counts use named 16pt/13pt roles. Category symbols are `person.crop.circle`, `sparkles`, `shippingbox` and `puzzlepiece.extension`; metric symbols are `globe`, `folder`, `clock.arrow.circlepath`, `calendar.badge.exclamationmark`, `checkmark.circle` and `tray.full`. Symbols are decorative and AX-hidden when adjacent text carries the meaning.
 
 Home is also the shared primary-page chrome reference. Home, all capability libraries, Capability Folders and Settings use 40pt horizontal gutters at 760pt and wider, 16pt below 760pt, 24pt vertical gutters and a centered 1440pt maximum content measure. Each native `ScrollView` or `List` spans the full workspace; gutters are applied to scroll content so the vertical scroll indicator remains on the same far-right workspace edge on every page. Primary page titles use the rounded semibold system face at 52pt standard and 36pt compact. Title text remains the solid primary color except for the `Codex Director` product-name fragment in Home's welcome title, which uses the shared blue → ice → mint brand gradient. Capability and Settings decorative title symbols use the shared 24pt semibold `pageHeroSymbol` token and remain AX-hidden. Home keeps no title symbol under its approved illustration-free hero contract. The window toolbar product name retains the native primary-title treatment.
 
@@ -732,7 +734,7 @@ uses the network, or executes package content.
 
 The approved [Light UI optimization plan](../../docs/plans/2026-09-12-light-ui-optimization.md) refines presentation only:
 
-- Selected capability rows keep native `List(selection:)`, keyboard and AX semantics while drawing one contained opaque-canvas wash and explicit readable text. A public row-scoped adapter suppresses only `NSTableRowView`'s native selection paint and restores it on removal; it must never mutate `NSTableView.selectionHighlightStyle`, discover tables window-wide, use private API or swizzle AppKit. Structural List rows are selection-disabled so keyboard navigation lands only on capabilities.
+- Selected rows in the installed libraries keep native `List(selection:)`, keyboard and AX semantics while drawing one contained opaque-canvas wash and explicit readable text. A public row-scoped adapter suppresses only `NSTableRowView`'s native selection paint and restores it on removal; it must never mutate `NSTableView.selectionHighlightStyle`, discover tables window-wide, use private API or swizzle AppKit. Structural List rows are selection-disabled so keyboard navigation lands only on capabilities. The two custom libraries apply the same row styling in their lazy scroll views, with focus on real result rows. Up/Down move between visible results, Return opens detail, Escape closes it and restores the originating row, and the folder menu remains a separate action.
 - The sidebar uses one navigation gradient. Its monochrome SF Symbol and label share `navigationSelectedForeground`; focus remains a separate two-point focus-colored boundary while the row is emphasized.
 - Task-relevant metadata uses `textSupporting`; chart annotations, ranking ordinals and other small numeric/evidence text use `dataText`. These roles must meet `4.5:1` on the actual canvas and panel surfaces.
 - The refresh symbol and native progress ring share a 14pt slot. Idle, loading and disabled states keep the same outer geometry. Evidence show/hide actions also share one full-width geometry.
@@ -756,8 +758,8 @@ The 1.3.1 presentation pass keeps the existing folder behavior and data
 contracts while correcting the native geometry observed in the folder
 browser. A root-approved Product Designer ruling permits only this
 nonselection browser to use one native ScrollView with zero-spacing lazy
-content after repeated native List action-child AX failures. Other libraries
-retain `List(selection:)`. Entry headings share the same full content gutters
+content after repeated native List action-child AX failures. The installed
+libraries retain `List(selection:)`. Entry headings share the same full content gutters
 as their grids and search results; native `Section`
 headers are not used for these blocks. Entry, folder-header, tab, filter,
 result and bottom spacing are owned by named `DirectorCapabilityFolderLayout`
@@ -824,13 +826,12 @@ The remembered period is app-shared, not coupled to Home rankings or the
 per-window/folder/tab search, sort, expanded state and scroll position.
 Seven-day companion co-observation remains separate and noncausal.
 
-### Pending proposal — four-library renderer experiment (not approved)
+### Capability library renderer validation
 
-The diagnostic-only AppKit table under `Sources/DirectorUI/Validation/` is a
-performance comparison, **not** an exception to §22 or §23. The four production
-libraries continue to use native SwiftUI `List(selection:)`. If a later
-Product Designer/UI Designer decision approves a renderer change, amend this
-contract explicitly before integration: preserve the existing 40/16pt gutters,
+The AppKit table under `Sources/DirectorUI/Validation/` remains a diagnostic
+comparison. Custom Agent and Custom Skill use a single SwiftUI scroll view with
+lazy result rows. The installed libraries retain native `List(selection:)`.
+A renderer change preserves the existing 40/16pt gutters,
 20pt project-group spacing, outlined group grammar, contained selected-row
 wash, visible current filter values, keyboard/Shift/arrow behavior, row and
 action accessibility, context-menu membership action, scroll restoration and
@@ -915,3 +916,35 @@ without triggering a scan from history presentation.
 Light/Dark, contrast/transparency/motion variants, native keyboard/AX, Escape
 hierarchy and return-to-source focus follow the local contract. Runtime visual
 and actual VoiceOver evidence remain required; this addition is not acceptance.
+
+
+### Quota history — 1.7.0 historical contract (presentation superseded by 1.7.1)
+
+The [1.7.0 plan](../../docs/plans/2026-11-05-quota-history-1.7.0.md) and
+[local UI contract](../../docs/design/2026-11-05-quota-history-ui-contract.md)
+add one native Sheet from Home without changing three modules or seven primary
+destinations. Reuse Scheme A canvas, labeled secondary actions, 36pt outlined
+7/30/60-day native segments, continuous date rows and native close/focus behavior.
+Source is read-only and fixed at opening. Current remaining/reported reset and
+indexed history/cutoff/coverage stay separate. The period defaults to 30 days
+and is remembered independently of capability/ranking periods.
+
+History shows same-source observed weekly percentage-point deltas, unknown gaps
+and accepted transition intervals, never token estimates or exact reset
+instants. Sparse date labels retain aligned category centers; keyboard/AX rows
+provide every fact without hovering. One inline expanded date replaces nested
+cards/Sheets. Zero, missing baseline, absent observation, ambiguous evidence,
+stale failure and current expiry stay distinct. Closing returns entry focus
+and Home scroll. No new content glass, assets, colors or polling. Actual
+synthetic runtime evidence is required before visual acceptance.
+
+
+### Quota history — 1.7.1 navigation and original page contract
+
+The [approved page plan](../../docs/plans/2026-11-06-quota-history-page-1.7.1.md) supersedes the modal presentation above. Quota history is the second sidebar destination; Home’s shortcut navigates there. Use the existing EditorialFrame/PageContentFrame, standard chart.bar hero, 1440pt cap and 40/16pt gutters. One ScrollView contains source/help, responsive weekly/five-hour current blocks, status, independent period/coverage/times, full-width chart/transition band and virtualized date rows. Source precedes current values. No Sheet width constraint, Close control or Escape-to-Home behavior remains. Explicit source selection cannot silently fall back on removal. Preserve all existing query, unknown/zero, privacy, captured-session cancellation and selected-range summary rules. See the plan for exact token dimensions and window-local state.
+
+### Quota history — 1.7.2 visual refinement
+
+Follow the [quota page polish plan](../../docs/plans/2026-11-06-quota-history-ui-polish.md) for the current composition. The sidebar route, title, gutters, privacy, source isolation and read lifecycle remain as in 1.7.1. In a single scroll surface, group the source, allowance figures and reported resets before the chart; place period, coverage and read state within the trend section. Keep the source qualification and warning/recovery states visible. Below the chart, the native inline Data details disclosure retains separate current-report and historical-snapshot times; day records remain virtualized and keep stable targets. No new semantic tokens, content glass or shared component changes.
+
+In Quota history, align source and period controls to the right and place current values and coverage on the left. Wrap controls on compact widths. Show the five-hour block and capture time only when a current five-hour allowance is available. Give the chart 250 pt at compact widths and 310 pt at standard widths. Use 20-percentage-point grid steps with a 100% minimum axis extent and space above the highest reference for labels. Label each calculable bar with its value and keep the unit on the axis and accessibility value. Allow horizontal chart scrolling when 24 pt per date cannot fit, starting at the newest edge. Explain the orange reset interval strip across the selected period. Sort the daily list newest first and preserve chronological chart dates and stable row IDs.

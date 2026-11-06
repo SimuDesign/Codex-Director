@@ -69,7 +69,18 @@ struct CapabilityPackageDiscovery: Sendable {
         return CapabilityExportOptions(globalCapabilities: globals, projects: projects)
     }
 
-    func selectedSources(for selection: CapabilityExportSelection) -> [CapabilityPackageSource] {
+    func validateSelection(_ selection: CapabilityExportSelection) throws {
+        let knownIDs = Set(projectContexts.map(\.id))
+        var seenIDs = Set<String>()
+        for project in selection.projects {
+            guard knownIDs.contains(project.projectID), seenIDs.insert(project.projectID).inserted else {
+                throw CapabilityExportError.invalidSelection
+            }
+        }
+    }
+
+    func selectedSources(for selection: CapabilityExportSelection) throws -> [CapabilityPackageSource] {
+        try validateSelection(selection)
         let projectSelections = Dictionary(uniqueKeysWithValues: selection.projects.map { ($0.projectID, $0) })
         return discoverAll().filter { source in
             guard !selection.excludedCapabilityIDs.contains(source.id) else { return false }
@@ -91,7 +102,8 @@ struct CapabilityPackageDiscovery: Sendable {
         }.sorted { $0.id < $1.id }
     }
 
-    func selectedProjects(for selection: CapabilityExportSelection) -> [CapabilityPackageProject] {
+    func selectedProjects(for selection: CapabilityExportSelection) throws -> [CapabilityPackageProject] {
+        try validateSelection(selection)
         let selected = Set(selection.projects.filter(\.isIncluded).map(\.projectID))
         return projectContexts
             .filter { selected.contains($0.id) }

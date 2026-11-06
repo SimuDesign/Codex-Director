@@ -1147,11 +1147,15 @@ private struct Fixture {
     private static func homeVisualQuotaSnapshots() -> [QuotaSnapshot] {
         let longSourceName = "Synthetic account source with a deliberately long readable name"
         let values: [(Int, Double, Date)] = [
-            (-6, 0, day(-1)),
-            (-5, 100, day(-1)),
-            (-3, 28, day(-1)),
-            (-1, 74, day(1)),
-            (0, 100, day(1))
+            // The first reported reset is four days into the window; the
+            // later cycle is inferred from a capture that crosses it. This
+            // keeps the visual edge fixture valid under the stateful reset
+            // classifier instead of relying on an impossible future jump.
+            (-6, 0, day(-4)),
+            (-5, 100, day(-4)),
+            (-3, 28, day(3)),
+            (-1, 74, day(3)),
+            (0, 100, day(3))
         ]
         var snapshots = values.map { offset, used, resetAt in
             try! QuotaSnapshot(

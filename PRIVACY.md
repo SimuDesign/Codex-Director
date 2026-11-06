@@ -108,3 +108,22 @@ Core inventory, indexing, evaluation, and export do not require a Director cloud
 ## Diagnostics and issues
 
 Do not attach raw databases, sessions, capability packages, prompts, Agent or Skill bodies, credentials, cookies, usernames, or private project paths to a public issue. Reproduce problems with synthetic data whenever possible.
+
+
+## Quota history
+
+The quota-history page reads existing allowlisted weekly quota observations
+from the local derived database only when requested. It adds no account
+lookup, source scan, raw-session storage or network request. The independent
+`com.peiweitang.CodexDirector.quotaHistory.period` preference stores only
+`7d`, `30d` or `60d`; tests and validation use memory/injected preferences.
+Current live readings are not appended to history. Source IDs are quota
+buckets, not account identities, so retained history cannot distinguish past
+account switches. Clearing the derived index clears quota history; capability
+change history, folder membership and evaluations retain their existing
+separate lifecycle. No source file or Codex credential is modified.
+
+额度历史只按需读取本机派生索引中的白名单额度记录，不增加源扫描、账户请求、
+网络上传或原始会话存储。独立偏好只保存7／30／60天选项；当前实时读取不被
+追加为历史。额度来源并非账户身份，历史无法区分曾切换的账户。清除派生索引
+会清除额度历史，不连带清除独立的能力变更记录、文件夹成员或评价。

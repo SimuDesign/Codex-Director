@@ -51,6 +51,9 @@ public enum DirectorSymbol {
 
     public static let capabilities = "square.grid.2x2"
     public static let home = "house"
+    /// Quota history is a first-level page but deliberately reuses the
+    /// existing chart.bar grammar from the Home allowance module.
+    public static let quotaHistory = "chart.bar"
     public static let capabilityFolders = "square.grid.3x3"
     public static let tasks = "clock.arrow.circlepath"
     public static let review = "checkmark.seal"
@@ -68,7 +71,7 @@ public enum DirectorSymbol {
     /// Every symbol the design system requires, for the contract test.
     public static let requiredSymbols: [String] = {
         var names: [String] = [
-            home, capabilityFolders, capabilities, tasks, review, usage, dataStatus, settings,
+            home, quotaHistory, capabilityFolders, capabilities, tasks, review, usage, dataStatus, settings,
             closeInspector,
             usageEvidence, search, filter, back,
             menuBarUsage,

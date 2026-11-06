@@ -3,158 +3,214 @@ import Foundation
 /// Derives observed daily use from account-reported weekly allowance facts.
 ///
 /// The result is a percentage-point increase in the reported `usedPercent`,
-/// not a token-derived estimate. Callers provide observations for one
-/// canonical quota source; mixed sources or ambiguous transitions return nil.
+/// not a token-derived estimate. Reset classification is deliberately
+/// stateful: one accepted future reset instant is the cycle anchor and a
+/// later report cannot roll that anchor merely because its countdown drifted.
+/// Callers provide observations for one canonical quota source; mixed sources
+/// or ambiguous transitions return an unavailable projection.
 public enum QuotaDailyUsage {
-    private static let resetTimeTolerance: TimeInterval = 5 * 60
+    public static let currentAlgorithmVersion = 2
+
     private static let percentageTolerance = 0.000_001
+
+    public struct DailyProjection: Equatable, Sendable {
+        public let usedPercent: Double?
+        public let cycleChanged: Bool
+
+        public init(usedPercent: Double?, cycleChanged: Bool) {
+            self.usedPercent = usedPercent
+            self.cycleChanged = cycleChanged
+        }
+    }
+
+    /// Projects both the daily value and reset marker from one bounded,
+    /// statefully classified sequence. Callers must use this result for both
+    /// fields so a marker can never disagree with the value's reset segments.
+    public static func project(
+        on day: Date,
+        observations: [QuotaSnapshot],
+        calendar: Calendar
+    ) -> DailyProjection {
+        guard let interval = calendar.dateInterval(of: .day, for: day) else {
+            return DailyProjection(usedPercent: nil, cycleChanged: false)
+        }
+
+        let eligible = observations
+            .filter { $0.isWeeklyWindow && $0.capturedAt < interval.end }
+            .sorted(by: earliestFirst)
+        guard Set(eligible.map(sourceKey)).count <= 1,
+              let classified = classify(eligible) else {
+            return DailyProjection(usedPercent: nil, cycleChanged: false)
+        }
+
+        // A raw first observation can be a replay of a cycle already exited
+        // earlier in the bounded sequence. It is evidence that must remain in
+        // the classifier, but it cannot become either today's baseline or
+        // today's first observation. Choose only accepted, valid points for
+        // both edges of the daily projection.
+        guard let firstIndex = classified.observations.indices.first(where: {
+            classified.accepted[$0] &&
+                classified.observations[$0].capturedAt >= interval.start &&
+                isValid(classified.observations[$0].usedPercent)
+        }) else {
+            return DailyProjection(usedPercent: nil, cycleChanged: false)
+        }
+        let first = classified.observations[firstIndex]
+        let previousIndex = classified.observations.indices[..<firstIndex].last(where: {
+            let observation = classified.observations[$0]
+            return observation.capturedAt < interval.start &&
+                classified.accepted[$0] &&
+                isValid(observation.usedPercent)
+        })
+
+        let previous: QuotaSnapshot
+        var startIndex = firstIndex
+        if let previousIndex {
+            previous = classified.observations[previousIndex]
+            guard let priorDay = calendar.date(byAdding: .day, value: -1, to: interval.start),
+                  calendar.isDate(previous.capturedAt, inSameDayAs: priorDay),
+                  isValid(previous.usedPercent) else {
+                return DailyProjection(
+                    usedPercent: nil,
+                    cycleChanged: hasAcceptedReset(
+                        in: classified,
+                        interval: interval
+                    )
+                )
+            }
+        } else {
+            guard first.usedPercent == 0 else {
+                return DailyProjection(
+                    usedPercent: nil,
+                    cycleChanged: hasAcceptedReset(
+                        in: classified,
+                        interval: interval
+                    )
+                )
+            }
+            previous = first
+            startIndex += 1
+        }
+
+        var total = 0.0
+        var segmentBaseline = previous.usedPercent
+        var segmentHighWater = previous.usedPercent
+        var segmentLatest = previous.usedPercent
+        var cycleChanged = false
+
+        guard startIndex < classified.observations.count else {
+            return DailyProjection(usedPercent: 0, cycleChanged: false)
+        }
+
+        for index in startIndex..<classified.observations.count {
+            let current = classified.observations[index]
+            guard current.capturedAt >= interval.start,
+                  current.capturedAt < interval.end,
+                  isValid(current.usedPercent) else { continue }
+
+            switch classified.relationships[index] {
+            case .same:
+                // Replayed lower values are ignored for the segment total
+                // until a later observation recovers the high-water mark.
+                segmentHighWater = max(segmentHighWater, current.usedPercent)
+                segmentLatest = current.usedPercent
+            case .reset:
+                guard hasRecovered(latest: segmentLatest, highWater: segmentHighWater) else {
+                    return DailyProjection(usedPercent: nil, cycleChanged: false)
+                }
+                total += segmentHighWater - segmentBaseline
+                segmentBaseline = 0
+                segmentHighWater = current.usedPercent
+                segmentLatest = current.usedPercent
+                cycleChanged = true
+            case .stalePreviousCycle:
+                // A replay of an already exited cycle must not move the
+                // accepted sequence state or add a second daily segment.
+                continue
+            case .ambiguous:
+                return DailyProjection(usedPercent: nil, cycleChanged: false)
+            }
+        }
+
+        guard hasRecovered(latest: segmentLatest, highWater: segmentHighWater) else {
+            return DailyProjection(usedPercent: nil, cycleChanged: false)
+        }
+        total += segmentHighWater - segmentBaseline
+        return DailyProjection(usedPercent: total, cycleChanged: cycleChanged)
+    }
+
+    private static func hasAcceptedReset(
+        in classified: ClassifiedSequence,
+        interval: DateInterval
+    ) -> Bool {
+        classified.observations.indices.contains { index in
+            let observation = classified.observations[index]
+            guard observation.capturedAt >= interval.start,
+                  observation.capturedAt < interval.end,
+                  classified.accepted[index] else { return false }
+            if case .reset = classified.relationships[index] { return true }
+            return false
+        }
+    }
 
     public static func observedUsedPercent(
         on day: Date,
         observations: [QuotaSnapshot],
         calendar: Calendar
     ) -> Double? {
-        guard let interval = calendar.dateInterval(of: .day, for: day) else { return nil }
-
-        let eligible = observations
-            .filter { $0.isWeeklyWindow && $0.capturedAt < interval.end }
-            .sorted {
-                $0.capturedAt < $1.capturedAt ||
-                    ($0.capturedAt == $1.capturedAt && $0.id < $1.id)
-            }
-        guard Set(eligible.map(sourceKey)).count <= 1 else { return nil }
-
-        let daily = eligible.filter { $0.capturedAt >= interval.start }
-        guard let first = daily.first else { return nil }
-        guard isValid(first.usedPercent) else { return nil }
-
-        var previous = eligible.last { $0.capturedAt < interval.start }
-        var startIndex = daily.startIndex
-
-        // A reported zero is itself a usable baseline when history starts on
-        // this day. A non-zero first observation cannot reveal earlier use.
-        if let previous,
-           let priorDay = calendar.date(byAdding: .day, value: -1, to: interval.start),
-           !calendar.isDate(previous.capturedAt, inSameDayAs: priorDay) {
-            return nil
-        } else if previous == nil {
-            guard first.usedPercent == 0 else { return nil }
-            previous = first
-            startIndex = daily.index(after: startIndex)
-        }
-
-        guard var previous else { return nil }
-        guard isValid(previous.usedPercent) else { return nil }
-
-        var total = 0.0
-        var segmentBaseline = previous.usedPercent
-        var segmentHighWater = previous.usedPercent
-        var segmentLatest = previous.usedPercent
-
-        for current in daily[startIndex...] {
-            guard isValid(current.usedPercent) else { return nil }
-
-            switch cycleRelationship(from: previous, to: current) {
-            case .same:
-                // Concurrent session logs can replay a slightly older quota
-                // value before returning to the current value. Keep the
-                // cycle's observed high-water mark so a recovered regression
-                // neither invalidates the day nor counts the recovery twice.
-                segmentHighWater = max(segmentHighWater, current.usedPercent)
-                segmentLatest = current.usedPercent
-            case .reset:
-                guard hasRecovered(latest: segmentLatest, highWater: segmentHighWater) else {
-                    return nil
-                }
-                total += max(0, segmentHighWater - segmentBaseline)
-                segmentBaseline = 0
-                segmentHighWater = current.usedPercent
-                segmentLatest = current.usedPercent
-            case .stalePreviousCycle:
-                // Active and archived rollout logs can overlap around a real
-                // reset. Once the reported reset instant has moved forward,
-                // a later observation that jumps back to the previous reset
-                // belongs to an older cycle and must not open another segment.
-                continue
-            case .ambiguous:
-                return nil
-            }
-            previous = current
-        }
-
-        // A lower final observation that never returns to the high-water mark
-        // is still ambiguous and must remain unavailable rather than being
-        // silently treated as stale.
-        guard hasRecovered(latest: segmentLatest, highWater: segmentHighWater) else {
-            return nil
-        }
-        total += max(0, segmentHighWater - segmentBaseline)
-        return total
+        project(on: day, observations: observations, calendar: calendar).usedPercent
     }
 
-    /// Reports a reset only when the next observation carries a materially later
-    /// reset instants. Missing reset evidence remains non-affirmative.
+    /// Reports a reset only when the stateful classifier accepts a new cycle
+    /// from this ordered pair. Pair callers are retained for compatibility;
+    /// bounded day projections use `project(on:observations:calendar:)` so all
+    /// markers share the same sequence state.
     public static func reportedCycleChanged(
         from previous: QuotaSnapshot,
         to current: QuotaSnapshot
     ) -> Bool {
-        if case .reset = cycleRelationship(from: previous, to: current) {
-            return true
+        guard let relationship = classify([previous, current])?.relationships.last else {
+            return false
         }
+        if case .reset = relationship { return true }
         return false
     }
 
-    /// Returns nil when one side lacks reset evidence.
+    /// Returns nil when one side lacks reset evidence or the transition is
+    /// stale/contradictory.
     public static func isSameReportedCycle(
         from previous: QuotaSnapshot,
         to current: QuotaSnapshot
     ) -> Bool? {
-        switch cycleRelationship(from: previous, to: current) {
-        case .same: true
-        case .reset: false
-        case .stalePreviousCycle: nil
-        case .ambiguous: nil
+        guard let relationship = classify([previous, current])?.relationships.last else {
+            return nil
+        }
+        switch relationship {
+        case .same: return true
+        case .reset: return false
+        case .stalePreviousCycle, .ambiguous: return nil
         }
     }
 
-    private enum CycleRelationship {
-        case same
-        case reset
-        case stalePreviousCycle
-        case ambiguous
-    }
+    private typealias ClassifiedSequence = QuotaCycleClassifier.Sequence
 
-    private static func cycleRelationship(
-        from previous: QuotaSnapshot,
-        to current: QuotaSnapshot
-    ) -> CycleRelationship {
-        switch (previous.resetsAt, current.resetsAt) {
-        case let (.some(previousReset), .some(currentReset)):
-            // Reset timestamps can be reconstructed from a countdown and
-            // therefore drift by seconds across otherwise identical reports.
-            let difference = currentReset.timeIntervalSince(previousReset)
-            if abs(difference) <= resetTimeTolerance { return .same }
-            // A real reset advances the next reset instant. A backwards jump
-            // is an older-cycle replay, not a second reset.
-            return difference > 0 ? .reset : .stalePreviousCycle
-        case (nil, nil):
-            return .same
-        case (.some, nil), (nil, .some):
-            return .ambiguous
-        }
+    private static func classify(_ observations: [QuotaSnapshot]) -> ClassifiedSequence? {
+        QuotaCycleClassifier.classify(observations)
     }
 
     private static func hasRecovered(latest: Double, highWater: Double) -> Bool {
         latest + percentageTolerance >= highWater
     }
 
+    private static func earliestFirst(_ lhs: QuotaSnapshot, _ rhs: QuotaSnapshot) -> Bool {
+        QuotaCycleClassifier.earliestFirst(lhs, rhs)
+    }
+
     private static func sourceKey(_ snapshot: QuotaSnapshot) -> String {
-        if let id = snapshot.limitID, !id.isEmpty { return "id:\(id)" }
-        if let name = snapshot.limitName, !name.isEmpty { return "name:\(name)" }
-        return "unknown"
+        QuotaCycleClassifier.sourceKey(snapshot)
     }
 
     private static func isValid(_ percentage: Double) -> Bool {
-        percentage.isFinite && (0...100).contains(percentage)
+        QuotaCycleClassifier.isValid(percentage)
     }
 }

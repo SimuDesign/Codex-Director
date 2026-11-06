@@ -231,6 +231,7 @@ private struct ValidationWorkspace: View {
                 Spacer(minLength: 0)
                 Button("Save PNG") { saveProductPNG() }
                     .help("Save only the current synthetic product view, excluding validation controls, other windows and the desktop.")
+                    .keyboardShortcut("s", modifiers: [.command, .option])
                 Text(session.hasError ? "Synthetic data unavailable" : (session.isReady ? "Synthetic data ready" : "Loading synthetic data…"))
                     .font(DirectorTypography.label)
                     .foregroundStyle(DirectorColor.textSecondary)

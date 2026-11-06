@@ -54,6 +54,25 @@ final class QuotaDailyUsageTests: XCTestCase {
         )
     }
 
+    func testEarlyResetRequiresUsageDropAndCaptureIntervalEvidence() throws {
+        let oldReset = date("2026-09-05 12:00")
+        let earlyReset = date("2026-09-12 10:00")
+        let observations = try [
+            quota("prior", "2026-09-04 23:00", 40, reset: oldReset),
+            quota("before-early-reset", "2026-09-05 08:00", 50, reset: oldReset),
+            quota("early-reset", "2026-09-05 10:00", 2, reset: earlyReset),
+            quota("later", "2026-09-05 11:00", 7, reset: earlyReset)
+        ]
+
+        let projection = QuotaDailyUsage.project(
+            on: date("2026-09-05 12:00"),
+            observations: observations,
+            calendar: calendar
+        )
+        XCTAssertEqual(projection.usedPercent, 17)
+        XCTAssertTrue(projection.cycleChanged)
+    }
+
     func testRecoveredSameCycleRegressionsUseTheObservedHighWaterMark() throws {
         let reset = date("2026-09-07 17:38")
         let observations = try [
@@ -97,25 +116,213 @@ final class QuotaDailyUsageTests: XCTestCase {
     func testReportedCycleChangeIgnoresResetTimeDriftButDetectsANewCycle() throws {
         let observation = try quota(
             "observation",
-            "2026-09-05 12:38",
+            "2026-09-11 12:38",
             1,
             reset: date("2026-09-12 12:38")
         )
         let drifted = try quota(
             "drifted",
-            "2026-09-05 12:39",
+            "2026-09-11 12:39",
             2,
             reset: date("2026-09-12 12:39")
         )
         let nextCycle = try quota(
             "next-cycle",
-            "2026-09-05 12:40",
+            "2026-09-12 12:40",
             0,
             reset: date("2026-09-19 12:39")
         )
 
         XCTAssertFalse(QuotaDailyUsage.reportedCycleChanged(from: observation, to: drifted))
         XCTAssertTrue(QuotaDailyUsage.reportedCycleChanged(from: drifted, to: nextCycle))
+    }
+
+    func testFutureResetTimeDriftBeyondFiveMinutesDoesNotInflateDailyUsage() throws {
+        // Countdown-derived reset instants can move by more than the legacy
+        // five-minute tolerance while still describing the same future
+        // cycle. This is the production-shaped 20 -> 23 -> 23 -> 35 replay
+        // from the quota audit: the day contains 15 observed points, not a
+        // synthetic reset plus 23 additional points.
+        let originalReset = date("2026-01-09 00:50")
+        let driftedReset = date("2026-01-09 01:02")
+        let observations = try [
+            quota("prior", "2026-01-03 23:59", 20, reset: originalReset),
+            quota("morning", "2026-01-04 08:00", 23, reset: originalReset),
+            quota("drift", "2026-01-04 09:00", 23, reset: driftedReset),
+            quota("night", "2026-01-04 22:00", 35, reset: driftedReset)
+        ]
+
+        XCTAssertEqual(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-01-04 12:00"), observations: observations, calendar: calendar
+            ),
+            15
+        )
+        XCTAssertFalse(QuotaDailyUsage.reportedCycleChanged(
+            from: observations[1], to: observations[2]
+        ))
+        XCTAssertEqual(QuotaDailyUsage.isSameReportedCycle(
+            from: observations[1], to: observations[2]
+        ), true)
+    }
+
+    func testRepeatedCrossDayFutureResetDriftKeepsOneAcceptedAnchor() throws {
+        let originalReset = date("2026-01-09 00:50")
+        let driftedReset = date("2026-01-09 01:02")
+        let laterDriftedReset = date("2026-01-09 01:15")
+        let observations = try [
+            quota("prior", "2026-01-03 23:59", 20, reset: originalReset),
+            quota("day-one", "2026-01-04 08:00", 23, reset: originalReset),
+            quota("day-one-drift", "2026-01-04 22:00", 35, reset: driftedReset),
+            quota("day-two-drift", "2026-01-05 08:00", 40, reset: laterDriftedReset)
+        ]
+
+        XCTAssertEqual(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-01-05 12:00"), observations: observations, calendar: calendar
+            ),
+            5
+        )
+        XCTAssertFalse(QuotaDailyUsage.reportedCycleChanged(
+            from: observations[2], to: observations[3]
+        ))
+    }
+
+    func testNearbyCycleStartDriftAndTemporaryDropDoNotRetireActiveCycle() throws {
+        let oldReset = date("2026-09-02 10:00")
+        let activeReset = date("2026-09-09 10:00")
+        let nearbyReport = date("2026-09-09 10:08")
+        let observations = try [
+            quota("old-full", "2026-09-02 09:59", 100, reset: oldReset),
+            quota("new-zero", "2026-09-02 10:01", 0, reset: activeReset),
+            quota("new-one", "2026-09-02 10:09", 1, reset: activeReset),
+            quota("drifted-zero", "2026-09-02 10:10", 0, reset: nearbyReport),
+            quota("reaffirmed-one", "2026-09-02 10:11", 1, reset: activeReset),
+            // The increase above the pre-drop 1, not the equal replay,
+            // confirms that this remains the active reported cycle.
+            quota("reaffirmed-two", "2026-09-02 10:12", 2, reset: activeReset),
+            quota("prior-day", "2026-09-03 23:50", 48, reset: activeReset),
+            quota("first-day", "2026-09-04 23:50", 52, reset: activeReset),
+            quota("second-day", "2026-09-05 23:50", 69, reset: activeReset)
+        ]
+
+        XCTAssertFalse(QuotaDailyUsage.reportedCycleChanged(
+            from: observations[2], to: observations[3]
+        ))
+        XCTAssertEqual(QuotaDailyUsage.project(
+            on: date("2026-09-04 12:00"), observations: observations, calendar: calendar
+        ), .init(usedPercent: 4, cycleChanged: false))
+        XCTAssertEqual(QuotaDailyUsage.project(
+            on: date("2026-09-05 12:00"), observations: observations, calendar: calendar
+        ), .init(usedPercent: 17, cycleChanged: false))
+    }
+
+    func testNearbyOnePointDropWithoutActiveCycleReaffirmationStaysUnknown() throws {
+        let oldReset = date("2026-09-02 10:00")
+        let activeReset = date("2026-09-09 10:00")
+        let nearbyReport = date("2026-09-09 10:08")
+        let observations = try [
+            quota("old-full", "2026-09-01 23:50", 100, reset: oldReset),
+            quota("new-zero", "2026-09-02 10:01", 0, reset: activeReset),
+            quota("new-one", "2026-09-02 10:09", 1, reset: activeReset),
+            quota("uncertain-zero", "2026-09-02 10:10", 0, reset: nearbyReport),
+            quota("later", "2026-09-02 11:00", 3, reset: nearbyReport)
+        ]
+
+        XCTAssertNil(QuotaDailyUsage.project(
+            on: date("2026-09-02 12:00"), observations: observations, calendar: calendar
+        ).usedPercent)
+        XCTAssertNil(QuotaDailyUsage.isSameReportedCycle(
+            from: observations[2], to: observations[3]
+        ))
+    }
+
+    func testEqualValueActiveAnchorReplayDoesNotResolveNearbyDrop() throws {
+        let oldReset = date("2026-09-02 10:00")
+        let activeReset = date("2026-09-09 10:00")
+        let nearbyReport = date("2026-09-09 10:08")
+        let observations = try [
+            quota("old-full", "2026-09-01 23:50", 100, reset: oldReset),
+            quota("new-zero", "2026-09-02 10:01", 0, reset: activeReset),
+            quota("new-one", "2026-09-02 10:09", 1, reset: activeReset),
+            quota("uncertain-zero", "2026-09-02 10:10", 0, reset: nearbyReport),
+            quota("equal-old-value", "2026-09-02 10:11", 1, reset: activeReset),
+            quota("later-candidate", "2026-09-02 11:00", 3, reset: nearbyReport)
+        ]
+
+        XCTAssertNil(QuotaDailyUsage.project(
+            on: date("2026-09-02 12:00"), observations: observations, calendar: calendar
+        ).usedPercent)
+    }
+
+    func testWellSeparatedSecondEarlyResetWithOnePointDropIsCounted() throws {
+        let oldReset = date("2026-09-02 10:00")
+        let firstReset = date("2026-09-09 10:00")
+        let secondReset = date("2026-09-09 11:00")
+        let observations = try [
+            quota("prior", "2026-09-01 23:50", 100, reset: oldReset),
+            quota("first-zero", "2026-09-02 10:01", 0, reset: firstReset),
+            quota("first-one", "2026-09-02 11:02", 1, reset: firstReset),
+            quota("second-zero", "2026-09-02 11:03", 0, reset: secondReset),
+            quota("second-five", "2026-09-02 11:30", 5, reset: secondReset)
+        ]
+
+        XCTAssertEqual(QuotaDailyUsage.project(
+            on: date("2026-09-02 12:00"), observations: observations, calendar: calendar
+        ), .init(usedPercent: 6, cycleChanged: true))
+    }
+
+    func testSameCycleUsesObservedIncreaseForFortyEightToFiftyTwoToSixtyEight() throws {
+        let reset = date("2026-09-07 17:38")
+        let observations = try [
+            quota("prior", "2026-09-03 23:54", 48, reset: reset),
+            quota("morning", "2026-09-04 08:00", 52, reset: reset),
+            quota("night", "2026-09-04 23:54", 68, reset: reset)
+        ]
+
+        XCTAssertEqual(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-09-04 12:00"), observations: observations, calendar: calendar
+            ),
+            20
+        )
+    }
+
+    func testUnprovenBackwardsFutureResetIsUnknownNotStaleReplay() throws {
+        let acceptedAnchor = date("2026-09-10 12:00")
+        let backwardsFutureReset = date("2026-09-09 12:00")
+        let observations = try [
+            quota("prior", "2026-09-07 23:00", 40, reset: acceptedAnchor),
+            quota("backwards", "2026-09-08 10:00", 45, reset: backwardsFutureReset)
+        ]
+
+        XCTAssertNil(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-09-08 12:00"), observations: observations, calendar: calendar
+            )
+        )
+        XCTAssertNil(QuotaDailyUsage.isSameReportedCycle(
+            from: observations[0], to: observations[1]
+        ))
+    }
+
+    func testTwoEvidenceBackedEarlyResetsCanExceedOneHundredPercent() throws {
+        let oldReset = date("2026-09-12 12:00")
+        let firstEarlyReset = date("2026-09-19 11:00")
+        let secondEarlyReset = date("2026-09-19 12:00")
+        let observations = try [
+            quota("prior", "2026-09-11 23:00", 60, reset: oldReset),
+            quota("first-reset", "2026-09-12 11:00", 0, reset: firstEarlyReset),
+            quota("first-cycle-use", "2026-09-12 12:05", 60, reset: firstEarlyReset),
+            quota("second-reset", "2026-09-12 12:10", 0, reset: secondEarlyReset),
+            quota("second-cycle-use", "2026-09-12 12:20", 60, reset: secondEarlyReset)
+        ]
+
+        let projection = QuotaDailyUsage.project(
+            on: date("2026-09-12 18:00"), observations: observations, calendar: calendar
+        )
+        XCTAssertEqual(projection.usedPercent, 120)
+        XCTAssertTrue(projection.cycleChanged)
     }
 
     func testStalePreviousCycleReplayAfterResetIsIgnored() throws {
@@ -146,6 +353,45 @@ final class QuotaDailyUsageTests: XCTestCase {
             from: observations[2],
             to: observations[3]
         ))
+    }
+
+    func testCrossDayStalePredecessorCannotBecomeDailyBaseline() throws {
+        let oldReset = date("2026-09-07 12:00")
+        let newReset = date("2026-09-14 13:00")
+        let observations = try [
+            quota("old-cycle", "2026-09-06 23:00", 80, reset: oldReset),
+            quota("new-cycle-zero", "2026-09-07 13:00", 0, reset: newReset),
+            // The first raw point on the target day is a replay of the cycle
+            // that the sequence has already exited. It must not become either
+            // the day's baseline or the day's first accepted observation.
+            quota("stale-old-cycle", "2026-09-08 08:00", 80, reset: oldReset),
+            quota("new-cycle-ten", "2026-09-08 10:00", 10, reset: newReset)
+        ]
+
+        XCTAssertEqual(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-09-08 12:00"), observations: observations, calendar: calendar
+            ),
+            10
+        )
+    }
+
+    func testStalePredecessorOnPreviousDayCannotReplaceAcceptedBaseline() throws {
+        let oldReset = date("2026-09-07 12:00")
+        let newReset = date("2026-09-14 13:00")
+        let observations = try [
+            quota("old-cycle", "2026-09-06 23:00", 80, reset: oldReset),
+            quota("new-cycle-zero", "2026-09-07 13:00", 0, reset: newReset),
+            quota("stale-old-predecessor", "2026-09-07 20:00", 80, reset: oldReset),
+            quota("new-cycle-ten", "2026-09-08 10:00", 10, reset: newReset)
+        ]
+
+        XCTAssertEqual(
+            QuotaDailyUsage.observedUsedPercent(
+                on: date("2026-09-08 12:00"), observations: observations, calendar: calendar
+            ),
+            10
+        )
     }
 
     func testDayWithoutObservationIsUnavailable() throws {

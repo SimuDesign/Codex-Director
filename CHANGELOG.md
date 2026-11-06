@@ -4,6 +4,51 @@ All notable public changes will be documented here. The project follows semantic
 
 [简体中文更新说明](CHANGELOG.zh-CN.md)
 
+## 1.7.2
+
+Quota history layout refinement. Internal build: `48`.
+
+- Brings the quota trend and its period controls higher on the page; groups the source, remaining quota and reported reset times compactly.
+- Moves capture and history-read timestamps into inline **Data details**; keeps data status and Retry visible.
+- Preserves the separate sidebar page, remembered period, same-source readings and history calculations.
+
+## 1.7.1
+
+Quota history as a full sidebar page. Internal build: `47`.
+
+- Moves quota history immediately after Home in the sidebar; Home's shortcut navigates to that same page without a modal.
+- Reuses the standard page title, icon, gutters and responsive current-quota layout, with an explicit source selector.
+- Preserves remembered 7/30/60-day ranges, selected-period transition summaries, inline day evidence, read cancellation and existing data/privacy contracts.
+
+## 1.7.0
+
+On-demand weekly allowance history. Internal build: `46`. Local implementation; no Tag or GitHub Release is implied.
+
+- Adds a native Quota history Sheet from Home with independently remembered 7/30/60-day ranges, same-source daily observations, coverage and inline day evidence.
+- Separates current reported reset timestamps from evidence-backed historical transition intervals. Missing/ambiguous data stays unknown; verified zero remains zero.
+- Reads one bounded 60-day context on demand and slices ranges in memory; does not add source scans, account reads, live-history persistence or background polling.
+- Preserves seven-day Home/cache semantics, database schema v6, parser 1.4.2, existing memberships/evaluations and capability-package manifest v1. Quota history is cleared with the derived index and is not account-isolated.
+
+## 1.6.3
+
+Capability-package and partial-refresh hardening. Internal build: `45`.
+
+- Applies one bounded policy to package export, readback and restore: archive input/expanded bytes, entry count, regular-file and metadata sizes, link data and path complexity. Streaming checks and cancellation supplement header checks; oversized legacy packages are rejected without modifying the original ZIP.
+- Blocks dangling, chained or filtered-out symlink targets during export/readback while retaining supported direct internal links. Restore's no-follow safety checks remain in place.
+- Rejects duplicate, empty and unknown project selection IDs with a normal validation error instead of trapping or silently skipping them.
+- Retains unverified old CLI-MCP resources when that category alone fails, without resurrecting removed plugin children or replacing fresh successful categories.
+- Fences presentation-cache compatibility writes after deletion/invalidation while preserving explicit activation and normal first writes. The guarantee remains scoped to the shared store actor, not a new cross-process transaction protocol.
+- Retains the 1.6.2 quota correction, existing folder memberships, evaluations, database schema v6, parser 1.4.2 and capability-package manifest v1. No Git publication, Tag or Release is implied.
+
+## 1.6.2
+
+Daily allowance cycle evidence repair. Internal build: `44`.
+
+- Fixes daily weekly-allowance overcounting when a future reset timestamp drifts without a real reset. Daily totals and reset markers share a fixed-anchor classifier with separate evidence for natural and early resets.
+- Keeps ambiguous transitions unknown and ignores only identified retired-cycle replays. Does not cap legitimate multi-cycle daily totals at 100 percentage points.
+- Marks daily quota projections with a backward-compatible calculation version inside presentation cache schema v1. Older cached daily values are hidden and repaired through the existing shared projection path, without replaying sessions or scanning source files merely to upgrade the calculation.
+- Preserves current account allowance, capability inventory, folder memberships, evaluations, parser 1.4.2, database schema v6 and capability-package manifest v1. No Git tag or GitHub Release is implied.
+
 ## 1.6.1
 
 Codex compatibility and refresh reliability. Internal build: `43`.

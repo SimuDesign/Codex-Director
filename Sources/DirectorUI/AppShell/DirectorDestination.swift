@@ -61,6 +61,7 @@ public enum DirectorUtility: String, CaseIterable, Identifiable, Hashable {
 /// produced an empty sidebar).
 public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     case home
+    case quotaHistory
     case capabilityFolders
     case customAgents
     case customSkills
@@ -92,6 +93,7 @@ public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     public var title: String {
         switch self {
         case .home: return "Home"
+        case .quotaHistory: return "Quota history"
         case .capabilityFolders: return "Capability Folders"
         case .customAgents: return "Custom Agents"
         case .customSkills: return "Custom Skills"
@@ -109,6 +111,7 @@ public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     public var symbol: String {
         switch self {
         case .home: return DirectorSymbol.home
+        case .quotaHistory: return DirectorSymbol.quotaHistory
         case .capabilityFolders: return DirectorSymbol.capabilityFolders
         case .customAgents: return DirectorSymbol.category(.customAgents)
         case .customSkills: return DirectorSymbol.category(.customSkills)
@@ -131,6 +134,6 @@ public enum DirectorSidebarItem: String, CaseIterable, Identifiable, Hashable {
     }
 
     public static var approvedNavigation: [Self] {
-        [.home, .capabilityFolders, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]
+        [.home, .quotaHistory, .capabilityFolders, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]
     }
 }

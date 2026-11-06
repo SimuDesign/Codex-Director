@@ -434,6 +434,141 @@ final class QueryPerformanceTests: XCTestCase {
         _ = writer
     }
 
+    func testQuotaHistoryMillionRowsSixtyDayColdAndWarm() async throws {
+        try requireHeavyPerformanceRun()
+        let root = try temporaryRoot("quota-history")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("quota.sqlite")
+        let writer = try DatabaseStore(url: url)
+        let raw = try XCTUnwrap(SQLiteConnection(url: url))
+        let selected = "selected-" + String(repeating: "s", count: 64)
+        let others = ["other-a-", "other-b-"].map { $0 + String(repeating: "o", count: 64) }
+        let query = QuotaHistoryQuery(sourceKey: "id:\(selected)", asOf: now, timeZone: TimeZone(secondsFromGMT: 0)!)
+        let observedDays = (0..<60).filter { $0 != 15 && $0 != 42 }
+        let dayStarts = (0..<60).map { query.calendar.date(byAdding: .day, value: $0, to: query.contextStart)! }
+        let extraDayRows = 100_000 % observedDays.count
+        let baseDayRows = 100_000 / observedDays.count
+        let extraRowLimit = extraDayRows * (baseDayRows + 1)
+        let legacyTieAt = query.contextStart.addingTimeInterval(2 * 3_600)
+        let statement = try raw.prepare("INSERT INTO quota_snapshots(id,captured_at,window_minutes,used_percent,resets_at,limit_id,limit_name,confidence) VALUES(?,?,?,?,?,?,?,?)")
+        try raw.beginTransactionOrThrow()
+        for index in 0..<1_000_000 {
+            let isSelected = index < 100_000
+            let isPredecessor = index == 100_000
+            let isLegacyTie = (100_001..<100_017).contains(index)
+            let timestamp: Date
+            let usedPercent: Double
+            let resetsAt: Date?
+            let sourceID: String?
+            let sourceName: String?
+            if isSelected {
+                let ordinal = index < extraRowLimit
+                    ? index / (baseDayRows + 1)
+                    : extraDayRows + (index - extraRowLimit) / baseDayRows
+                let rowInDay = index < extraRowLimit
+                    ? index % (baseDayRows + 1)
+                    : (index - extraRowLimit) % baseDayRows
+                let rowsToday = ordinal < extraDayRows ? baseDayRows + 1 : baseDayRows
+                let dayOffset = observedDays[ordinal]
+                let dayStart = dayStarts[dayOffset]
+                let availableSeconds = dayOffset == 59 ? now.timeIntervalSince(dayStart) : 86_400
+                timestamp = dayStart.addingTimeInterval(Double(rowInDay + 1) * availableSeconds / Double(rowsToday + 1))
+                usedPercent = Double(dayOffset % 7) * 12 + Double(rowInDay + 1) * 12 / Double(rowsToday + 1)
+                resetsAt = query.contextStart.addingTimeInterval(Double((dayOffset / 7 + 1) * 7 * 86_400))
+                sourceID = selected
+                sourceName = nil
+            } else if isPredecessor {
+                timestamp = query.contextStart.addingTimeInterval(-60)
+                usedPercent = 84
+                resetsAt = query.contextStart
+                sourceID = selected
+                sourceName = nil
+            } else if isLegacyTie {
+                // The schema's UNIQUE key prevents same-source ID ties when
+                // limit_id is non-null. Legacy NULL IDs permit exact timestamp
+                // ties, so include them in another source to exercise isolation.
+                timestamp = legacyTieAt
+                usedPercent = Double(index - 100_001)
+                resetsAt = query.contextStart.addingTimeInterval(7 * 86_400)
+                sourceID = nil
+                sourceName = "legacy-tie"
+            } else {
+                let otherOrdinal = index - 100_017
+                timestamp = query.contextStart.addingTimeInterval(-3_600 - Double(otherOrdinal / 2) * 60)
+                usedPercent = Double(otherOrdinal % 85)
+                resetsAt = timestamp.addingTimeInterval(7 * 86_400)
+                sourceID = others[otherOrdinal % 2]
+                sourceName = nil
+            }
+            statement.bind("history-\(index)-" + String(repeating: "h", count: 48), at: 1)
+            statement.bind(timestamp.timeIntervalSince1970, at: 2)
+            statement.bind(10_080, at: 3)
+            statement.bind(usedPercent, at: 4)
+            statement.bind(resetsAt?.timeIntervalSince1970, at: 5)
+            statement.bind(sourceID, at: 6)
+            statement.bind(sourceName, at: 7)
+            statement.bind("exact", at: 8)
+            _ = try statement.step()
+            try statement.reset()
+        }
+        try raw.commitOrThrow()
+        let ties = try raw.prepare("SELECT COUNT(*) FROM quota_snapshots WHERE limit_id IS NULL AND limit_name = 'legacy-tie' AND captured_at = ?")
+        ties.bind(legacyTieAt.timeIntervalSince1970, at: 1)
+        XCTAssertEqual(try ties.step(), .row)
+        XCTAssertEqual(ties.columnInt(0), 16)
+        let legacyStore = try DatabaseStore(url: url, readOnly: true)
+        let legacy = try await legacyStore.fetchQuotaHistory(
+            query: .init(sourceKey: "name:legacy-tie", asOf: now, timeZone: query.timeZone)
+        )
+        let legacyDay = try XCTUnwrap(legacy.days.first { $0.day == query.contextStart })
+        XCTAssertEqual(legacyDay.observationCount, 16)
+        XCTAssertEqual(legacyDay.firstObservation?.usedPercent, 0)
+        XCTAssertEqual(legacyDay.lastObservation?.usedPercent, 15)
+        var coldSamples: [TimeInterval] = []
+        for _ in 0..<20 {
+            let start = ContinuousClock.now
+            let coldStore = try DatabaseStore(url: url, readOnly: true)
+            let cold = try await coldStore.fetchQuotaHistory(query: query)
+            coldSamples.append(elapsed(start, ContinuousClock.now))
+            XCTAssertEqual(cold.days.count, 60)
+            XCTAssertEqual(cold.recordedDayCount(for: .sixtyDays), 58)
+            XCTAssertGreaterThanOrEqual(cold.calculableDayCount(for: .sixtyDays), 50)
+            XCTAssertGreaterThan(cold.transitions.count, 0)
+            XCTAssertEqual(cold.days.count { $0.state == .noObservation }, 2)
+            XCTAssertEqual(cold.days.reduce(0) { $0 + $1.observationCount }, 100_000)
+            XCTAssertLessThanOrEqual(try XCTUnwrap(cold.lastObservedAt), now)
+        }
+        let store = try DatabaseStore(url: url, readOnly: true)
+        var samples: [TimeInterval] = []
+        for _ in 0..<20 {
+            let start = ContinuousClock.now
+            let result = try await store.fetchQuotaHistory(query: query)
+            samples.append(elapsed(start, ContinuousClock.now))
+            XCTAssertEqual(result.days.count, 60)
+        }
+        let coldP95 = percentile(coldSamples, 0.95)
+        let coldMax = coldSamples.max() ?? 0
+        let warmP95 = percentile(samples, 0.95)
+        let warmMax = samples.max() ?? 0
+        print("[quota-history-perf] configuration=\(buildConfiguration) sqlite=\(String(cString: sqlite3_libversion())) cpuCount=\(ProcessInfo.processInfo.processorCount) physicalMemory=\(ProcessInfo.processInfo.physicalMemory) os=\(ProcessInfo.processInfo.operatingSystemVersionString) rows=1000000 selectedInRange=100000 predecessor=1 noObservationDays=2 legacyTimestampTies=16 weeklyResetEvidence=true coldConnectionSamples=20 coldMedian=\(percentile(coldSamples, 0.5))s coldP95=\(coldP95)s coldMax=\(coldMax)s warmSamples=20 warmMedian=\(percentile(samples, 0.5))s warmP95=\(warmP95)s warmMax=\(warmMax)s osPageCacheNotCleared=true")
+        XCTAssertLessThanOrEqual(coldP95, 1.0)
+        XCTAssertLessThanOrEqual(coldMax, 2.0)
+        XCTAssertLessThanOrEqual(warmP95, 1.0)
+        XCTAssertLessThanOrEqual(warmMax, 2.0)
+        let cancellation = SQLiteCancellationToken(timeout: .seconds(5))
+        let cancellationStart = ContinuousClock.now
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(2)) { cancellation.cancel() }
+        do {
+            _ = try await store.fetchQuotaHistory(query: query, cancellation: cancellation)
+            XCTFail("The 100k-row read should observe cancellation")
+        } catch SQLiteError.cancelled {
+            let cancellationSeconds = elapsed(cancellationStart, ContinuousClock.now)
+            print("[quota-history-perf] cancellation=\(cancellationSeconds)s")
+            XCTAssertLessThanOrEqual(cancellationSeconds, 0.25)
+        }
+        _ = writer
+    }
+
     func testCallSummaryAndPluginAttributionReleaseScaleTwentySamples() async throws {
         try requireHeavyPerformanceRun()
         let (store, root, largeSessionCalls) = try await makeCallStore()

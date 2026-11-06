@@ -11,25 +11,30 @@ public struct HomeOverviewView: View {
     public let directoryLoaded: Bool
     public let hasComputedStatistics: Bool
     public let hasCachedHomeSummary: Bool
+    private let isPreparingFirstPresentation: Bool
     /// Nil means not checked this run; false means the runtime plugin query failed.
     /// Neither state is evidence for a current installed/enabled count.
     public let pluginInventoryAvailable: Bool?
     public let lastUpdatedAt: Date?
     public let homeUsageRankingPeriod: HomeUsageRankingPeriod
     public let onHomeUsageRankingPeriodChange: (HomeUsageRankingPeriod) -> Void
+    public let onOpenQuotaHistory: () -> Void
     @EnvironmentObject private var languageStore: AppLanguageStore
+    @FocusState private var quotaHistoryEntryFocused: Bool
 
-    public init(model: HomeOverviewModel, quotaModel: QuotaOverviewModel, presentationState: DirectorPresentationState = .loaded, directoryLoaded: Bool = true, hasComputedStatistics: Bool = true, hasCachedHomeSummary: Bool = false, pluginInventoryAvailable: Bool? = nil, lastUpdatedAt: Date? = nil, homeUsageRankingPeriod: HomeUsageRankingPeriod = .thirtyDays, onHomeUsageRankingPeriodChange: @escaping (HomeUsageRankingPeriod) -> Void = { _ in }, onQuotaSourceChange: @escaping (String) -> Void = { _ in }, onOpenCategory: @escaping (CapabilityCategory) -> Void = { _ in }, onOpenCapability: @escaping (CapabilityCategory, String) -> Void = { _, _ in }) {
+    public init(model: HomeOverviewModel, quotaModel: QuotaOverviewModel, presentationState: DirectorPresentationState = .loaded, directoryLoaded: Bool = true, hasComputedStatistics: Bool = true, hasCachedHomeSummary: Bool = false, isPreparingFirstPresentation: Bool = false, pluginInventoryAvailable: Bool? = nil, lastUpdatedAt: Date? = nil, homeUsageRankingPeriod: HomeUsageRankingPeriod = .thirtyDays, onHomeUsageRankingPeriodChange: @escaping (HomeUsageRankingPeriod) -> Void = { _ in }, onOpenQuotaHistory: @escaping () -> Void = {}, onQuotaSourceChange: @escaping (String) -> Void = { _ in }, onOpenCategory: @escaping (CapabilityCategory) -> Void = { _ in }, onOpenCapability: @escaping (CapabilityCategory, String) -> Void = { _, _ in }) {
         self.model = model
         self.quotaModel = quotaModel
         self.presentationState = presentationState
         self.directoryLoaded = directoryLoaded
         self.hasComputedStatistics = hasComputedStatistics
         self.hasCachedHomeSummary = hasCachedHomeSummary
+        self.isPreparingFirstPresentation = isPreparingFirstPresentation
         self.pluginInventoryAvailable = pluginInventoryAvailable
         self.lastUpdatedAt = lastUpdatedAt
         self.homeUsageRankingPeriod = homeUsageRankingPeriod
         self.onHomeUsageRankingPeriodChange = onHomeUsageRankingPeriodChange
+        self.onOpenQuotaHistory = onOpenQuotaHistory
         self.onQuotaSourceChange = onQuotaSourceChange
         self.onOpenCategory = onOpenCategory
         self.onOpenCapability = onOpenCapability
@@ -43,34 +48,40 @@ public struct HomeOverviewView: View {
                 VStack(alignment: .leading, spacing: DirectorSpacing.space4) {
                     pageHeader(compact: isCompact)
 
-                    VStack(alignment: .leading, spacing: DirectorSpacing.moduleGap) {
-                        HomeOutlineModule(
-                            title: copy("home.module.usage", fallback: "Usage"),
-                            supportingText: nil,
-                            tone: .blue
-                        ) {
-                            QuotaOverviewView(
-                                model: quotaModel,
-                                availableWidth: contentWidth,
-                                onSourceChange: onQuotaSourceChange
-                            )
-                        }
+                    if !isPreparingFirstPresentation {
+                        VStack(alignment: .leading, spacing: DirectorSpacing.moduleGap) {
+                            HomeOutlineModule(
+                                title: copy("home.module.usage", fallback: "Usage"),
+                                supportingText: nil,
+                                tone: .blue,
+                                headerAccessory: isCompact ? nil : AnyView(quotaHistoryEntry)
+                            ) {
+                                VStack(alignment: .leading, spacing: DirectorSpacing.space4) {
+                                    if isCompact { quotaHistoryEntry }
+                                    QuotaOverviewView(
+                                        model: quotaModel,
+                                        availableWidth: contentWidth,
+                                        onSourceChange: onQuotaSourceChange
+                                    )
+                                }
+                            }
 
-                        HomeOutlineModule(
-                            title: copy("home.module.capabilitySummary", fallback: "Capability summary"),
-                            supportingText: nil,
-                            tone: .ice
-                        ) {
-                            inventoryModule(width: contentWidth)
-                        }
+                            HomeOutlineModule(
+                                title: copy("home.module.capabilitySummary", fallback: "Capability summary"),
+                                supportingText: nil,
+                                tone: .ice
+                            ) {
+                                inventoryModule(width: contentWidth)
+                            }
 
-                        HomeOutlineModule(
-                            title: copy("home.module.usageRanking", fallback: "Usage ranking"),
-                            supportingText: nil,
-                            tone: .mint,
-                            headerAccessory: isCompact ? nil : AnyView(rankingPeriodSelector(compact: false))
-                        ) {
-                            rankingModule(width: contentWidth, compact: isCompact)
+                            HomeOutlineModule(
+                                title: copy("home.module.usageRanking", fallback: "Usage ranking"),
+                                supportingText: nil,
+                                tone: .mint,
+                                headerAccessory: isCompact ? nil : AnyView(rankingPeriodSelector(compact: false))
+                            ) {
+                                rankingModule(width: contentWidth, compact: isCompact)
+                            }
                         }
                     }
 
@@ -115,6 +126,31 @@ public struct HomeOverviewView: View {
             statusText: stateMessage,
             compact: compact
         )
+    }
+
+    private var quotaHistoryEntry: some View {
+        Button(copy("home.quotaHistory.entry", fallback: "Quota history"), action: openQuotaHistory)
+            .buttonStyle(.link)
+            .font(DirectorTypography.toolbarAction)
+            .frame(minHeight: DirectorSpacing.toolbarControlMinHeight, alignment: .center)
+            .contentShape(Rectangle())
+            .focused($quotaHistoryEntryFocused)
+            .focusable()
+            .onKeyPress(.space) { activateQuotaHistoryFromKey() }
+            .onKeyPress(.return) { activateQuotaHistoryFromKey() }
+            .accessibilityIdentifier("home-quota-history-entry")
+            .accessibilityHint(copy("home.quotaHistory.entryHint", fallback: "Open quota history; choose a source when none is selected."))
+    }
+
+    private func openQuotaHistory() {
+        quotaHistoryEntryFocused = false
+        onOpenQuotaHistory()
+    }
+
+    private func activateQuotaHistoryFromKey() -> KeyPress.Result {
+        guard quotaHistoryEntryFocused else { return .ignored }
+        openQuotaHistory()
+        return .handled
     }
 
     private var latestUpdateText: String {

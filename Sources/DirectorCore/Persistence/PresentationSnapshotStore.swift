@@ -7,6 +7,9 @@ public actor PresentationSnapshotStore {
     public let maxBytes: Int
     private var activeIdentity: PresentationIdentity?
     private var revokedIdentity: PresentationIdentity?
+    /// A deletion or invalidation requires a new explicit activation even if
+    /// no readable file remains to identify the revoked generation.
+    private var requiresActivation = false
     private var revision: Int64 = 0
     public init(url: URL, maxBytes: Int = 2 * 1024 * 1024) { self.url = url; self.maxBytes = maxBytes }
 
@@ -25,12 +28,15 @@ public actor PresentationSnapshotStore {
     }
 
     public func activate(identity: PresentationIdentity) -> WritePermit {
-        revision += 1; activeIdentity = identity; revokedIdentity = nil
+        revision += 1; activeIdentity = identity; revokedIdentity = nil; requiresActivation = false
         return WritePermit(identity: identity, revision: revision)
     }
 
     public func invalidate() {
-        revision += 1; revokedIdentity = activeIdentity; activeIdentity = nil
+        revision += 1
+        if let activeIdentity { revokedIdentity = activeIdentity }
+        activeIdentity = nil
+        requiresActivation = true
     }
 
     public func write(_ snapshot: PresentationSnapshot, permit: WritePermit) throws {
@@ -42,6 +48,7 @@ public actor PresentationSnapshotStore {
     public func write(_ snapshot: PresentationSnapshot, expectedIdentity: PresentationIdentity? = nil, generation: Int64? = nil) throws {
         if let expectedIdentity, snapshot.identity != expectedIdentity { throw StoreError.staleIdentity }
         if let generation, snapshot.identity.dataGeneration != generation { throw StoreError.staleIdentity }
+        if requiresActivation { throw StoreError.staleIdentity }
         if let activeIdentity, activeIdentity != snapshot.identity { throw StoreError.staleIdentity }
         if revokedIdentity?.databaseEpoch == snapshot.identity.databaseEpoch { throw StoreError.staleIdentity }
         if activeIdentity == nil {
@@ -209,13 +216,23 @@ public actor PresentationSnapshotStore {
     }
 
     public func delete(expectedIdentity: PresentationIdentity? = nil) throws {
-        if let expectedIdentity, let existing = try read(), existing.identity != expectedIdentity { throw StoreError.staleIdentity }
+        let existingIdentity: PresentationIdentity?
+        if let expectedIdentity {
+            let existing = try read()
+            if let existing, existing.identity != expectedIdentity { throw StoreError.staleIdentity }
+            existingIdentity = existing?.identity
+        } else {
+            // A newly constructed actor may delete a cache before activate().
+            // Capture that file's bounded, validated identity before removal.
+            existingIdentity = (try? read())?.identity
+        }
         // Revoke every previously issued permit before touching the file. The
         // revision bump makes a late writer stale even when file removal
         // fails, so deletion cannot be followed by cache resurrection.
         revision &+= 1
-        revokedIdentity = expectedIdentity ?? activeIdentity
+        revokedIdentity = expectedIdentity ?? activeIdentity ?? existingIdentity ?? revokedIdentity
         activeIdentity = nil
+        requiresActivation = true
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])

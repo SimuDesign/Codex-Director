@@ -924,14 +924,23 @@ public struct DirectorSideSheet<Content: View>: View {
     private let width: CGFloat
     private let onClose: () -> Void
     private let closeLabel: String
+    private let focusCloseOnAppear: Bool
     private let content: Content
+    @FocusState private var closeFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorSchemeContrast) private var contrast
 
-    public init(width: CGFloat = 400, onClose: @escaping () -> Void, closeLabel: String = "Close detail", @ViewBuilder content: () -> Content) {
+    public init(
+        width: CGFloat = 400,
+        onClose: @escaping () -> Void,
+        closeLabel: String = "Close detail",
+        focusCloseOnAppear: Bool = false,
+        @ViewBuilder content: () -> Content
+    ) {
         self.width = width
         self.onClose = onClose
         self.closeLabel = closeLabel
+        self.focusCloseOnAppear = focusCloseOnAppear
         self.content = content()
     }
 
@@ -947,6 +956,13 @@ public struct DirectorSideSheet<Content: View>: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(closeLabel)
                 .keyboardShortcut(.escape, modifiers: [])
+                .focused($closeFocused)
+                .task {
+                    guard focusCloseOnAppear else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled else { return }
+                    closeFocused = true
+                }
             }
             .padding(.horizontal, DirectorSpacing.space4)
             .padding(.top, DirectorSpacing.space3)

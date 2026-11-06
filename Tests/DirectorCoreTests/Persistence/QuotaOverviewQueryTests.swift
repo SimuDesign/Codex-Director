@@ -111,6 +111,10 @@ final class QuotaOverviewQueryTests: XCTestCase {
 
         let result = try await store.fetchQuotaOverview(window: window)
         let source = try XCTUnwrap(result.sources.first)
+        XCTAssertEqual(
+            result.dailyUsageAlgorithmVersion,
+            QuotaOverviewSnapshot.currentDailyUsageAlgorithmVersion
+        )
         XCTAssertEqual(source.current?.id, "night")
         XCTAssertEqual(source.daily.first?.usedPercentDelta, 17)
         XCTAssertTrue(source.daily.first?.cycleChanged == true)
@@ -174,8 +178,8 @@ final class QuotaOverviewQueryTests: XCTestCase {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
         let start = calendar.startOfDay(for: base)
-        let oldReset = start.addingTimeInterval(3 * 86_400)
-        let newReset = start.addingTimeInterval(7 * 86_400)
+        let oldReset = start.addingTimeInterval(9 * 3_600 + 30 * 60)
+        let newReset = oldReset.addingTimeInterval(7 * 86_400)
         let window = CapabilityQueryWindow(
             start: start,
             end: start.addingTimeInterval(6 * 86_400 + 3_600),

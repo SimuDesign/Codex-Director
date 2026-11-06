@@ -87,6 +87,32 @@ struct InteractionPerformanceHost: View {
             NSApp.terminate(nil)
             return
         }
+        if ProcessInfo.processInfo.environment["CODEX_DIRECTOR_QUOTA_HISTORY_PAINT"] == "1" {
+            let recorder = QuotaHistoryPaintRecorder(
+                outputURL: Self.quotaHistoryPaintOutputURL(),
+                width: width,
+                height: height,
+                fixture: fixtureName
+            )
+            let runner = QuotaHistoryPaintRunner(driver: driver, recorder: recorder)
+            let diagnostic = ProcessInfo.processInfo.environment["CODEX_DIRECTOR_QUOTA_HISTORY_DIAGNOSTIC"] == "1"
+            await runner.runSamples(
+                count: Int(ProcessInfo.processInfo.environment["CODEX_DIRECTOR_QUOTA_HISTORY_SAMPLES"] ?? "20") ?? 20,
+                diagnostic: diagnostic
+            )
+            recorder.finish()
+            if let rawReviewSeconds = ProcessInfo.processInfo.environment["CODEX_DIRECTOR_QUOTA_HISTORY_REVIEW_SECONDS"],
+               let reviewSeconds = UInt64(rawReviewSeconds),
+               reviewSeconds > 0 {
+                // Opt-in diagnostic hold only. It keeps the already-written
+                // synthetic report available for CUA AX/image review without
+                // changing the production app lifecycle.
+                NSApp.activate(ignoringOtherApps: true)
+                try? await Task.sleep(nanoseconds: min(reviewSeconds, 600) * 1_000_000_000)
+            }
+            NSApp.terminate(nil)
+            return
+        }
         let recorder = InteractionPerformanceRecorder(
             outputURL: Self.outputURL(),
             width: width,
@@ -131,6 +157,14 @@ struct InteractionPerformanceHost: View {
 
     private static func outputURL() -> URL? {
         guard let path = ProcessInfo.processInfo.environment["CODEX_DIRECTOR_INTERACTION_PERF_OUTPUT"],
+              path.hasPrefix("/tmp/codex-director-interaction-perf/") else { return nil }
+        let url = URL(fileURLWithPath: path)
+        guard url.pathExtension == "json" else { return nil }
+        return url
+    }
+
+    private static func quotaHistoryPaintOutputURL() -> URL? {
+        guard let path = ProcessInfo.processInfo.environment["CODEX_DIRECTOR_QUOTA_HISTORY_PERF_OUTPUT"],
               path.hasPrefix("/tmp/codex-director-interaction-perf/") else { return nil }
         let url = URL(fileURLWithPath: path)
         guard url.pathExtension == "json" else { return nil }
@@ -360,7 +394,7 @@ private final class InteractionPerformanceRecorder: @unchecked Sendable {
         let report: Report
         lock.lock()
         report = Report(
-            schemaVersion: 3,
+            schemaVersion: 4,
             fixture: fixture,
             measurementMode: "release-optimized-synthetic-root-model-and-layout-markers",
             width: Int(width),
@@ -429,11 +463,12 @@ private final class InteractionPerformanceRunner {
         for index in 0..<boundedCount {
             recorder.beginSample(index: index + 1)
             let path = index == 0 ? "first-entry" : "warm-repeat"
-            await measure("sidebar-home") { [self] in self.model.selection = .home }
+            await measure("sidebar-home", destination: .home) { [self] in self.model.selection = .home }
+            await measure("sidebar-quota-history", destination: .quotaHistory) { [self] in self.model.selection = .quotaHistory }
             for stage in InteractionPerformanceDriver.libraryNavigationStages {
-                await measure(stage.name, libraryCategory: stage.category) { [self] in self.model.selection = stage.destination }
+                await measure(stage.name, destination: stage.destination, libraryCategory: stage.category) { [self] in self.model.selection = stage.destination }
             }
-            await measure("sidebar-folder") { [self] in self.model.selection = .capabilityFolders }
+            await measure("sidebar-folder", destination: .capabilityFolders) { [self] in self.model.selection = .capabilityFolders }
             await settleView()
 
             let folderIDs = [CapabilityFolderDefinition.globalID] + model.capabilityFolders.folders.filter(\.isCustom).map(\.id)
@@ -462,17 +497,25 @@ private final class InteractionPerformanceRunner {
                     self.driver.send(.setMembership(folderID: customFolderID, resourceID: resourceID, included: false))
                 }
             }
-            await measure("sidebar-settings") { [self] in self.model.selection = .settings }
+            await measure("sidebar-settings", destination: .settings) { [self] in self.model.selection = .settings }
             recorder.finishSample(path: path)
         }
     }
 
-    private func measure(_ name: String, libraryCategory: CapabilityCategory? = nil, operation: @escaping @MainActor () -> Void) async {
+    private func measure(
+        _ name: String,
+        destination: DirectorSidebarItem? = nil,
+        libraryCategory: CapabilityCategory? = nil,
+        operation: @escaping @MainActor () -> Void
+    ) async {
         InteractionPerformanceProbe.reset()
         let beforeQueries = recorder.querySnapshot()
         let priorCompletions = libraryCategory.map { model.performanceLibraryReloadCompletions[$0, default: 0] }
         let token = recorder.begin(name)
         let mutationStart = DispatchTime.now().uptimeNanoseconds
+        if let destination {
+            InteractionPerformanceProbe.beginNavigation(to: destination, at: mutationStart)
+        }
         operation()
         let mutationDuration = Double(DispatchTime.now().uptimeNanoseconds - mutationStart) / 1_000_000
         let settlementStart = DispatchTime.now().uptimeNanoseconds
@@ -488,6 +531,9 @@ private final class InteractionPerformanceRunner {
             let finalStart = DispatchTime.now().uptimeNanoseconds
             await settleView()
             finalSettlementDuration = Double(DispatchTime.now().uptimeNanoseconds - finalStart) / 1_000_000
+        }
+        if destination != nil {
+            await waitForNavigationDraw()
         }
         let afterQueries = recorder.querySnapshot()
         let probe = InteractionPerformanceProbe.take()
@@ -510,6 +556,14 @@ private final class InteractionPerformanceRunner {
             phaseDurations: phases,
             phaseCounts: counts)
         await captureSyntheticStageIfRequested(name)
+    }
+
+    private func waitForNavigationDraw() async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(250))
+        while !InteractionPerformanceProbe.hasNavigationDraws, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(8))
+        }
     }
 
     private func captureSyntheticStageIfRequested(_ name: String) async {
@@ -572,6 +626,204 @@ private final class InteractionPerformanceRunner {
             }
         }
         await Task.yield()
+    }
+}
+
+@MainActor
+private final class QuotaHistoryPaintRunner {
+    private let driver: InteractionPerformanceDriver
+    private let recorder: QuotaHistoryPaintRecorder
+
+    init(driver: InteractionPerformanceDriver, recorder: QuotaHistoryPaintRecorder) {
+        self.driver = driver
+        self.recorder = recorder
+    }
+
+    func runSamples(count: Int, diagnostic: Bool = false) async {
+        let boundedCount = diagnostic ? 1 : min(max(count, 20), 50)
+        for index in 1...boundedCount {
+            QuotaHistoryPerformanceProbe.begin(.entry)
+            driver.sendQuotaHistory(.open)
+            _ = await QuotaHistoryPerformanceProbe.waitForEntryFeedback()
+            _ = await QuotaHistoryPerformanceProbe.waitForCorrectPaint()
+            let entryMeasurements = QuotaHistoryPerformanceProbe.takeMeasurements()
+            recorder.record(
+                index: index,
+                stage: .entry,
+                measurements: entryMeasurements
+            )
+
+            for (stage, period) in [
+                (QuotaHistoryPerformanceProbe.Stage.sevenDays, QuotaHistoryPeriod.sevenDays),
+                (.thirtyDays, .thirtyDays),
+                (.sixtyDays, .sixtyDays)
+            ] {
+                QuotaHistoryPerformanceProbe.begin(stage)
+                driver.sendQuotaHistory(.setPeriod(period))
+                // Flush the SwiftUI/AppKit state transition before waiting for
+                // the marker. The timestamp still starts at the user action;
+                // this only prevents the next command from racing a pending
+                // period update in the synthetic runner.
+                await settleView()
+                _ = await QuotaHistoryPerformanceProbe.waitForCorrectPaint()
+                let periodMeasurements = QuotaHistoryPerformanceProbe.takeMeasurements()
+                recorder.record(
+                    index: index,
+                    stage: stage,
+                    measurements: periodMeasurements
+                )
+            }
+
+            // Keep the remembered period stable so each next opening measures
+            // the same approved default before closing the sheet.
+            driver.sendQuotaHistory(.setPeriod(.thirtyDays))
+            await settleView()
+            let dismissalToken = driver.quotaHistoryDismissalToken
+            driver.sendQuotaHistory(.close)
+            guard await waitForDismissal(after: dismissalToken) else {
+                // Do not open the next sample while an old quota-history page
+                // session is still attached. The report remains truthful and bounded.
+                QuotaHistoryPerformanceProbe.takeMeasurements()
+                break
+            }
+        }
+    }
+
+    private func waitForDismissal(after token: Int, timeoutMilliseconds: UInt64 = 2_000) async -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutMilliseconds * 1_000_000
+        while driver.quotaHistoryDismissalToken <= token,
+              DispatchTime.now().uptimeNanoseconds < deadline {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return driver.quotaHistoryDismissalToken > token
+    }
+
+    private func settleView() async {
+        await Task.yield()
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                NSApp.keyWindow?.displayIfNeeded()
+                continuation.resume()
+            }
+        }
+        await Task.yield()
+    }
+}
+
+private final class QuotaHistoryPaintRecorder: @unchecked Sendable {
+    struct Sample: Codable, Sendable {
+        let index: Int
+        let stage: String
+        let period: String
+        let commandAccepted: Bool
+        let eventToFeedbackMilliseconds: Double?
+        let acceptedToFeedbackMilliseconds: Double?
+        let eventToFirstCorrectPaintMilliseconds: Double?
+        let acceptedToFirstCorrectPaintMilliseconds: Double?
+    }
+
+    struct RuntimeEnvironment: Codable, Sendable {
+        let operatingSystem: String
+        let architecture: String
+        let syntheticData: Bool
+    }
+
+    struct BuildIdentity: Codable, Sendable {
+        let bundleIdentifier: String
+        let appVersion: String
+        let configuration: String
+        let optimization: String
+        let compilationCondition: String
+        let signature: String
+    }
+
+    struct Report: Codable, Sendable {
+        let schemaVersion: Int
+        let fixture: String
+        let measurementMode: String
+        let width: Int
+        let height: Int
+        let samples: [Sample]
+        let runtimeEnvironment: RuntimeEnvironment
+        let buildIdentity: BuildIdentity
+    }
+
+    private let outputURL: URL?
+    private let width: CGFloat
+    private let height: CGFloat
+    private let fixture: String
+    private var samples: [Sample] = []
+
+    init(outputURL: URL?, width: CGFloat, height: CGFloat, fixture: String) {
+        self.outputURL = outputURL
+        self.width = width
+        self.height = height
+        self.fixture = fixture
+    }
+
+    func record(
+        index: Int,
+        stage: QuotaHistoryPerformanceProbe.Stage,
+        measurements: QuotaHistoryPerformanceProbe.Measurements
+    ) {
+        let period: QuotaHistoryPeriod
+        switch stage {
+        case .entry, .thirtyDays: period = .thirtyDays
+        case .sevenDays: period = .sevenDays
+        case .sixtyDays: period = .sixtyDays
+        }
+        samples.append(Sample(
+            index: index,
+            stage: stage.rawValue,
+            period: period.rawValue,
+            commandAccepted: measurements.commandAccepted,
+            eventToFeedbackMilliseconds: measurements.eventToFeedbackMilliseconds,
+            acceptedToFeedbackMilliseconds: measurements.acceptedToFeedbackMilliseconds,
+            eventToFirstCorrectPaintMilliseconds: measurements.eventToFirstCorrectPaintMilliseconds,
+            acceptedToFirstCorrectPaintMilliseconds: measurements.acceptedToFirstCorrectPaintMilliseconds
+        ))
+    }
+
+    func finish() {
+        guard let outputURL else { return }
+        let report = Report(
+            schemaVersion: 2,
+            fixture: fixture,
+            measurementMode: "send-to-accept plus event/accept-to-first-correct-paint; native-AppKit-draw-marker; synthetic-only",
+            width: Int(width),
+            height: Int(height),
+            samples: samples,
+            runtimeEnvironment: RuntimeEnvironment(
+                operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
+                architecture: Self.architecture,
+                syntheticData: true
+            ),
+            buildIdentity: BuildIdentity(
+                bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.peiweitang.CodexDirector.InteractionPerformance",
+                appVersion: (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown",
+                configuration: "Release",
+                optimization: "release",
+                compilationCondition: "DIRECTOR_INTERACTION_PERFORMANCE",
+                signature: "ad-hoc"
+            )
+        )
+        do {
+            try FileManager.default.createDirectory(at: outputURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(report).write(to: outputURL, options: .atomic)
+        } catch {
+            print("quota_history_paint_report=write_failed")
+        }
+    }
+
+    private static var architecture: String {
+#if arch(arm64)
+        return "arm64"
+#elseif arch(x86_64)
+        return "x86_64"
+#else
+        return "unknown"
+#endif
     }
 }
 

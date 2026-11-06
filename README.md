@@ -2,7 +2,7 @@
 
 Codex Director is a native macOS application for understanding and moving your personal Codex capability system. It inventories Agents, Skills, installed plugins, project usage evidence, and manual evaluations without treating activity as proof of effectiveness.
 
-> Current version: `1.6.1`. Requires macOS 26 or later.
+> Current version: `1.7.2`. Requires macOS 26 or later.
 
 Usage evidence distinguishes child-Agent delegation, Agent method reads and
 Skill manifest reads. A bounded, nonexecuting recognizer recovers supported
@@ -38,6 +38,16 @@ to canonical Agent/Skill identities rather than duplicate capabilities.
 - Organizes eligible Agents and Skills through local, user-controlled capability folders. Folders support multi-membership, ordering, search, and project/global browsing without changing source files. Each folder exposes Agent & Companion Skills, Agent, and Skill tabs; explicit companion declarations are shown separately from co-observation evidence.
 
 Codex Director keeps source capabilities read-only. It does not upload capability content, sessions, credentials, cookies, Director databases, or plugin files. See [Privacy](PRIVACY.md) for the exact boundary.
+
+## Quota history
+
+The current allowance and source sit above the trend. Change the period beside the chart and expand **Data details** for separate current-report and historical-snapshot timestamps.
+
+Open **Quota history** in the sidebar, immediately after Home, to inspect the last 7, 30 or 60 local calendar days of indexed weekly allowance observations. Home's shortcut opens the same full page. Select the source directly on the page; a missing selected source stays unavailable rather than silently switching. The independent range defaults to 30 days and remembers its selection. It reads one bounded 60-day context on demand; range changes slice the loaded result without scanning sources or starting account reads. Home keeps its compact seven-day chart.
+
+Date rows distinguish observed use, confirmed zero, missing observations, missing baselines and ambiguous evidence. Recorded/calculable day counts do not imply uninterrupted observation. Current allowance and reported next resets carry their own capture time; historical transitions show the interval between supporting observations, not an exact claimed reset instant. Five-hour historical charts, predictions and billing conversion are outside this version.
+
+History remains part of the disposable derived index. Clearing that index clears this quota history; source records still present may be reindexed normally. It is grouped by allowance source and cannot distinguish past account switches. No account identifier, raw session or source path is added to history preferences or public UI.
 
 ## Capability Folders
 
@@ -76,6 +86,20 @@ records** is not an all-time archive. Deleting the derived index preserves
 history, but call summaries require an available index. Settings → Privacy has
 a separate confirmed clear action. History is not uploaded or included in
 `.codexpack.zip`; folder membership, evaluations and source files are unchanged.
+
+## Capability-package safety limits
+
+Director uses the same limits for export, verification and restore: 512 MiB
+archive input, 512 MiB expanded content, 20,000 entries including directories,
+64 MiB per regular file and 8 MiB per root metadata file. Link targets are
+limited to 64 KiB; entry paths to 4,096 UTF-8 bytes and 64 components. Preview
+blocks over-limit capabilities so they can be excluded. Older over-limit ZIPs
+are rejected without modifying the original; standard ZIP readers can still
+read them outside Director. Manifest v1 is unchanged.
+
+Only direct internal relative links to included real files/directories are
+accepted. Dangling links, link chains/cycles and omitted targets are blocked.
+Package content is never executed during these checks.
 
 ## Product screenshots
 

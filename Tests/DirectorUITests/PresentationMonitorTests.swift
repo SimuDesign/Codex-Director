@@ -75,6 +75,23 @@ final class PresentationMonitorTests: XCTestCase {
         }
     }
 
+    private final class RefreshRequestProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [RefreshRequest] = []
+
+        func append(_ request: RefreshRequest) {
+            lock.lock()
+            values.append(request)
+            lock.unlock()
+        }
+
+        func snapshot() -> [RefreshRequest] {
+            lock.lock()
+            defer { lock.unlock() }
+            return values
+        }
+    }
+
     private func waitUntil(
         _ condition: @escaping @MainActor () -> Bool,
         file: StaticString = #filePath,
@@ -215,6 +232,320 @@ final class PresentationMonitorTests: XCTestCase {
         XCTAssertEqual(model.refreshScheduleState?.sourceRetryAttempt, 2)
         XCTAssertEqual(model.refreshScheduleState?.sourceRetryDate, schedule.sourceRetryDate)
         XCTAssertEqual(model.refreshScheduleState?.lastSourceSuccessAt, schedule.lastSourceSuccessAt)
+    }
+
+    func testLegacyQuotaCacheMasksDailyValuesAndQueuesOneForcedQuotaRepair() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-quota-cache-repair-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let database = try DatabaseStore(url: root.appendingPathComponent("derived.sqlite"))
+        let identity = try await database.presentationIdentity()
+        let window = CapabilityQueryWindow.recent7(now: now, calendar: Calendar(identifier: .gregorian))
+        let current = try QuotaSnapshot(
+            id: "current",
+            capturedAt: now.addingTimeInterval(-60),
+            windowMinutes: 10_080,
+            usedPercent: 68,
+            resetsAt: now.addingTimeInterval(3_600),
+            limitID: "codex",
+            limitName: "codex",
+            confidence: .exact
+        )
+        let legacyQuota = QuotaOverviewSnapshot(
+            identity: identity,
+            window: window,
+            coverage: .complete,
+            sources: [
+                QuotaOverviewSourceSnapshot(
+                    id: "id:codex",
+                    name: "codex",
+                    current: current,
+                    daily: [
+                        QuotaOverviewDay(
+                            day: window.start,
+                            observation: current,
+                            cycleChanged: true,
+                            usedPercentDelta: 108
+                        )
+                    ]
+                )
+            ],
+            dailyUsageAlgorithmVersion: nil
+        )
+        let cache = PresentationSnapshotStore(url: root.appendingPathComponent("presentation.json"))
+        try await cache.write(PresentationSnapshot(
+            identity: identity,
+            classificationRevision: PresentationClassificationRevision.make([:]),
+            window: window,
+            generatedAt: now.addingTimeInterval(-60),
+            lastSourceCheckAt: now.addingTimeInterval(-60),
+            statisticsThrough: window.end,
+            quota: legacyQuota,
+            home: PresentationHomeSummary(
+                customAgents: 0, customAgentsGlobal: 0, customAgentsProject: 0,
+                customSkills: 0, customSkillsGlobal: 0, customSkillsProject: 0,
+                installedSkills: 0, installedSkillsIndependent: 0,
+                installedSkillsPluginProvided: 0, installedPlugins: 0, enabledPlugins: 0
+            )
+        ))
+
+        let requests = RefreshRequestProbe()
+        let refreshCoordinator = RefreshCoordinator(
+            initialGrace: 0,
+            operation: { request in
+                requests.append(request)
+                return .completed
+            }
+        )
+        let stores = TestMemoryPreferences.makeStores()
+        let model = DirectorAppModel(
+            store: database,
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            nowProvider: { now },
+            previewMode: false,
+            presentationSnapshotStore: cache,
+            presentationRefreshCoordinator: refreshCoordinator
+        )
+        let windowID = UUID()
+        // Hydrate while no window is visible. The legacy marker must remain
+        // repairable when the first window appears even though the cache is
+        // still within its normal source-check TTL.
+        let loaded = await model.loadInitialData()
+        XCTAssertTrue(loaded)
+        XCTAssertEqual(model.quotaOverviewSnapshot?.sources.first?.current?.usedPercent, 68)
+        XCTAssertNil(model.quotaOverviewSnapshot?.sources.first?.daily.first?.usedPercentDelta)
+        XCTAssertFalse(model.quotaOverviewSnapshot?.sources.first?.daily.first?.cycleChanged == true)
+        XCTAssertTrue(requests.snapshot().isEmpty)
+
+        model.setWindowVisibility(windowID, visible: true)
+        // Cancel the visibility window before the task gets to its guard.
+        // The late guard exit must clear only its own task state so the next
+        // visible transition can retry the repair.
+        model.removeWindow(windowID)
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertTrue(requests.snapshot().isEmpty)
+        model.setWindowVisibility(windowID, visible: true)
+        let secondWindowID = UUID()
+        model.setWindowVisibility(secondWindowID, visible: true)
+        defer {
+            model.removeWindow(windowID)
+            model.removeWindow(secondWindowID)
+        }
+        let repairQueued = await waitUntil {
+            requests.snapshot().contains {
+                $0.domains == [.quota] && $0.force && !$0.sourceIntent
+            }
+        }
+        XCTAssertTrue(repairQueued)
+        XCTAssertEqual(
+            requests.snapshot().filter { $0.domains == [.quota] && $0.force && !$0.sourceIntent }.count,
+            1
+        )
+    }
+
+    func testBootstrapRestoresLegacyRetryBeforeRepairCanStart() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-legacy-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let clock = TestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let retryDate = clock.now.addingTimeInterval(5 * 60)
+        let databaseURL = root.appendingPathComponent("derived.sqlite")
+        let database = try DatabaseStore(url: databaseURL)
+        let operations = OperationCounter()
+        let readDatabase = try DatabaseStore(
+            url: databaseURL,
+            readOnly: true,
+            queryObserver: { operations.append($0) }
+        )
+        let identity = try await database.presentationIdentity()
+        let window = CapabilityQueryWindow.recent7(now: clock.now, calendar: Calendar(identifier: .gregorian))
+        let quota = QuotaOverviewSnapshot(
+            identity: identity,
+            window: window,
+            coverage: .complete,
+            sources: [QuotaOverviewSourceSnapshot(
+                id: "id:synthetic",
+                name: "Synthetic",
+                current: nil,
+                daily: [QuotaOverviewDay(
+                    day: window.start,
+                    observation: nil,
+                    cycleChanged: true,
+                    usedPercentDelta: 99
+                )]
+            )],
+            dailyUsageAlgorithmVersion: nil
+        )
+        let cache = PresentationSnapshotStore(url: root.appendingPathComponent("presentation.json"))
+        let permit = await cache.activate(identity: identity)
+        try await cache.write(PresentationSnapshot(
+            identity: identity,
+            classificationRevision: PresentationClassificationRevision.make([:]),
+            window: window,
+            generatedAt: clock.now,
+            lastSourceCheckAt: clock.now,
+            quota: quota,
+            home: PresentationHomeSummary(
+                customAgents: 0, customAgentsGlobal: 0, customAgentsProject: 0,
+                customSkills: 0, customSkillsGlobal: 0, customSkillsProject: 0,
+                installedSkills: 0, installedSkillsIndependent: 0,
+                installedSkillsPluginProvided: 0, installedPlugins: 0, enabledPlugins: 0,
+                thirtyDayRankings: PresentationHomeRankingSet()
+            ),
+            refreshSchedule: PresentationRefreshSchedule(
+                revision: 4,
+                recordedAt: clock.now,
+                lastSourceSuccessAt: clock.now,
+                projectionRetryAttempt: 1,
+                projectionRetryDate: retryDate
+            )
+        ), permit: permit)
+
+        let stores = TestMemoryPreferences.makeStores()
+        let model = DirectorAppModel(
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            nowProvider: { clock.now },
+            previewMode: false,
+            presentationSnapshotStore: cache
+        )
+        let gate = Gate()
+        model.initialDirectoryReadTestHook = { await gate.wait() }
+        let windowID = UUID()
+        model.setWindowVisibility(windowID, visible: true)
+        defer { model.removeWindow(windowID) }
+        let services = DirectorStartupServices(
+            store: database,
+            readStore: readDatabase,
+            coordinator: nil,
+            configuration: nil,
+            snapshotStore: cache
+        )
+        let controller = DirectorStartupController(
+            cacheFactory: { cache },
+            servicesFactory: { services }
+        )
+        controller.start(model: model)
+        let loading = await waitForGate(gate)
+        XCTAssertTrue(loading)
+        XCTAssertNil(model.quotaOverviewSnapshot?.sources.first?.daily.first?.usedPercentDelta)
+        try? await Task.sleep(for: .milliseconds(30))
+        await gate.release()
+        let finished = await waitUntil { controller.isFinished }
+        XCTAssertTrue(finished)
+        XCTAssertEqual(model.bootstrapStatus, .ready)
+        XCTAssertEqual(model.refreshScheduleState?.projectionRetryDate, retryDate)
+        XCTAssertEqual(model.refreshScheduleState?.projectionRetryAttempt, 1)
+        XCTAssertEqual(operations.count(.startup), 0)
+        XCTAssertFalse(model.quotaOverviewSnapshot?.hasCurrentDailyUsageAlgorithm == true)
+
+        clock.set(retryDate.addingTimeInterval(1))
+        model.stopSourceDataMonitor()
+        model.startSourceDataMonitor(pollInterval: 0.01)
+        let repaired = await waitUntil {
+            model.quotaOverviewSnapshot?.hasCurrentDailyUsageAlgorithm == true &&
+                operations.count(.startup) == 1
+        }
+        XCTAssertTrue(repaired)
+    }
+
+    func testLegacyQuotaRepairLateOperationCannotResurrectAfterDelete() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("director-quota-delete-repair-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let database = try DatabaseStore(url: root.appendingPathComponent("derived.sqlite"))
+        let identity = try await database.presentationIdentity()
+        let window = CapabilityQueryWindow.recent7(now: now, calendar: Calendar(identifier: .gregorian))
+        let current = try QuotaSnapshot(
+            id: "current",
+            capturedAt: now.addingTimeInterval(-60),
+            windowMinutes: 10_080,
+            usedPercent: 68,
+            resetsAt: now.addingTimeInterval(3_600),
+            limitID: "codex",
+            limitName: "codex",
+            confidence: .exact
+        )
+        let legacyQuota = QuotaOverviewSnapshot(
+            identity: identity,
+            window: window,
+            coverage: .complete,
+            sources: [
+                QuotaOverviewSourceSnapshot(
+                    id: "id:codex",
+                    name: "codex",
+                    current: current,
+                    daily: [QuotaOverviewDay(day: window.start, observation: current, cycleChanged: true, usedPercentDelta: 108)]
+                )
+            ],
+            dailyUsageAlgorithmVersion: nil
+        )
+        let cache = PresentationSnapshotStore(url: root.appendingPathComponent("presentation.json"))
+        try await cache.write(PresentationSnapshot(
+            identity: identity,
+            classificationRevision: PresentationClassificationRevision.make([:]),
+            window: window,
+            generatedAt: now.addingTimeInterval(-60),
+            lastSourceCheckAt: now.addingTimeInterval(-60),
+            statisticsThrough: window.end,
+            quota: legacyQuota,
+            home: PresentationHomeSummary(
+                customAgents: 0, customAgentsGlobal: 0, customAgentsProject: 0,
+                customSkills: 0, customSkillsGlobal: 0, customSkillsProject: 0,
+                installedSkills: 0, installedSkillsIndependent: 0,
+                installedSkillsPluginProvided: 0, installedPlugins: 0, enabledPlugins: 0
+            )
+        ))
+
+        let gate = Gate()
+        let requests = RefreshRequestProbe()
+        let refreshCoordinator = RefreshCoordinator(
+            initialGrace: 0,
+            timeout: 0,
+            operation: { request in
+                requests.append(request)
+                await gate.wait()
+                return .completed
+            }
+        )
+        let stores = TestMemoryPreferences.makeStores()
+        let model = DirectorAppModel(
+            store: database,
+            classificationOverrides: stores.0,
+            evaluationStore: stores.1,
+            nowProvider: { now },
+            previewMode: false,
+            presentationSnapshotStore: cache,
+            presentationRefreshCoordinator: refreshCoordinator
+        )
+        let windowID = UUID()
+        model.setWindowVisibility(windowID, visible: true)
+        let loaded = await model.loadInitialData()
+        XCTAssertTrue(loaded)
+        let entered = await waitForGate(gate)
+        XCTAssertTrue(entered)
+
+        let deletion = Task { @MainActor in
+            try? await model.deleteDerivedData()
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+        await gate.release()
+        await deletion.value
+
+        XCTAssertEqual(requests.snapshot().count, 1)
+        XCTAssertNil(model.quotaOverviewSnapshot)
+        let cachedAfterDelete = try await cache.read()
+        XCTAssertNil(cachedAfterDelete)
+        model.removeWindow(windowID)
     }
 
     func testSourceCommitProjectionFailurePersistsAndRestoresRetryAcrossRestart() async throws {

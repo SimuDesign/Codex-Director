@@ -6,6 +6,7 @@ public enum PresentationQueryOperation: String, Codable, Sendable {
     case directory
     case startup
     case quota
+    case quotaHistory
     case library
     case taskSummaries
     case allSessions

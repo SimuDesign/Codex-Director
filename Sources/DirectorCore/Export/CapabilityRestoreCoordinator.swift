@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Performs a user-confirmed, local restore from an already exported package.
@@ -22,6 +23,12 @@ public actor CapabilityRestoreCoordinator {
         let anchorIdentities: [String: CapabilityRestoreFileIdentity]
     }
 
+    private struct ArchiveDigest: Sendable {
+        let value: String
+        let snapshotDescriptor: Int32?
+        let snapshotIdentity: CapabilityPackageFileIdentity?
+    }
+
     private enum OperationKind: Sendable, Equatable {
         case opening
         case restoring
@@ -37,6 +44,9 @@ public actor CapabilityRestoreCoordinator {
     private let homeDirectory: URL
     private let migrationGate: CapabilityMigrationGate
     private let hooks: CapabilityRestoreTestHooks
+    private let packageLimits: CapabilityPackageLimits
+    private let afterArchiveStat: (@Sendable (URL) -> Void)?
+    private let beforeSnapshotVerification: (@Sendable (URL) -> Void)?
     private let secureFileSystem = CapabilityRestoreSecureFileSystem()
     private let fileManager = FileManager.default
     private var package: CapabilityVerifiedPackage?
@@ -54,16 +64,25 @@ public actor CapabilityRestoreCoordinator {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.migrationGate = migrationGate
         self.hooks = .none
+        self.packageLimits = CapabilityPackageLimits()
+        self.afterArchiveStat = nil
+        self.beforeSnapshotVerification = nil
     }
 
     init(
         homeDirectory: URL,
         migrationGate: CapabilityMigrationGate = CapabilityMigrationGate(),
-        hooks: CapabilityRestoreTestHooks
+        hooks: CapabilityRestoreTestHooks,
+        packageLimits: CapabilityPackageLimits = CapabilityPackageLimits(),
+        afterArchiveStat: (@Sendable (URL) -> Void)? = nil,
+        beforeSnapshotVerification: (@Sendable (URL) -> Void)? = nil
     ) {
         self.homeDirectory = homeDirectory.standardizedFileURL
         self.migrationGate = migrationGate
         self.hooks = hooks
+        self.packageLimits = packageLimits
+        self.afterArchiveStat = afterArchiveStat
+        self.beforeSnapshotVerification = beforeSnapshotVerification
     }
 
     public func openPackage(
@@ -85,27 +104,48 @@ public actor CapabilityRestoreCoordinator {
             throw CapabilityRestoreError.operationInProgress
         }
         migrationToken = token
+        let snapshot = fileManager.temporaryDirectory
+            .appendingPathComponent("CodexDirectorArchiveSnapshot-\(UUID().uuidString)")
+        var snapshotDescriptor: Int32 = -1
+        var snapshotIdentity: CapabilityPackageFileIdentity?
+        defer {
+            if snapshotDescriptor >= 0 { Darwin.close(snapshotDescriptor) }
+            CapabilityPackageTemporaryItems.removeOwned(at: snapshot, identity: snapshotIdentity)
+        }
         let initialDigest: String
         do {
             try validateOperation(operation)
             try cancel.check()
-            initialDigest = try digest(of: archiveURL)
+            let result = try await digestArchive(of: archiveURL, cancellation: cancel, copyingTo: snapshot)
+            initialDigest = result.value
+            snapshotDescriptor = result.snapshotDescriptor ?? -1
+            snapshotIdentity = result.snapshotIdentity
+            guard snapshotDescriptor >= 0, snapshotIdentity != nil else {
+                throw CapabilityExportError.invalidArchive
+            }
         } catch {
             cancellation = nil
             await completeOperation(operation, releaseMigrationGate: true)
+            if error is CancellationError { throw CapabilityRestoreError.cancelled }
+            if let error = error as? CapabilityExportError { throw map(error) }
             throw CapabilityRestoreError.invalidArchive
         }
         let extraction = fileManager.temporaryDirectory
             .appendingPathComponent("CodexDirectorRestore-\(UUID().uuidString)", isDirectory: true)
+        var publishedExtractionIdentity: CapabilityPackageFileIdentity?
+        var publishedExtractionTree: [String: CapabilityPackageFileIdentity]?
         do {
             progress?(CapabilityRestoreProgress(phase: .verifying))
-            let verified = try CapabilityPackageArchiveVerifier().verifyAndExtract(
-                archiveURL: archiveURL,
+            beforeSnapshotVerification?(snapshot)
+            let verified = try CapabilityPackageArchiveVerifier(limits: packageLimits).verifyAndExtract(
+                archiveURL: URL(fileURLWithPath: "/dev/fd/\(snapshotDescriptor)"),
                 extractionDirectory: extraction,
                 cancellation: cancel
             )
+            publishedExtractionIdentity = verified.extractionIdentity
+            publishedExtractionTree = verified.extractionTree
             try cancel.check()
-            let finalDigest = try digest(of: archiveURL)
+            let finalDigest = try await digestArchive(of: archiveURL, cancellation: cancel).value
             guard finalDigest == initialDigest else { throw CapabilityRestoreError.packageChanged }
             try cancel.check()
             package = verified
@@ -122,22 +162,22 @@ public actor CapabilityRestoreCoordinator {
             await completeOperation(operation, releaseMigrationGate: false)
             return result
         } catch is CancellationError {
-            cleanupPackageExtraction(at: extraction)
+            cleanupPackageExtraction(at: extraction, identity: publishedExtractionIdentity, tree: publishedExtractionTree)
             cancellation = nil
             await completeOperation(operation, releaseMigrationGate: true)
             throw CapabilityRestoreError.cancelled
         } catch let error as CapabilityRestoreError {
-            cleanupPackageExtraction(at: extraction)
+            cleanupPackageExtraction(at: extraction, identity: publishedExtractionIdentity, tree: publishedExtractionTree)
             cancellation = nil
             await completeOperation(operation, releaseMigrationGate: true)
             throw error
         } catch let error as CapabilityExportError {
-            cleanupPackageExtraction(at: extraction)
+            cleanupPackageExtraction(at: extraction, identity: publishedExtractionIdentity, tree: publishedExtractionTree)
             cancellation = nil
             await completeOperation(operation, releaseMigrationGate: true)
             throw map(error)
         } catch {
-            cleanupPackageExtraction(at: extraction)
+            cleanupPackageExtraction(at: extraction, identity: publishedExtractionIdentity, tree: publishedExtractionTree)
             cancellation = nil
             await completeOperation(operation, releaseMigrationGate: true)
             throw CapabilityRestoreError.invalidArchive
@@ -164,9 +204,6 @@ public actor CapabilityRestoreCoordinator {
         guard let package, let packageURL, let packageDigest else {
             throw CapabilityRestoreError.noPackage
         }
-        guard let currentDigest = try? digest(of: packageURL), currentDigest == packageDigest else {
-            throw CapabilityRestoreError.packageChanged
-        }
         let selected = try selectedCapabilities(manifest: package.manifest, selection: selection)
         let signature = selectionSignature(selection)
         guard let approvedPreflight, approvedPreflight.selectionSignature == signature else {
@@ -181,6 +218,18 @@ public actor CapabilityRestoreCoordinator {
         var quarantinePreparationAttempted = false
         var quarantinePreparationComplete = false
         do {
+            await Task.yield()
+            try validateOperation(operation)
+            try cancel.check()
+            let currentDigest: String
+            do {
+                currentDigest = try await digestArchive(of: packageURL, cancellation: cancel).value
+            } catch let error as CapabilityExportError {
+                throw map(error)
+            }
+            guard currentDigest == packageDigest else { throw CapabilityRestoreError.packageChanged }
+            try validateOperation(operation)
+            try cancel.check()
             let secureRoots = try openSecureRoots(
                 manifest: package.manifest,
                 selection: selection,
@@ -370,7 +419,10 @@ public actor CapabilityRestoreCoordinator {
     deinit {
         cancellation?.cancel()
         if let package {
-            try? FileManager.default.removeItem(at: package.extractionDirectory)
+            CapabilityPackageTemporaryItems.removeOwned(
+                at: package.extractionDirectory, identity: package.extractionIdentity,
+                knownContents: package.extractionTree
+            )
         }
     }
 
@@ -744,9 +796,115 @@ public actor CapabilityRestoreCoordinator {
         }
     }
 
-    private func digest(of url: URL) throws -> String {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
-        return sha256(data)
+    private func digestArchive(
+        of url: URL,
+        cancellation: CapabilityExportCancellation?,
+        copyingTo snapshot: URL? = nil
+    ) async throws -> ArchiveDigest {
+        let limits = packageLimits
+        let hook = afterArchiveStat
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                try Self.digest(
+                    of: url, limits: limits, cancellation: cancellation,
+                    copyingTo: snapshot, afterArchiveStat: hook
+                )
+            }.value
+        } onCancel: {
+            cancellation?.cancel()
+        }
+    }
+
+    private nonisolated static func digest(
+        of url: URL,
+        limits: CapabilityPackageLimits,
+        cancellation: CapabilityExportCancellation? = nil,
+        copyingTo snapshot: URL? = nil,
+        afterArchiveStat: (@Sendable (URL) -> Void)? = nil
+    ) throws -> ArchiveDigest {
+        let input = Darwin.open(url.path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard input >= 0 else { throw CapabilityExportError.invalidArchive }
+        defer { Darwin.close(input) }
+        var before = stat()
+        guard Darwin.fstat(input, &before) == 0, before.st_mode & S_IFMT == S_IFREG,
+              before.st_size >= 0 else { throw CapabilityExportError.invalidArchive }
+        guard UInt64(before.st_size) <= limits.maxArchiveBytes else {
+            throw CapabilityExportError.resourceLimitExceeded
+        }
+
+        var output: Int32 = -1
+        var snapshotIdentity: CapabilityPackageFileIdentity?
+        var completed = false
+        defer {
+            if output >= 0 && !completed { Darwin.close(output) }
+            if let snapshot, !completed {
+                CapabilityPackageTemporaryItems.removeOwned(at: snapshot, identity: snapshotIdentity)
+            }
+        }
+        if let snapshot {
+            output = Darwin.open(
+                snapshot.path, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600
+            )
+            guard output >= 0 else { throw CapabilityExportError.invalidArchive }
+            var created = stat()
+            guard Darwin.fstat(output, &created) == 0, created.st_mode & S_IFMT == S_IFREG else {
+                throw CapabilityExportError.invalidArchive
+            }
+            snapshotIdentity = CapabilityPackageFileIdentity(created)
+        }
+        if snapshot != nil { afterArchiveStat?(url) }
+
+        var hasher = SHA256()
+        var count: UInt64 = 0
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            try cancellation?.check() ?? Task.checkCancellation()
+            let readCount = buffer.withUnsafeMutableBytes {
+                Darwin.read(input, $0.baseAddress, $0.count)
+            }
+            if readCount < 0 && errno == EINTR { continue }
+            guard readCount >= 0 else { throw CapabilityExportError.invalidArchive }
+            if readCount == 0 { break }
+            let (newCount, overflow) = count.addingReportingOverflow(UInt64(readCount))
+            guard !overflow, newCount <= limits.maxArchiveBytes else {
+                throw CapabilityExportError.resourceLimitExceeded
+            }
+            count = newCount
+            let chunk = Data(buffer.prefix(readCount))
+            hasher.update(data: chunk)
+            if output >= 0 {
+                try chunk.withUnsafeBytes { bytes in
+                    var offset = 0
+                    while offset < bytes.count {
+                        try cancellation?.check() ?? Task.checkCancellation()
+                        let written = Darwin.write(output, bytes.baseAddress!.advanced(by: offset), bytes.count - offset)
+                        if written < 0 && errno == EINTR { continue }
+                        guard written > 0 else { throw CapabilityExportError.invalidArchive }
+                        offset += written
+                    }
+                }
+            }
+        }
+        var after = stat()
+        var linked = stat()
+        guard Darwin.fstat(input, &after) == 0,
+              Darwin.lstat(url.path, &linked) == 0,
+              before.st_dev == after.st_dev, before.st_ino == after.st_ino,
+              before.st_dev == linked.st_dev, before.st_ino == linked.st_ino,
+              before.st_size == after.st_size, count == UInt64(after.st_size),
+              before.st_mtimespec.tv_sec == after.st_mtimespec.tv_sec,
+              before.st_mtimespec.tv_nsec == after.st_mtimespec.tv_nsec,
+              before.st_ctimespec.tv_sec == after.st_ctimespec.tv_sec,
+              before.st_ctimespec.tv_nsec == after.st_ctimespec.tv_nsec else {
+            throw CapabilityExportError.invalidArchive
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        completed = true
+        return ArchiveDigest(
+            value: hash,
+            snapshotDescriptor: output >= 0 ? output : nil,
+            snapshotIdentity: snapshotIdentity
+        )
     }
 
     /// FileManager.fileExists follows links and returns false for a dangling
@@ -761,12 +919,17 @@ public actor CapabilityRestoreCoordinator {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func cleanupPackageExtraction(at url: URL) {
-        try? fileManager.removeItem(at: url)
+    private func cleanupPackageExtraction(
+        at url: URL,
+        identity: CapabilityPackageFileIdentity?,
+        tree: [String: CapabilityPackageFileIdentity]?
+    ) {
+        CapabilityPackageTemporaryItems.removeOwned(at: url, identity: identity, knownContents: tree)
     }
 
     private func map(_ error: CapabilityExportError) -> CapabilityRestoreError {
         switch error {
+        case .resourceLimitExceeded: return .resourceLimitExceeded
         case .unsafeArchivePath: return .unsafeArchivePath
         case .checksumMismatch: return .checksumMismatch
         case .cancelled: return .cancelled
@@ -814,7 +977,13 @@ public actor CapabilityRestoreCoordinator {
 
     private func clearPackageState() {
         cancellation = nil
-        if let package { cleanupPackageExtraction(at: package.extractionDirectory) }
+        if let package {
+            cleanupPackageExtraction(
+                at: package.extractionDirectory,
+                identity: package.extractionIdentity,
+                tree: package.extractionTree
+            )
+        }
         package = nil
         packageURL = nil
         packageDigest = nil

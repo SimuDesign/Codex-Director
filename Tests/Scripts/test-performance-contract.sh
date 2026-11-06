@@ -145,7 +145,7 @@ import json
 import sys
 
 names = [
-    "sidebar-home",
+    "sidebar-home", "sidebar-quota-history",
     "sidebar-custom-agents", "sidebar-custom-skills",
     "sidebar-installed-skills", "sidebar-installed-plugins",
     "sidebar-folder",
@@ -158,6 +158,8 @@ def sample(index, path):
     for i, name in enumerate(names):
         library = name in {"sidebar-custom-agents", "sidebar-custom-skills", "sidebar-installed-skills", "sidebar-installed-plugins"}
         phases = {"selectionMutation": 0.1, "initialLayoutSettlement": 0.7}
+        if name.startswith("sidebar-"):
+            phases.update({"sidebarDraw": 0.6, "destinationDraw": 0.8})
         if library:
             phases.update({"libraryReloadAwait": 0.1, "finalLayoutSettlement": 0.1})
         events.append({"sequence": i + 1, "name": name, "durationMilliseconds": 1.0, "queryCounts": {},
@@ -175,7 +177,7 @@ def sample(index, path):
     }
 
 report = {
-    "schemaVersion": 3,
+    "schemaVersion": 4,
     "fixture": "interactionStress",
     "measurementMode": "release-optimized-synthetic-root-model-and-layout-markers",
     "width": 720,

@@ -354,7 +354,7 @@ final class QuotaOverviewTests: XCTestCase {
         XCTAssertTrue(model.dailySnapshots.allSatisfy { $0.observation == nil && $0.usedPercent == nil })
     }
 
-    func testLegacyCompactProjectionDerivesOnlyUnambiguousAdjacentDayIncrease() throws {
+    func testLegacyCompactProjectionLeavesDailyUsageUnknownUntilRepair() throws {
         let now = date("2026-08-28 12:00")
         let priorDay = date("2026-08-27 00:00")
         let currentDay = date("2026-08-28 00:00")
@@ -375,13 +375,15 @@ final class QuotaOverviewTests: XCTestCase {
                         QuotaOverviewDay(day: currentDay, observation: current)
                     ]
                 )
-            ]
+            ],
+            dailyUsageAlgorithmVersion: nil
         )
 
         let model = QuotaOverviewModel(snapshot: overview, now: now, calendar: calendar)
 
         XCTAssertNil(model.dailySnapshots.first?.usedPercent)
-        XCTAssertEqual(model.dailySnapshots.last?.usedPercent, 18)
+        XCTAssertNil(model.dailySnapshots.last?.usedPercent)
+        XCTAssertFalse(model.dailySnapshots.last?.cycleChanged == true)
     }
 
     func testUnknownResetRemainsUnknownAndUnknownSourceIsSeparate() throws {

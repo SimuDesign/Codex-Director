@@ -121,7 +121,7 @@ final class UIValidationTests: XCTestCase {
         XCTAssertTrue(host.contains("1280 × 800"))
         XCTAssertTrue(host.contains("1600 × 1000"))
         XCTAssertEqual(destinations.components(separatedBy: "public static var approvedNavigation").count - 1, 1)
-        XCTAssertTrue(destinations.contains("[.home, .capabilityFolders, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]"))
+        XCTAssertTrue(destinations.contains("[.home, .quotaHistory, .capabilityFolders, .customAgents, .customSkills, .installedSkills, .installedPlugins, .settings]"))
     }
 
     func testCaptureLayoutKeepsControlsOutsideTheRequestedProductViewport() {

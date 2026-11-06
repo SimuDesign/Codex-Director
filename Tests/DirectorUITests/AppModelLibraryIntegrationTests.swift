@@ -490,6 +490,34 @@ final class AppModelLibraryIntegrationTests: XCTestCase {
         XCTAssertFalse(model.capabilityFolders.members(in: CapabilityFolderDefinition.selfTrainingID).contains { $0.id == project.id })
     }
 
+    func testSettingsDiagnosticsReuseMetadataAndReloadWhenIndexCompletionChanges() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("synthetic.sqlite")
+        let queries = QueryProbe()
+        let database = try DatabaseStore(url: url)
+        let reader = try DatabaseStore(url: url, readOnly: true, queryObserver: { queries.append($0) })
+        let stores = makePreferenceStores()
+        let model = DirectorAppModel(store: database, readStore: reader, classificationOverrides: stores.0, evaluationStore: stores.1)
+        await model.loadDiagnosticsIfNeeded()
+        await model.loadDiagnosticsIfNeeded()
+        XCTAssertEqual(queries.count(of: .diagnostics), 1)
+        XCTAssertFalse(model.diagnosticsLoading)
+
+        let completedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        try await database.markSuccessfulSourceIndex(at: completedAt)
+        await model.loadDiagnosticsIfNeeded()
+        await model.loadDiagnosticsIfNeeded()
+        XCTAssertEqual(queries.count(of: .diagnostics), 2)
+        XCTAssertEqual(model.presentationDiagnostics?.metadata.lastIndexCompletedAt, completedAt)
+
+        try await database.deleteAllData()
+        await model.loadDiagnosticsIfNeeded()
+        XCTAssertEqual(queries.count(of: .diagnostics), 3)
+        XCTAssertNil(model.presentationDiagnostics?.metadata.lastIndexCompletedAt)
+    }
+
     func testAppModelPublishesBatchCompanionUsageFromIndexedInvocationsAndInvalidatesOnRefresh() async throws {
         let now = Date(timeIntervalSince1970: 1_780_000_000)
         let queries = QueryProbe()

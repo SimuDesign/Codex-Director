@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import DirectorCore
+import QuartzCore
 
 /// Root workspace: native `NavigationSplitView` with primary destinations
 /// and a separate Utilities section.
@@ -11,16 +12,24 @@ public struct DirectorRootView: View {
     @State private var showEmptyProjects = false
     @State private var windowPresenceID = UUID()
     @State private var sidebarSelectionEmphasized = false
+    @State private var quotaHistoryController: QuotaHistoryController?
+    @State private var quotaHistoryPresentation: QuotaHistoryPresentation?
+    @State private var quotaHistoryScrollPosition: String?
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.capabilityHistoryPresentationSource) private var injectedHistorySource
 #if DIRECTOR_INTERACTION_PERFORMANCE
-    private let interactionPerformanceDriver: InteractionPerformanceDriver?
+    @ObservedObject private var interactionPerformanceDriver: InteractionPerformanceDriver
 #endif
+
+    private struct QuotaHistoryPresentation: Identifiable {
+        let id: UUID
+        let controller: QuotaHistoryController
+    }
 
 #if DIRECTOR_INTERACTION_PERFORMANCE
     public init(model: DirectorAppModel = DirectorAppModel(), interactionPerformanceDriver: InteractionPerformanceDriver? = nil) {
         _model = StateObject(wrappedValue: model)
-        self.interactionPerformanceDriver = interactionPerformanceDriver
+        _interactionPerformanceDriver = ObservedObject(wrappedValue: interactionPerformanceDriver ?? .noop)
     }
 #else
     public init(model: DirectorAppModel = DirectorAppModel()) {
@@ -33,6 +42,15 @@ public struct DirectorRootView: View {
             sidebar
         } detail: {
             detailView
+#if DIRECTOR_INTERACTION_PERFORMANCE
+                .background(alignment: .topLeading) {
+                    if let destination = model.selection,
+                       destination != .quotaHistory,
+                       performanceShouldEmitDestinationDraw(for: destination) {
+                        QuotaHistoryFirstPaintMarker.navigation(.destinationDraw, destination: destination)
+                    }
+                }
+#endif
         }
         .navigationTitle(DirectorUI.productName)
         .toolbar {
@@ -55,10 +73,26 @@ public struct DirectorRootView: View {
         .environment(\.capabilityHistoryPresentationSource, injectedHistorySource ?? historySource)
         .environment(\.capabilityHistoryMutationRevision, model.capabilityHistoryMutationRevision)
         .background(WindowPresenceBridge(id: windowPresenceID, onVisibilityChange: { visible in model.setWindowVisibility(windowPresenceID, visible: visible) }, onSleepingChange: { sleeping in model.setSystemSleeping(sleeping) }, onClockChange: { timeZone in model.presentationClockDidChange(timeZone: timeZone) }, onRemove: { id in model.removeWindow(id) }).allowsHitTesting(false).accessibilityHidden(true))
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        .onChange(of: interactionPerformanceDriver.quotaHistoryCommandToken) { _, _ in
+            guard let command = interactionPerformanceDriver.quotaHistoryCommand else { return }
+            applyQuotaHistoryPerformanceCommand(command)
+        }
+        .overlay {
+            QuotaHistoryFirstPaintMarker(
+                kind: .entryFeedback,
+                isCorrect: quotaHistoryPresentation != nil && QuotaHistoryPerformanceProbe.isAwaitingEntryFeedback,
+                eventID: QuotaHistoryPerformanceProbe.currentEventID
+            )
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
+#endif
     }
 
     private var sidebar: some View {
-        List(selection: $model.selection) {
+        List(selection: sidebarSelection) {
             Section {
                 ForEach(DirectorSidebarItem.approvedNavigation) { item in
                     sidebarDestination(item)
@@ -68,6 +102,19 @@ public struct DirectorRootView: View {
         .listStyle(.sidebar)
         .tint(.clear)
         .navigationSplitViewColumnWidth(min: 180, ideal: 220)
+    }
+
+    private var sidebarSelection: Binding<DirectorSidebarItem?> {
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        Binding(get: { model.selection }, set: { destination in
+            if let destination, destination != model.selection {
+                InteractionPerformanceProbe.beginNativeNavigation(to: destination)
+            }
+            model.selection = destination
+        })
+#else
+        $model.selection
+#endif
     }
 
     private func sidebarDestination(_ item: DirectorSidebarItem) -> some View {
@@ -108,28 +155,56 @@ public struct DirectorRootView: View {
         .tag(item)
         .listRowBackground(Color.clear)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        .background {
+            if isSelected {
+                QuotaHistoryFirstPaintMarker.navigation(.sidebarDraw, destination: item)
+            }
+        }
+#endif
     }
 
     @ViewBuilder
     private var detailView: some View {
         switch model.selection {
         case .home:
-            HomeOverviewView(model: homeOverviewModel, quotaModel: model.quotaOverviewSnapshot.map { QuotaOverviewModel(snapshot: $0, accountUsage: model.accountUsageSnapshot, now: model.presentationNow, calendar: model.statisticsCalendar, selectedSourceID: model.quotaSourceID) } ?? QuotaOverviewModel(snapshots: [], now: model.presentationNow, calendar: model.statisticsCalendar, selectedSourceID: model.quotaSourceID), presentationState: model.presentationState, directoryLoaded: model.directoryLoaded, hasComputedStatistics: model.hasComputedStatistics, hasCachedHomeSummary: model.presentationHomeSummary != nil, pluginInventoryAvailable: model.pluginInventoryAvailable, lastUpdatedAt: model.homeLastUpdatedAt, homeUsageRankingPeriod: model.homeUsageRankingPeriod, onHomeUsageRankingPeriodChange: { model.setHomeUsageRankingPeriod($0) }, onQuotaSourceChange: { model.setQuotaSourceID($0) }, onOpenCategory: { category in
-                model.selection = sidebarItem(for: category)
-                if let library = model.libraryModels.first(where: { $0.category == category }) {
-                    library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending)
-                    library.selectedID = nil
+            HomeOverviewView(
+                model: homeOverviewModel,
+                quotaModel: homeQuotaModel,
+                presentationState: model.presentationState,
+                directoryLoaded: model.directoryLoaded,
+                hasComputedStatistics: model.hasComputedStatistics,
+                hasCachedHomeSummary: model.presentationHomeSummary != nil,
+                isPreparingFirstPresentation: isPreparingFirstHomePresentation,
+                pluginInventoryAvailable: model.pluginInventoryAvailable,
+                lastUpdatedAt: model.homeLastUpdatedAt,
+                homeUsageRankingPeriod: model.homeUsageRankingPeriod,
+                onHomeUsageRankingPeriodChange: { model.setHomeUsageRankingPeriod($0) },
+                onOpenQuotaHistory: openQuotaHistory,
+                onQuotaSourceChange: { model.setQuotaSourceID($0) },
+                onOpenCategory: { category in
+                    model.selection = sidebarItem(for: category)
+                    if let library = model.libraryModels.first(where: { $0.category == category }) {
+                        library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending)
+                        library.selectedID = nil
+                    }
+                },
+                onOpenCapability: { category, id in
+                    model.selection = sidebarItem(for: category)
+                    if let library = model.libraryModels.first(where: { $0.category == category }) {
+                        library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending)
+                        library.selectedID = id
+                    }
                 }
-            }, onOpenCapability: { category, id in
-                model.selection = sidebarItem(for: category)
-                if let library = model.libraryModels.first(where: { $0.category == category }) { library.context = CapabilityBrowseContext(scope: .allCapabilities, search: "", sort: .usageDescending); library.selectedID = id }
-            })
+            )
+        case .quotaHistory:
+            quotaHistoryPage
         case .capabilityFolders:
 #if DIRECTOR_INTERACTION_PERFORMANCE
             CapabilityFoldersView(
                 model: model,
                 detailContext: { resource in capabilityDetailModel(for: resource) },
-                performanceDriver: interactionPerformanceDriver ?? .noop,
+                performanceDriver: interactionPerformanceDriver,
                 historySource: injectedHistorySource ?? historySource
             )
 #else
@@ -140,9 +215,15 @@ public struct DirectorRootView: View {
             )
 #endif
         case .customAgents:
-            filteredCapabilities(category: .myAgents, model: model.libraryModels[0], titleKey: "nav.customAgents", fallback: "Custom Agents")
+            customLibraryDestination(
+                destination: .customAgents, category: .myAgents, model: model.libraryModels[0],
+                titleKey: "nav.customAgents", fallback: "Custom Agents"
+            )
         case .customSkills:
-            filteredCapabilities(category: .mySkills, model: model.libraryModels[1], titleKey: "nav.customSkills", fallback: "Custom Skills")
+            customLibraryDestination(
+                destination: .customSkills, category: .mySkills, model: model.libraryModels[1],
+                titleKey: "nav.customSkills", fallback: "Custom Skills"
+            )
         case .installedSkills:
             filteredCapabilities(category: .installedSkills, model: model.libraryModels[2], titleKey: "nav.installedSkills", fallback: "Installed Skills")
         case .installedPlugins:
@@ -179,6 +260,49 @@ public struct DirectorRootView: View {
         }
     }
 
+    /// The history controller is retained by the window root while the page
+    /// is active. Entering from the sidebar and Home share this same route;
+    /// the placeholder activates one session exactly once when navigation
+    /// reaches the page.
+    @ViewBuilder
+    private var quotaHistoryPage: some View {
+        let quotaModel = homeQuotaModel
+        Group {
+            if let presentation = quotaHistoryPresentation {
+                QuotaHistoryView(
+                    controller: presentation.controller,
+                    sessionID: presentation.id,
+                    quotaModel: quotaModel,
+                    homeSnapshot: model.quotaOverviewSnapshot,
+                    onClose: { closeQuotaHistory(presentationID: presentation.id) },
+                    onSourceChange: { sourceID in
+                        selectQuotaHistorySource(sourceID, presentationID: presentation.id)
+                    },
+                    scrollPosition: $quotaHistoryScrollPosition
+                )
+            } else {
+                Color.clear
+                    .task {
+                        guard !Task.isCancelled, model.selection == .quotaHistory else { return }
+                        activateQuotaHistoryIfNeeded()
+                    }
+                    .accessibilityHidden(true)
+            }
+        }
+        .onChange(of: quotaModel.sources.map(\.id)) { _, _ in
+            // Startup may publish Home sources after the page has already
+            // entered its intentional no-source state. Seed only an
+            // uninitialized nil selection; a non-nil missing ID stays pinned.
+            seedQuotaHistorySourceIfNeeded()
+        }
+    }
+
+    private var isPreparingFirstHomePresentation: Bool {
+        let isBootstrapping = model.bootstrapStatus == .bootstrapping || model.bootstrapStatus == .restoringCache
+        return isBootstrapping && model.presentationHomeSummary == nil
+            && model.quotaOverviewSnapshot == nil && !model.directoryLoaded && !model.hasComputedStatistics
+    }
+
     private var homeOverviewModel: HomeOverviewModel {
         if let summary = model.presentationHomeSummary {
             return HomeOverviewModel(summary: summary)
@@ -186,6 +310,23 @@ public struct DirectorRootView: View {
         let catalog = CapabilityCatalog(resources: model.capabilities.allRows.map(\.resource), relations: model.capabilities.relations)
         let stats = model.recentCapabilityStats
         return HomeOverviewModel(catalog: catalog, usage: stats)
+    }
+
+    private var homeQuotaModel: QuotaOverviewModel {
+        model.quotaOverviewSnapshot.map {
+            QuotaOverviewModel(
+                snapshot: $0,
+                accountUsage: model.accountUsageSnapshot,
+                now: model.presentationNow,
+                calendar: model.statisticsCalendar,
+                selectedSourceID: model.quotaSourceID
+            )
+        } ?? QuotaOverviewModel(
+            snapshots: [],
+            now: model.presentationNow,
+            calendar: model.statisticsCalendar,
+            selectedSourceID: model.quotaSourceID
+        )
     }
 
     private var historySource: CapabilityHistoryPresentationSource {
@@ -247,7 +388,7 @@ public struct DirectorRootView: View {
             queryStatus: self.model.libraryQueryStatus[libraryModel.category],
             resultContext: self.model.libraryResultContext[libraryModel.category],
             queryTrigger: "\(self.model.directoryLoaded)-\(self.model.statisticsWindow?.start.timeIntervalSinceReferenceDate ?? -1)-\(self.model.statisticsWindow?.end.timeIntervalSinceReferenceDate ?? -1)",
-            onScopeChanged: { scope in Task { await self.model.reloadLibrary(libraryModel.category, scope: scope) } },
+            onScopeChanged: { scope in await self.model.reloadLibrary(libraryModel.category, scope: scope) },
             detailContext: { row in
                 let effectiveScope = self.model.libraryResultContext[libraryModel.category]?.scope ?? libraryModel.context.scope
                 return CapabilityDetailViewModel(row: row, projectID: { if case .project(let id) = effectiveScope { return id }; return nil }(),
@@ -268,7 +409,6 @@ public struct DirectorRootView: View {
                 self.model.setCapabilityFolderMembership(resourceID: resourceID, folderID: folderID, included: included)
             },
             onUsagePeriodChanged: { period in self.model.setCapabilityFolderUsagePeriod(period) })
-        .navigationTitle(languageStore.localizer.text(titleKey, fallback: fallback))
     }
 
     @ViewBuilder
@@ -311,8 +451,307 @@ public struct DirectorRootView: View {
         model.tasks.rows.filter { $0.task.coverage == .partial }.count
     }
 
+#if DIRECTOR_INTERACTION_PERFORMANCE
+    private var performanceUsesLightLibraryDestination: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["CODEX_DIRECTOR_INTERACTION_MANUAL_REVIEW"] == "1"
+            && environment["CODEX_DIRECTOR_LIBRARY_DESTINATION"] == "light"
+    }
+
+    private var performanceLibraryDestinationMode: String? {
+        ProcessInfo.processInfo.environment["CODEX_DIRECTOR_LIBRARY_DESTINATION"]
+    }
+
+    private func performanceShouldEmitDestinationDraw(for destination: DirectorSidebarItem) -> Bool {
+        if destination == .customAgents || destination == .customSkills {
+            return performanceLibraryDestinationMode == "original" || performanceUsesLightLibraryDestination
+        }
+        return true
+    }
+#endif
+
+    @ViewBuilder
+    private func customLibraryDestination(
+        destination: DirectorSidebarItem,
+        category: ResourceInventoryCategory,
+        model: CapabilityLibraryViewModel,
+        titleKey: String,
+        fallback: String
+    ) -> some View {
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        if performanceUsesLightLibraryDestination {
+            libraryDestinationPlaceholder(titleKey: titleKey, fallback: fallback)
+        } else if performanceLibraryDestinationMode == "original" {
+            filteredCapabilities(category: category, model: model, titleKey: titleKey, fallback: fallback)
+        } else {
+            stagedLibraryDestination(
+                destination: destination, category: category, model: model,
+                titleKey: titleKey, fallback: fallback, mountAfterDraw: performanceLibraryDestinationMode != "staged"
+            )
+        }
+#else
+        stagedLibraryDestination(
+            destination: destination, category: category, model: model,
+            titleKey: titleKey, fallback: fallback, mountAfterDraw: true
+        )
+#endif
+    }
+
+    @ViewBuilder
+    private func libraryDestinationPlaceholder(titleKey: String, fallback: String) -> some View {
+        DirectorEditorialFrame {
+            VStack(alignment: .leading, spacing: DirectorSpacing.space4) {
+                Text(languageStore.localizer.text(titleKey, fallback: fallback))
+                    .font(DirectorTypography.heroTitle)
+                    .foregroundStyle(DirectorColor.textPrimary)
+                Text(languageStore.localizer.text("library.subtitle", fallback: "Browse indexed capabilities and their recent evidence."))
+                    .font(DirectorTypography.supporting)
+                    .foregroundStyle(DirectorColor.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.horizontal, DirectorSpacing.space6)
+            .padding(.vertical, DirectorSpacing.space5)
+        }
+        .navigationTitle(languageStore.localizer.text(titleKey, fallback: fallback))
+    }
+
+    @ViewBuilder
+    private func stagedLibraryDestination(
+        destination: DirectorSidebarItem,
+        category: ResourceInventoryCategory,
+        model: CapabilityLibraryViewModel,
+        titleKey: String,
+        fallback: String,
+        mountAfterDraw: Bool
+    ) -> some View {
+        StagedLibraryDestination(
+            destination: destination,
+            mountAfterDraw: mountAfterDraw,
+            isCurrent: { self.model.selection == destination },
+            placeholder: {
+                libraryDestinationPlaceholder(titleKey: titleKey, fallback: fallback)
+            },
+            content: {
+                filteredCapabilities(category: category, model: model, titleKey: titleKey, fallback: fallback)
+            }
+        )
+        .id(destination)
+    }
+
     private func startIndexing() {
         Task { await model.startIndexing() }
     }
 
+#if DIRECTOR_INTERACTION_PERFORMANCE
+    private func applyQuotaHistoryPerformanceCommand(_ command: InteractionPerformanceDriver.QuotaHistoryCommand) {
+        QuotaHistoryPerformanceProbe.markCommandAccepted()
+        switch command {
+        case .open:
+            openQuotaHistory()
+        case let .setPeriod(period):
+            quotaHistoryPresentation?.controller.setPeriod(period)
+        case .close:
+            // The validation driver has a synthetic close command. Keep the
+            // product route free of dismissal chrome while returning the
+            // harness to Home so its session can observe deactivation.
+            model.selection = .home
+        }
+    }
+#endif
+
+    private func openQuotaHistory() {
+        model.selection = .quotaHistory
+        activateQuotaHistoryIfNeeded()
+    }
+
+    private func activateQuotaHistoryIfNeeded() {
+        guard !Task.isCancelled, model.selection == .quotaHistory else { return }
+        guard quotaHistoryPresentation == nil else { return }
+
+        // Seed only a never-initialized selection from the existing Home
+        // source list. A non-nil missing ID remains the history query key;
+        // `homeQuotaModel.selectedSource` is never used as a fallback.
+        let sources = homeQuotaModel.sources
+        let sourceID = QuotaHistoryViewModel.initialSourceID(
+            rawSelection: model.quotaSourceID,
+            sources: sources
+        )
+        if model.quotaSourceID == nil, let sourceID {
+            model.setQuotaSourceID(sourceID)
+        }
+        let sourceName = sourceID.flatMap { id in
+            sources.first(where: { $0.id == id })?.name
+        } ?? sourceID
+        let controller = quotaHistoryController ?? model.makeQuotaHistoryController(windowID: windowPresenceID)
+        quotaHistoryController = controller
+        let sessionID = controller.open(sourceKey: sourceID, sourceName: sourceName, homeSnapshot: model.quotaOverviewSnapshot)
+        quotaHistoryPresentation = QuotaHistoryPresentation(id: sessionID, controller: controller)
+    }
+
+    private func seedQuotaHistorySourceIfNeeded() {
+        guard model.selection == .quotaHistory,
+              model.quotaSourceID == nil,
+              let source = homeQuotaModel.sources.first else { return }
+
+        model.setQuotaSourceID(source.id)
+        guard let presentation = quotaHistoryPresentation else { return }
+        presentation.controller.setSource(
+            sourceKey: source.id,
+            sourceName: source.name,
+            homeSnapshot: model.quotaOverviewSnapshot
+        )
+        quotaHistoryScrollPosition = "quota-history-top"
+    }
+
+    private func selectQuotaHistorySource(_ sourceID: String, presentationID: UUID) {
+        guard model.selection == .quotaHistory,
+              let presentation = quotaHistoryPresentation,
+              presentation.id == presentationID else { return }
+        guard let source = homeQuotaModel.sources.first(where: { $0.id == sourceID }) else { return }
+        model.setQuotaSourceID(sourceID)
+        presentation.controller.setSource(
+            sourceKey: source.id,
+            sourceName: source.name,
+            homeSnapshot: model.quotaOverviewSnapshot
+        )
+        // This is the only root-owned scroll reset for a source picker
+        // action. Presentation-ID and route guards above prevent an old page
+        // callback from changing a newer session's retained position.
+        quotaHistoryScrollPosition = "quota-history-top"
+    }
+
+    private func closeQuotaHistory(presentationID: UUID) {
+        guard let presentation = quotaHistoryPresentation, presentation.id == presentationID else { return }
+        presentation.controller.close(sessionID: presentationID)
+        quotaHistoryPresentation = nil
+#if DIRECTOR_INTERACTION_PERFORMANCE
+        interactionPerformanceDriver.acknowledgeQuotaHistoryDismissed()
+#endif
+    }
+
+}
+
+/// Draw the sidebar selection and a lightweight destination before mounting
+/// its result list. A display link provides a fallback rendering opportunity.
+private struct StagedLibraryDestination<Placeholder: View, Content: View>: View {
+    let destination: DirectorSidebarItem
+    let mountAfterDraw: Bool
+    let isCurrent: () -> Bool
+    @ViewBuilder let placeholder: () -> Placeholder
+    @ViewBuilder let content: () -> Content
+    @State private var isMounted = false
+
+    var body: some View {
+        if isMounted {
+            content()
+#if DIRECTOR_INTERACTION_PERFORMANCE
+                .background {
+                    QuotaHistoryFirstPaintMarker.navigation(.destinationDraw, destination: destination)
+                }
+#endif
+        } else {
+            placeholder()
+                .background {
+                    StagedDestinationScheduler(mountAfterDraw: mountAfterDraw) {
+                        guard isCurrent() else { return }
+                        isMounted = true
+                    }
+                    .frame(width: 1, height: 1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                }
+        }
+    }
+}
+
+private struct StagedDestinationScheduler: NSViewRepresentable {
+    let mountAfterDraw: Bool
+    let mount: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> StagedDestinationSchedulingView {
+        let view = StagedDestinationSchedulingView()
+        view.mountAfterDraw = mountAfterDraw
+        view.mount = mount
+        return view
+    }
+
+    func updateNSView(_ view: StagedDestinationSchedulingView, context: Context) {
+        view.mount = mount
+        view.scheduleIfNeeded()
+    }
+
+    static func dismantleNSView(_ view: StagedDestinationSchedulingView, coordinator: ()) {
+        view.cancel()
+        view.mount = nil
+    }
+}
+
+private final class StagedDestinationSchedulingView: NSView {
+    var mountAfterDraw = false
+    var mount: (@MainActor () -> Void)?
+    private var displayLink: CADisplayLink?
+    private var pendingMount: Task<Void, Never>?
+    private var receivedFirstTick = false
+    private var finished = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        cancel()
+        scheduleIfNeeded()
+    }
+
+    func scheduleIfNeeded() {
+        guard !finished, displayLink == nil, pendingMount == nil, let window else { return }
+        if !window.isVisible || window.screen == nil {
+            scheduleMountOnMainActor()
+            return
+        }
+        if mountAfterDraw { needsDisplay = true }
+
+        let link = window.displayLink(target: self, selector: #selector(displayTick(_:)))
+        displayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard mountAfterDraw, window?.occlusionState.contains(.visible) == true else { return }
+        // Leave the native drawing pass before touching SwiftUI state.
+        // Keep the window display link as a fallback if this view never draws.
+        scheduleMountOnMainActor()
+    }
+
+    private func scheduleMountOnMainActor() {
+        guard !finished, pendingMount == nil else { return }
+        pendingMount = Task { @MainActor [weak self] in
+            guard !Task.isCancelled, let self, self.window != nil else { return }
+            self.finish()
+        }
+    }
+
+    func cancel() {
+        displayLink?.invalidate()
+        displayLink = nil
+        pendingMount?.cancel()
+        pendingMount = nil
+        receivedFirstTick = false
+    }
+
+    @objc private func displayTick(_ link: CADisplayLink) {
+        guard displayLink === link else { return }
+        if receivedFirstTick {
+            finish()
+        } else {
+            receivedFirstTick = true
+        }
+    }
+
+    private func finish() {
+        guard !finished else { return }
+        finished = true
+        cancel()
+        let callback = mount
+        mount = nil
+        callback?()
+    }
 }

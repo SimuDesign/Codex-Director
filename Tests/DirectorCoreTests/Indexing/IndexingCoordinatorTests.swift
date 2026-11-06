@@ -1401,6 +1401,125 @@ final class IndexingCoordinatorTests: XCTestCase {
         }
     }
 
+    private actor MutableMCPAndPluginRuntimeClient: RuntimeCommandClient {
+        private var mcpResult: RuntimeCommandResult
+        private var pluginResult: RuntimeCommandResult
+
+        init(mcpResult: RuntimeCommandResult, pluginResult: RuntimeCommandResult) {
+            self.mcpResult = mcpResult
+            self.pluginResult = pluginResult
+        }
+
+        func setMCPResult(_ result: RuntimeCommandResult) { mcpResult = result }
+        func setPluginResult(_ result: RuntimeCommandResult) { pluginResult = result }
+
+        func run(arguments: [String]) async throws -> RuntimeCommandResult {
+            switch arguments.first ?? "" {
+            case "--version": return RuntimeCommandResult(stdout: "0.158.0\n", exitCode: 0, timedOut: false)
+            case "mcp": return mcpResult
+            case "plugin": return pluginResult
+            default: return RuntimeCommandResult(stdout: "", exitCode: 1, timedOut: false)
+            }
+        }
+    }
+
+    func testFailedMCPQueryRetainsOnlyCLIEndpointsWhileSuccessfulPluginEmptyPrunesChildren() async throws {
+        let store = try makeStore()
+        let root = try tempDirectory("mcp-partial-runtime")
+        let package = root.appendingPathComponent("package", isDirectory: true)
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try #"{"mcpServers":{"plugin-endpoint":{}}}"#.write(
+            to: package.appendingPathComponent(".mcp.json"), atomically: true, encoding: .utf8
+        )
+        let installed = RuntimeCommandResult(
+            stdout: #"{"installed":[{"name":"synthetic-plugin","installed":true,"enabled":true,"source":{"path":"\#(package.path)"}}],"available":[]}"#,
+            exitCode: 0, timedOut: false
+        )
+        let client = MutableMCPAndPluginRuntimeClient(
+            mcpResult: RuntimeCommandResult(stdout: #"[{"name":"cli-endpoint","enabled":true}]"#, exitCode: 0, timedOut: false),
+            pluginResult: installed
+        )
+        let runtime = CodexRuntimeDiscovery(
+            commandClient: client,
+            codexExecutableURL: URL(fileURLWithPath: "/synthetic/codex"),
+            approvedSourceRoots: [root]
+        )
+        let coordinator = IndexingCoordinator(store: store, runtimeDiscovery: runtime)
+        let config = configuration(activeRoots: [])
+        _ = try await coordinator.run(configuration: config)
+        let initial = try await store.fetchAllResources()
+        let cli = try XCTUnwrap(initial.first { $0.name == "cli-endpoint" && $0.sourceRootID == "runtime-mcp" })
+        XCTAssertTrue(initial.contains { $0.name == "plugin-endpoint" && $0.origin == .plugin })
+        let provenance = CapabilityProvenance(
+            id: "synthetic-cli-evidence", resourceID: cli.id, sourceType: .runtime,
+            sourceIdentifier: "cli-endpoint", version: nil, installedAt: nil,
+            updatedAt: nil, confidence: .exact
+        )
+        try await store.replaceResourceInventory(
+            resources: initial,
+            provenance: [provenance],
+            relations: try await store.fetchAllRelations()
+        )
+
+        await client.setMCPResult(RuntimeCommandResult(stdout: "", exitCode: 15, timedOut: true))
+        await client.setPluginResult(RuntimeCommandResult(
+            stdout: #"{"installed":[{"name":"synthetic-plugin","installed":true,"enabled":true}],"available":[]}"#,
+            exitCode: 0, timedOut: false
+        ))
+        let remotePackage = try await coordinator.run(configuration: config)
+        XCTAssertEqual(remotePackage.runtimePluginInventoryAvailable, true)
+        XCTAssertEqual(remotePackage.runtimePluginPackagesAvailable, false)
+        let remotelyRetained = try await store.fetchAllResources()
+        let plugin = try XCTUnwrap(remotelyRetained.first { $0.kind == .plugin })
+        let pluginChild = try XCTUnwrap(remotelyRetained.first { $0.name == "plugin-endpoint" })
+        XCTAssertEqual(pluginChild.status, .warning)
+        XCTAssertEqual(pluginChild.sourceRootID, "last-known-runtime")
+        let remotelyRetainedRelations = try await store.fetchAllRelations()
+        XCTAssertTrue(remotelyRetainedRelations.contains {
+            $0.sourceResourceID == plugin.id && $0.targetResourceID == pluginChild.id && $0.relationKind == "contains"
+        })
+
+        await client.setPluginResult(RuntimeCommandResult(stdout: #"{"installed":[],"available":[]}"#, exitCode: 0, timedOut: false))
+        let failed = try await coordinator.run(configuration: config)
+        XCTAssertEqual(failed.runtimeCoverage, .partial)
+        XCTAssertEqual(failed.runtimePluginInventoryAvailable, true)
+        XCTAssertGreaterThan(failed.runtimeIssueCount, 0)
+        let retained = try await store.fetchAllResources()
+        let oldCLI = try XCTUnwrap(retained.first { $0.id == cli.id })
+        XCTAssertEqual(oldCLI.status, .warning)
+        XCTAssertEqual(oldCLI.sourceRootID, "last-known-runtime")
+        XCTAssertEqual(oldCLI.lastSeenAt, cli.lastSeenAt)
+        XCTAssertFalse(retained.contains { $0.kind == .plugin || $0.name == "plugin-endpoint" })
+        let retainedProvenance = try await store.fetchAllProvenance()
+        let retainedRelations = try await store.fetchAllRelations()
+        XCTAssertTrue(retainedProvenance.contains(provenance))
+        XCTAssertFalse(retainedRelations.contains { $0.targetResourceID == cli.id && $0.relationKind == "contains" })
+
+        await client.setMCPResult(RuntimeCommandResult(stdout: "[]", exitCode: 0, timedOut: false))
+        let recovered = try await coordinator.run(configuration: config)
+        XCTAssertEqual(recovered.runtimePluginInventoryAvailable, true)
+        let recoveredResources = try await store.fetchAllResources()
+        XCTAssertFalse(recoveredResources.contains { $0.id == cli.id })
+
+        await client.setMCPResult(RuntimeCommandResult(stdout: #"[{"name":"cli-endpoint","enabled":true}]"#, exitCode: 0, timedOut: false))
+        await client.setPluginResult(installed)
+        _ = try await coordinator.run(configuration: config)
+        await client.setMCPResult(RuntimeCommandResult(stdout: "[]", exitCode: 0, timedOut: false))
+        await client.setPluginResult(RuntimeCommandResult(stdout: "", exitCode: 15, timedOut: true))
+        let pluginFailed = try await coordinator.run(configuration: config)
+        XCTAssertEqual(pluginFailed.runtimePluginInventoryAvailable, false)
+        let pluginRetained = try await store.fetchAllResources()
+        XCTAssertFalse(pluginRetained.contains { $0.id == cli.id })
+        let retainedPlugin = try XCTUnwrap(pluginRetained.first { $0.id == plugin.id })
+        let retainedChild = try XCTUnwrap(pluginRetained.first { $0.id == pluginChild.id })
+        XCTAssertEqual(retainedPlugin.status, .warning)
+        XCTAssertEqual(retainedChild.status, .warning)
+        let pluginRetainedRelations = try await store.fetchAllRelations()
+        XCTAssertTrue(pluginRetainedRelations.contains {
+            $0.sourceResourceID == retainedPlugin.id && $0.targetResourceID == retainedChild.id
+        })
+    }
+
     private actor MutableInstalledPluginReader: CodexInstalledPluginInventoryReading {
         private var inventory: CodexInstalledPluginInventory
         init(_ inventory: CodexInstalledPluginInventory) { self.inventory = inventory }

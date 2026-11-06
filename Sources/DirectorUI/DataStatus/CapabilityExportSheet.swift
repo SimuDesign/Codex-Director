@@ -453,6 +453,9 @@ struct CapabilityExportSheet: View {
             } catch let error as CapabilityExportError where error == .cancelled {
                 model.discardPreparedCapabilityExport()
                 stage = .selection
+            } catch let error as CapabilityExportError where error == .resourceLimitExceeded {
+                failureKey = "settings.migration.error.limit"
+                stage = .failure
             } catch {
                 failureKey = "settings.migration.error.preflight"
                 stage = .failure
@@ -484,6 +487,9 @@ struct CapabilityExportSheet: View {
             } catch let error as CapabilityExportError where error == .cancelled {
                 model.discardPreparedCapabilityExport()
                 stage = .selection
+            } catch let error as CapabilityExportError where error == .resourceLimitExceeded {
+                failureKey = "settings.migration.error.limit"
+                stage = .failure
             } catch {
                 failureKey = "settings.migration.error.save"
                 stage = .failure
@@ -604,6 +610,8 @@ struct CapabilityExportSheet: View {
         case "invalid_text_encoding": return t("settings.migration.issue.encoding", "A text file is not valid UTF-8. Exclude this capability.")
         case "sensitive_text_detected": return t("settings.migration.issue.sensitive", "Potential credentials or a local user path remain. Exclude this capability.")
         case "unsafe_symlink": return t("settings.migration.issue.symlink", "A symbolic link leaves its capability directory. Exclude this capability.")
+        case "unrestorable_symlink": return t("settings.migration.issue.unrestorableSymlink", "A symbolic link does not directly target an included file or directory. Exclude this capability or repair the link.")
+        case "package_resource_limit": return t("settings.migration.issue.packageLimit", "This capability or package exceeds the safety limits. Exclude capabilities to create a smaller package.")
         case "sensitive_path_detected": return t("settings.migration.issue.sensitivePath", "A file name or symbolic-link target resembles credential material. Exclude this capability.")
         case "source_read_failed": return t("settings.migration.issue.read", "A source item could not be read. Exclude this capability or correct its permissions.")
         case "nested_archive_not_inspected": return t("settings.migration.issue.archive", "A nested archive will be included unchanged and was not inspected.")

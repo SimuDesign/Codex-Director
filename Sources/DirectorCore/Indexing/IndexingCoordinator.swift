@@ -275,27 +275,47 @@ public actor IndexingCoordinator {
                 ))
             }
             runtimeCoverage = runtime.coverage
-            if runtime.coverage == .unavailable || runtimePluginInventoryAvailable == false {
-                // A successful version/MCP read must not prune the last-known
-                // plugin inventory when plugin enumeration alone fails. Keep
-                // its children and relations, but mark every retained item as
-                // unverified so it cannot be used as current attribution.
+            if runtime.coverage == .unavailable ||
+               runtimePluginInventoryAvailable == false ||
+               runtime.unsupportedCategories.contains("mcp") ||
+               runtime.unsupportedCategories.contains("version") {
+                // Preserve only categories whose current source failed. A
+                // plugin-provided MCP belongs to the plugin inventory, not
+                // the CLI MCP list. The unsupported built-in tool catalog
+                // never establishes any previous resource as current.
                 let previousRelations = try await store.fetchAllRelations()
                 let previous: [CapabilityResource]
                 if runtime.coverage == .unavailable {
                     previous = previousResources.filter { $0.scope == .runtime }
                 } else {
-                    let pluginIDs = Set(previousResources.filter {
-                        $0.scope == .runtime && $0.kind == .plugin && ($0.origin == .runtime || $0.origin == .plugin)
-                    }.map(\.id))
-                    var retainedIDs = pluginIDs
-                    var pending = Array(pluginIDs)
-                    while let parent = pending.popLast() {
-                        for relation in previousRelations where relation.sourceResourceID == parent && relation.relationKind == "contains" {
-                            if retainedIDs.insert(relation.targetResourceID).inserted {
-                                pending.append(relation.targetResourceID)
+                    var retainedIDs = Set<String>()
+                    if runtimePluginInventoryAvailable == false {
+                        let pluginIDs = Set(previousResources.filter {
+                            $0.scope == .runtime && $0.kind == .plugin && ($0.origin == .runtime || $0.origin == .plugin)
+                        }.map(\.id))
+                        retainedIDs.formUnion(pluginIDs)
+                        var pending = Array(pluginIDs)
+                        while let parent = pending.popLast() {
+                            for relation in previousRelations where relation.sourceResourceID == parent && relation.relationKind == "contains" {
+                                if retainedIDs.insert(relation.targetResourceID).inserted {
+                                    pending.append(relation.targetResourceID)
+                                }
                             }
                         }
+                    }
+                    if runtime.unsupportedCategories.contains("mcp") {
+                        retainedIDs.formUnion(previousResources.filter {
+                            $0.scope == .runtime && $0.kind == .mcp &&
+                            $0.relativeSourcePath?.hasPrefix("mcp/") == true &&
+                            ($0.sourceRootID == "runtime-mcp" || $0.sourceRootID == "last-known-runtime")
+                        }.map(\.id))
+                    }
+                    if runtime.unsupportedCategories.contains("version") {
+                        retainedIDs.formUnion(previousResources.filter {
+                            $0.scope == .runtime && $0.kind == .app &&
+                            $0.relativeSourcePath == "codex-cli" &&
+                            ($0.sourceRootID == "runtime" || $0.sourceRootID == "last-known-runtime")
+                        }.map(\.id))
                     }
                     previous = previousResources.filter { retainedIDs.contains($0.id) && $0.scope == .runtime }
                 }
@@ -321,7 +341,10 @@ public actor IndexingCoordinator {
                     (retainedIDs.contains($0.sourceResourceID) || retainedIDs.contains($0.targetResourceID)) &&
                     allIDs.contains($0.sourceResourceID) && allIDs.contains($0.targetResourceID)
                 })
-            } else if runtimePluginPackagesAvailable == false {
+            }
+            if runtime.coverage != .unavailable &&
+               runtimePluginInventoryAvailable != false &&
+               runtimePluginPackagesAvailable == false {
                 // Identity is current, but a remote plugin can have no
                 // validated local package path. Preserve only its previously
                 // observed children as warnings; never retain plugins that
